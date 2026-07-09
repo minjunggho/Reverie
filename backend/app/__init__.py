@@ -1,0 +1,5 @@
+"""Reverie — Thai-first AI Dungeon Master engine (backend package)."""
+
+__all__ = ["__version__"]
+
+__version__ = "0.1.0"

@@ -1,0 +1,47 @@
+"""SQLAlchemy ORM models — the canonical state of record.
+
+Importing this package registers every model on `Base.metadata` so
+`Database.create_all()` (tests) and Alembic (production) see the full schema.
+
+Present (Phases 0–9 + vertical slice):
+    User, Campaign, CampaignMember, Character, Session, Scene, Event, Location,
+    NPC, ProcessedMessage, KnowledgeRecord, Secret.
+
+Scaffolded in later phases (documented in PROGRESS.md, not yet imported here):
+    NPC epistemic tables (Phase 11), Threat/ScheduledWorldEvent (Phase 12),
+    CombatEncounter/Combatant (Phase 13), ItemDefinition/InventoryEntry, Quest.
+"""
+from app.models.campaign import Campaign, CampaignMember
+from app.models.character import Character
+from app.models.combat import Combatant, CombatEncounter
+from app.models.event import Event
+from app.models.knowledge import KnowledgeRecord, Secret
+from app.models.location import Location
+from app.models.npc import NPC
+from app.models.npc_epistemic import NPCFact, NPCRelationship
+from app.models.processed_message import ProcessedMessage
+from app.models.scene import Scene
+from app.models.session import Session
+from app.models.user import User
+from app.models.world import ScheduledWorldEvent, Threat
+
+__all__ = [
+    "User",
+    "Campaign",
+    "CampaignMember",
+    "Character",
+    "Session",
+    "Scene",
+    "Event",
+    "Location",
+    "NPC",
+    "NPCFact",
+    "NPCRelationship",
+    "ProcessedMessage",
+    "KnowledgeRecord",
+    "Secret",
+    "Threat",
+    "ScheduledWorldEvent",
+    "CombatEncounter",
+    "Combatant",
+]
