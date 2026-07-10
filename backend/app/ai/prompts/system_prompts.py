@@ -30,6 +30,9 @@ ADJUDICATOR_SYSTEM = """\
 - ประเภทการตัดสิน: AUTOMATIC_SUCCESS / AUTOMATIC_FAILURE / ABILITY_CHECK /
   SAVING_THROW / ATTACK / SUPPORTED_SPECIAL_RESOLUTION
 - ถ้าเป็นการตรวจ: ability + skill ที่เหมาะกับ 'วิธีที่ผู้เล่นบรรยาย'
+  * ability ต้องเป็นรหัส 3 ตัวอักษรเท่านั้น: str, dex, con, int, wis, cha
+  * skill ต้องเป็นชื่ออังกฤษตัวเล็กแบบ snake_case เช่น stealth, perception,
+    athletics, investigation, persuasion, sleight_of_hand (ห้ามใช้ภาษาไทย)
 - ระดับความยาก (band): VERY_EASY..NEARLY_IMPOSSIBLE พร้อมเหตุผล
 - ควรได้เปรียบ/เสียเปรียบ (advantage/disadvantage) ไหม
 กติกาสำคัญ: ทอยเมื่อผลไม่แน่นอน 'และ' ผลลัพธ์มีความสำคัญเท่านั้น

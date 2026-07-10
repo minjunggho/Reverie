@@ -43,16 +43,20 @@ class AnthropicProvider(LLMProvider):
 
         last_error: Exception | None = None
         for _ in range(retries + 1):
-            resp = await self._client.messages.create(
-                model=self._model,
-                max_tokens=2048,
-                temperature=temperature,
-                system=system or None,
-                messages=[{"role": m["role"], "content": m["content"]} for m in chat],
-                tools=[tool],
-                tool_choice={"type": "tool", "name": TOOL_NAME},
-                timeout=self._timeout,
-            )
+            try:
+                resp = await self._client.messages.create(
+                    model=self._model,
+                    max_tokens=2048,
+                    temperature=temperature,
+                    system=system or None,
+                    messages=[{"role": m["role"], "content": m["content"]} for m in chat],
+                    tools=[tool],
+                    tool_choice={"type": "tool", "name": TOOL_NAME},
+                    timeout=self._timeout,
+                )
+            except Exception as exc:  # API/network error -> LLMError so jobs fall back
+                last_error = exc
+                continue
             for block in resp.content:
                 if getattr(block, "type", None) == "tool_use" and block.name == TOOL_NAME:
                     try:

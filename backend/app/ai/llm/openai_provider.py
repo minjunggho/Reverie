@@ -48,13 +48,17 @@ class OpenAIProvider(LLMProvider):
 
         last_error: Exception | None = None
         for _ in range(retries + 1):
-            resp = await self._client.chat.completions.create(
-                model=self._model,
-                temperature=temperature,
-                messages=[{"role": m["role"], "content": m["content"]} for m in messages],
-                tools=[function],
-                tool_choice={"type": "function", "function": {"name": TOOL_NAME}},
-            )
+            try:
+                resp = await self._client.chat.completions.create(
+                    model=self._model,
+                    temperature=temperature,
+                    messages=[{"role": m["role"], "content": m["content"]} for m in messages],
+                    tools=[function],
+                    tool_choice={"type": "function", "function": {"name": TOOL_NAME}},
+                )
+            except Exception as exc:  # API/network error -> becomes LLMError so jobs fall back
+                last_error = exc
+                continue
             choice = resp.choices[0].message
             if choice.tool_calls:
                 args = choice.tool_calls[0].function.arguments

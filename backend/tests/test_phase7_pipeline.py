@@ -92,6 +92,31 @@ async def test_the_roll_not_the_llm_determines_outcome(db, provider):
     assert "outcome=failure" in r2.note
 
 
+async def test_pipeline_tolerates_real_model_ability_skill_vocabulary(db, provider):
+    """A real LLM may return 'Dexterity'/'Stealth' (full/capitalized). The engine
+    normalizes instead of crashing (regression: RulesViolation used to bubble up)."""
+    from app.models.enums import DifficultyBand, ResolutionType
+    from app.schemas.llm_io import AdjudicationDecision
+
+    world = await build_world(db)
+    await start_session_with_scene(db, world)
+    provider.on(
+        "adjudicate_uncertain_action",
+        lambda m, model: AdjudicationDecision(
+            resolution_type=ResolutionType.ABILITY_CHECK,
+            ability="Dexterity", skill="Stealth", dc_band=DifficultyBand.MEDIUM,
+        ),
+    )
+    bridge = build_bridge(db, provider=provider, rng=SequenceRandomness([16]))
+    result = await bridge.handle_inbound(_inbound("v1", "! ผมย่องไปดูหน้าต่าง ไม่ให้ยามเห็น"))
+    assert result.state_mutated and "outcome=success" in result.note
+
+    check = (await _events(db, world.campaign_id, EventType.ABILITY_CHECK_RESOLVED))[0]
+    assert check.payload["skill"] == "stealth"          # normalized
+    assert check.mechanical_changes["modifier"] == 5    # +3 DEX, +2 proficiency
+    assert check.mechanical_changes["total"] == 21
+
+
 async def test_illegal_consequence_delta_is_rejected(db, provider):
     world = await build_world(db)
     await start_session_with_scene(db, world)

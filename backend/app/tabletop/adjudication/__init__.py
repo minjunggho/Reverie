@@ -7,6 +7,8 @@ decides advantage/disadvantage. The AI never supplies a modifier or a DC integer
 from app.tabletop.adjudication.resolver import (
     check_modifier,
     decide_clarification,
+    normalize_ability,
+    normalize_skill,
     resolve_dc,
 )
 from app.tabletop.adjudication.deltas import ALLOWED_DELTA_KINDS, DeltaApplier
@@ -15,6 +17,8 @@ __all__ = [
     "resolve_dc",
     "check_modifier",
     "decide_clarification",
+    "normalize_ability",
+    "normalize_skill",
     "DeltaApplier",
     "ALLOWED_DELTA_KINDS",
 ]

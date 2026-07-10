@@ -44,9 +44,16 @@ from app.orchestration.context import ResolvedContext
 from app.services.events import EventService
 from app.services.scenes import SceneService
 from app.services.sessions import SessionService
-from app.tabletop.adjudication import DeltaApplier, check_modifier, decide_clarification, resolve_dc
+from app.tabletop.adjudication import (
+    DeltaApplier,
+    check_modifier,
+    decide_clarification,
+    normalize_ability,
+    normalize_skill,
+    resolve_dc,
+)
 from app.tabletop.dice import DiceEngine
-from app.tabletop.rules import ability_for_skill, validate_ability, validate_skill
+from app.tabletop.rules import ability_for_skill
 
 log = get_logger(__name__)
 
@@ -215,7 +222,11 @@ class CommittedActionPipeline:
         )
 
     def _resolve_mechanics(self, decision, character: Character | None):
-        """Deterministic. Returns (check_result_or_None, outcome_str)."""
+        """Deterministic. Returns (check_result_or_None, outcome_str).
+
+        Tolerant of real-LLM vocabulary: ability/skill names are normalized, and any
+        unexpected value degrades to a safe WIS check rather than crashing the turn.
+        """
         rt = decision.resolution_type
         if rt == ResolutionType.AUTOMATIC_SUCCESS:
             return None, "success"
@@ -228,22 +239,29 @@ class CommittedActionPipeline:
 
         # ABILITY_CHECK / SAVING_THROW / ATTACK(out of combat) / SPECIAL all resolve as
         # a d20 check in the MVP subset; ATTACK proper lives in the combat engine.
-        skill = validate_skill(decision.skill) if decision.skill else None
-        ability = decision.ability or (ability_for_skill(skill) if skill else "wis")
-        ability = validate_ability(ability)
-        modifier, proficient = check_modifier(character, ability, skill)
-        dc = resolve_dc(decision.dc_band)
-        if rt == ResolutionType.SAVING_THROW:
-            result = self.dice.resolve_saving_throw(
-                modifier=modifier, dc=dc, ability=ability,
-                advantage=decision.advantage, disadvantage=decision.disadvantage,
-            )
-        else:
-            result = self.dice.resolve_ability_check(
-                modifier=modifier, dc=dc, ability=ability, skill=skill, proficient=proficient,
-                advantage=decision.advantage, disadvantage=decision.disadvantage,
-            )
-        return result, result.outcome
+        try:
+            skill = normalize_skill(decision.skill)  # None if unsupported/absent
+            ability = normalize_ability(decision.ability)
+            if ability is None:
+                ability = ability_for_skill(skill) if skill else "wis"
+            modifier, proficient = check_modifier(character, ability, skill)
+            dc = resolve_dc(decision.dc_band)
+            if rt == ResolutionType.SAVING_THROW:
+                result = self.dice.resolve_saving_throw(
+                    modifier=modifier, dc=dc, ability=ability,
+                    advantage=decision.advantage, disadvantage=decision.disadvantage,
+                )
+            else:
+                result = self.dice.resolve_ability_check(
+                    modifier=modifier, dc=dc, ability=ability, skill=skill, proficient=proficient,
+                    advantage=decision.advantage, disadvantage=decision.disadvantage,
+                )
+            return result, result.outcome
+        except Exception as exc:  # noqa: BLE001 - never crash a turn on odd AI output
+            log.warning("mechanics resolution fell back to a WIS check: %s", exc)
+            modifier, _ = check_modifier(character, "wis", None)
+            result = self.dice.resolve_ability_check(modifier=modifier, dc=15, ability="wis")
+            return result, result.outcome
 
     @staticmethod
     def _primary_npc_target(scene) -> str | None:

@@ -13,10 +13,38 @@ from app.schemas.llm_io import (
     AdjudicationDecision,
     ClarificationResult,
 )
-from app.tabletop.rules import ability_modifier
+from app.tabletop.rules import ABILITIES, SUPPORTED_SKILLS, ability_modifier
 
 # Below this interpretation confidence, we ask rather than guess.
 CLARIFY_CONFIDENCE_THRESHOLD = 0.55
+
+# Real LLMs return ability names in many forms ("Dexterity", "dexterity", "DEX").
+# Normalize to our six codes instead of rejecting them.
+_ABILITY_ALIASES = {
+    "strength": "str", "str": "str",
+    "dexterity": "dex", "dex": "dex",
+    "constitution": "con", "con": "con",
+    "intelligence": "int", "int": "int",
+    "wisdom": "wis", "wis": "wis",
+    "charisma": "cha", "cha": "cha",
+}
+
+
+def normalize_ability(name: str | None) -> str | None:
+    """Return a valid ability code, or None if it can't be mapped."""
+    if not name:
+        return None
+    k = name.strip().lower()
+    k = _ABILITY_ALIASES.get(k, k)
+    return k if k in ABILITIES else None
+
+
+def normalize_skill(name: str | None) -> str | None:
+    """Return a supported skill (snake_case), or None if unsupported."""
+    if not name:
+        return None
+    k = name.strip().lower().replace(" ", "_").replace("-", "_")
+    return k if k in SUPPORTED_SKILLS else None
 
 
 def resolve_dc(band: DifficultyBand | None) -> int:
