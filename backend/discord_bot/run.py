@@ -10,7 +10,7 @@ import asyncio
 from app.core.config import get_settings
 from app.core.logging import configure_logging, get_logger
 from app.db.session import get_database
-from app.engine import build_default_bridge
+from app.engine import build_default_bridges
 from discord_bot.client import ReverieClient
 
 log = get_logger(__name__)
@@ -26,8 +26,8 @@ async def _amain() -> None:
     if settings.is_sqlite:
         await db.create_all()
 
-    bridge = build_default_bridge()
-    client = ReverieClient(bridge)
+    game_bridge, admin_bridge = build_default_bridges()
+    client = ReverieClient(game_bridge, admin_bridge)
     async with client:
         await client.start(settings.discord_bot_token)
 

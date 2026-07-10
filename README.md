@@ -60,6 +60,32 @@ cd backend && python -m pytest -q
 python -m discord_bot.run   # from backend/
 ```
 
+## Playing on Discord
+
+Setup commands use the `!rv` prefix (handled before game actions, so they're never
+mistaken for a committed `!`). In your game channel:
+
+```
+!rv campaign new <name>        # create a campaign bound to this channel (you = owner)
+!rv join                       # join as a player
+!rv character <name> [class]   # class: fighter|rogue|wizard|cleric|ranger|bard (default fighter)
+!rv session start              # (owner) open a session — recap + opening scene
+!rv session end                # (owner) close + player-safe summary
+!rv status                     # show table status
+!rv help                       # list commands
+```
+
+Then play by typing character actions in natural Thai, prefixed with `!`:
+
+```
+! ผมค่อยๆ ย่องไปดูหน้าต่าง พยายามไม่ให้ยามเห็น
+```
+
+The engine interprets intent, decides the mechanic, rolls the dice **on the server**,
+commits the result, and the AI DM narrates it in Thai. Normal messages (no `!`) are
+just table talk and change no game state.
+
 ## The commitment marker
 A message beginning with `!` is an explicit committed character action, written in
 natural Thai. Everything else is ordinary table talk and mutates **no** game state.
+A message beginning with `!rv` is a table-setup command (see above), not an action.

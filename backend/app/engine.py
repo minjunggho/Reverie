@@ -8,7 +8,7 @@ from __future__ import annotations
 from app.ai.llm import LLMProvider, get_provider
 from app.core.randomness import Randomness, SystemRandomness
 from app.db.session import Database, get_database
-from app.discord_bridge import DiscordBridge
+from app.discord_bridge import AdminBridge, DiscordBridge
 from app.orchestration import (
     CommittedActionPipeline,
     MessageRouter,
@@ -32,6 +32,17 @@ def build_bridge(
     )
 
 
+def build_admin_bridge(db: Database, *, provider: LLMProvider | None = None) -> AdminBridge:
+    return AdminBridge(db, provider or get_provider())
+
+
 def build_default_bridge() -> DiscordBridge:
     """Production wiring from settings (used by the live bot)."""
     return build_bridge(get_database())
+
+
+def build_default_bridges() -> tuple[DiscordBridge, AdminBridge]:
+    """Game bridge + admin (setup-command) bridge, sharing one provider."""
+    db = get_database()
+    provider = get_provider()
+    return build_bridge(db, provider=provider), build_admin_bridge(db, provider=provider)
