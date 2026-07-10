@@ -1,0 +1,34 @@
+[
+  {
+    "definition_id": "resource:spell_slots_1", "definition_version": 1,
+    "name": "Spell Slots (Level 1)", "name_th": "ช่องเวทระดับ 1",
+    "recharge": "long_rest",
+    "max_formula": {"kind": "by_class_level", "table": {"1": 2, "2": 3, "3": 4}}
+  },
+  {
+    "definition_id": "resource:arcane_recovery", "definition_version": 1,
+    "name": "Arcane Recovery", "name_th": "ฟื้นพลังเวท",
+    "recharge": "long_rest_cycle_after_short_rest",
+    "max_formula": {"kind": "flat", "value": 1},
+    "special_op": "restore_slot_levels"
+  },
+  {
+    "definition_id": "resource:second_wind", "definition_version": 1,
+    "name": "Second Wind", "name_th": "ลมหายใจที่สอง",
+    "recharge": "long_rest",
+    "short_rest_partial": 1,
+    "max_formula": {"kind": "flat", "value": 2}
+  },
+  {
+    "definition_id": "resource:bardic_inspiration", "definition_version": 1,
+    "name": "Bardic Inspiration", "name_th": "แรงบันดาลใจกวี",
+    "recharge": "long_rest",
+    "max_formula": {"kind": "ability_mod_min_1", "ability": "cha"}
+  },
+  {
+    "definition_id": "resource:heroic_inspiration", "definition_version": 1,
+    "name": "Heroic Inspiration", "name_th": "แรงใจวีรชน",
+    "recharge": "long_rest",
+    "max_formula": {"kind": "flat", "value": 1}
+  }
+]

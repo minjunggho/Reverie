@@ -1,0 +1,20 @@
+[
+  {"definition_id": "skill:athletics", "name": "athletics", "ability": "str", "name_th": "กำลังกาย", "explain_th": "ปีน กระโดด ว่ายน้ำ ปล้ำ — ทุกอย่างที่ใช้แรงกายดิบ"},
+  {"definition_id": "skill:acrobatics", "name": "acrobatics", "ability": "dex", "name_th": "ผาดโผน", "explain_th": "ทรงตัว ตีลังกา หลบหลีกในที่แคบ"},
+  {"definition_id": "skill:sleight_of_hand", "name": "sleight_of_hand", "ability": "dex", "name_th": "มือไว", "explain_th": "ล้วงกระเป๋า ซ่อนของ เล่นกลด้วยมือ"},
+  {"definition_id": "skill:stealth", "name": "stealth", "ability": "dex", "name_th": "ย่องเงียบ", "explain_th": "เคลื่อนไหวโดยไม่ให้ใครเห็นหรือได้ยิน"},
+  {"definition_id": "skill:arcana", "name": "arcana", "ability": "int", "name_th": "เวทวิทยา", "explain_th": "ความรู้เกี่ยวกับเวทมนตร์ คาถา ของวิเศษ และภพต่างๆ"},
+  {"definition_id": "skill:history", "name": "history", "ability": "int", "name_th": "ประวัติศาสตร์", "explain_th": "เหตุการณ์เก่า อาณาจักร ตำนานที่บันทึกไว้"},
+  {"definition_id": "skill:investigation", "name": "investigation", "ability": "int", "name_th": "สืบค้น", "explain_th": "วิเคราะห์รายละเอียดและหาความหมายจากสิ่งที่พบ"},
+  {"definition_id": "skill:nature", "name": "nature", "ability": "int", "name_th": "ธรรมชาติวิทยา", "explain_th": "พืช สัตว์ ภูมิประเทศ ดินฟ้าอากาศ"},
+  {"definition_id": "skill:religion", "name": "religion", "ability": "int", "name_th": "ศาสนศาสตร์", "explain_th": "เทพเจ้า พิธีกรรม ลัทธิ และสิ่งศักดิ์สิทธิ์"},
+  {"definition_id": "skill:animal_handling", "name": "animal_handling", "ability": "wis", "name_th": "ปราบพยศสัตว์", "explain_th": "อ่านใจและควบคุมสัตว์"},
+  {"definition_id": "skill:insight", "name": "insight", "ability": "wis", "name_th": "อ่านใจคน", "explain_th": "จับโกหก อ่านเจตนาที่ซ่อนอยู่"},
+  {"definition_id": "skill:medicine", "name": "medicine", "ability": "wis", "name_th": "เวชศาสตร์", "explain_th": "ปฐมพยาบาล วินิจฉัยอาการ ชันสูตร"},
+  {"definition_id": "skill:perception", "name": "perception", "ability": "wis", "name_th": "สังเกตการณ์", "explain_th": "เห็น ได้ยิน และรู้สึกถึงสิ่งรอบตัวก่อนใคร"},
+  {"definition_id": "skill:survival", "name": "survival", "ability": "wis", "name_th": "เอาตัวรอด", "explain_th": "ตามรอย หาอาหาร นำทางในป่าเขา"},
+  {"definition_id": "skill:deception", "name": "deception", "ability": "cha", "name_th": "ลวงหลอก", "explain_th": "โกหกให้เนียน ปลอมตัว เบี่ยงประเด็น"},
+  {"definition_id": "skill:intimidation", "name": "intimidation", "ability": "cha", "name_th": "ข่มขู่", "explain_th": "กดดันด้วยคำพูดหรือท่าที"},
+  {"definition_id": "skill:performance", "name": "performance", "ability": "cha", "name_th": "การแสดง", "explain_th": "ร้อง เล่น เต้น ตรึงผู้ชม"},
+  {"definition_id": "skill:persuasion", "name": "persuasion", "ability": "cha", "name_th": "โน้มน้าว", "explain_th": "ชักจูงด้วยเหตุผล เสน่ห์ หรือความจริงใจ"}
+]

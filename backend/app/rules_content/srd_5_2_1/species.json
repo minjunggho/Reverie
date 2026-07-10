@@ -1,0 +1,49 @@
+[
+  {
+    "definition_id": "species:human", "definition_version": 1,
+    "name": "human", "name_th": "มนุษย์",
+    "pitch_th": "ธีม 'คนธรรมดา' จะตรงและแรงที่สุด — ทุกอย่างที่ได้มา ได้มาด้วยตัวเอง",
+    "speed": 30,
+    "traits": [
+      {"key": "resourceful", "name_th": "ไหวพริบเอาตัวรอด", "summary_th": "ได้ Heroic Inspiration ทุกครั้งที่พักยาวเสร็จ"},
+      {"key": "skillful", "name_th": "หัวไว", "summary_th": "ถนัดทักษะเพิ่มหนึ่งอย่างที่เลือกเอง", "skill_choice": {"count": 1, "options": "any"}},
+      {"key": "versatile", "name_th": "รอบด้าน", "summary_th": "ได้ Origin Feat เพิ่มหนึ่งรายการ (บันทึกไว้ ใช้งานภายหลัง)"}
+    ]
+  },
+  {
+    "definition_id": "species:elf", "definition_version": 1,
+    "name": "elf", "name_th": "เอลฟ์",
+    "pitch_th": "ความย้อนแย้งที่น่าสนใจ — ถ้าเผ่าที่ผูกกับเวทมนตร์ มีคนที่รู้สึกว่าตัวเองไร้พรสวรรค์ล่ะ?",
+    "speed": 30,
+    "traits": [
+      {"key": "darkvision", "name_th": "ตาเห็นในมืด", "summary_th": "มองเห็นในความมืดสลัวได้ 60 ฟุต", "darkvision": 60},
+      {"key": "fey_ancestry", "name_th": "สายเลือดภูต", "summary_th": "ได้เปรียบในการต้านการถูกทำเสน่ห์"},
+      {"key": "keen_senses", "name_th": "ประสาทสัมผัสไว", "summary_th": "ถนัดทักษะรับรู้หนึ่งอย่างที่เลือก", "skill_choice": {"count": 1, "options": ["insight", "perception", "survival"]}},
+      {"key": "trance", "name_th": "ภวังค์", "summary_th": "ไม่ต้องหลับ เข้าภวังค์ 4 ชั่วโมงแทนการพักยาว"}
+    ]
+  },
+  {
+    "definition_id": "species:dwarf", "definition_version": 1,
+    "name": "dwarf", "name_th": "คนแคระ",
+    "pitch_th": "หนักแน่น อึด และจำไม่ลืม — ภูเขาสอนให้ทนก่อนจะสอนให้แข็งแกร่ง",
+    "speed": 30,
+    "traits": [
+      {"key": "darkvision", "name_th": "ตาเห็นในมืด", "summary_th": "มองเห็นในความมืดสลัวได้ 120 ฟุต", "darkvision": 120},
+      {"key": "dwarven_resilience", "name_th": "ความทรหดคนแคระ", "summary_th": "ต้านทานดาเมจพิษ และได้เปรียบต้านสภาวะถูกพิษ", "resistances": ["poison"]},
+      {"key": "dwarven_toughness", "name_th": "ร่างเหล็ก", "summary_th": "HP สูงสุดเพิ่ม 1 ต่อเลเวล", "hp_per_level": 1},
+      {"key": "stonecunning", "name_th": "สัมผัสศิลา", "summary_th": "รับรู้โครงสร้างหินรอบตัวได้พิเศษ"}
+    ]
+  },
+  {
+    "definition_id": "species:halfling", "definition_version": 1,
+    "name": "halfling", "name_th": "ฮาล์ฟลิง",
+    "pitch_th": "ตัวเล็ก ใจใหญ่ และโชคเข้าข้างเสมอ — โลกมองข้ามจนกระทั่งสายเกินไป",
+    "speed": 30,
+    "traits": [
+      {"key": "brave", "name_th": "ใจกล้า", "summary_th": "ได้เปรียบในการต้านความกลัว"},
+      {"key": "luck", "name_th": "โชคช่วย", "summary_th": "ทอยได้ 1 บน d20 แล้วทอยใหม่ได้"},
+      {"key": "nimbleness", "name_th": "ตัวจิ๋วลื่นไหล", "summary_th": "ลอดผ่านช่องว่างของสิ่งมีชีวิตที่ใหญ่กว่าได้"},
+      {"key": "naturally_stealthy", "name_th": "กลืนหาย", "summary_th": "ซ่อนตัวหลังสิ่งมีชีวิตที่ใหญ่กว่าได้"}
+    ]
+  }
+]

@@ -1,0 +1,42 @@
+[
+  {
+    "definition_id": "background:sage", "definition_version": 1,
+    "name": "sage", "name_th": "ปราชญ์",
+    "pitch_th": "ชีวิตที่เติบโตมากับหนังสือและครู — เหมาะกับคนที่ความรู้คือทางรอด",
+    "ability_options": ["con", "int", "wis"],
+    "skill_proficiencies": ["arcana", "history"],
+    "tool_proficiency": "อุปกรณ์อาลักษณ์",
+    "origin_feat": "Magic Initiate (Wizard)",
+    "equipment_th": ["ตำราเก่าหนึ่งเล่ม", "ชุดอาลักษณ์", "เสื้อคลุมนักศึกษา"]
+  },
+  {
+    "definition_id": "background:soldier", "definition_version": 1,
+    "name": "soldier", "name_th": "ทหารเก่า",
+    "pitch_th": "วินัย บาดแผล และคำสั่งที่ยังก้องอยู่ — สงครามไม่เคยปล่อยใครกลับมาทั้งตัว",
+    "ability_options": ["str", "dex", "con"],
+    "skill_proficiencies": ["athletics", "intimidation"],
+    "tool_proficiency": "ชุดเกมพนัน",
+    "origin_feat": "Savage Attacker",
+    "equipment_th": ["เหรียญตราหน่วยเก่า", "ชุดเกมพนัน", "มีดพก"]
+  },
+  {
+    "definition_id": "background:criminal", "definition_version": 1,
+    "name": "criminal", "name_th": "อดีตคนนอกกฎหมาย",
+    "pitch_th": "โตมากับกติกาของตรอกมืด — รู้ว่าประตูไหนไม่ควรเคาะ และเคาะยังไงให้เปิด",
+    "ability_options": ["dex", "con", "int"],
+    "skill_proficiencies": ["sleight_of_hand", "stealth"],
+    "tool_proficiency": "ชุดเครื่องมือโจร",
+    "origin_feat": "Alert",
+    "equipment_th": ["ชะแลงเล็ก", "เสื้อคลุมสีหม่น", "ถุงเงินที่ไม่ใช่ของตัวเอง"]
+  },
+  {
+    "definition_id": "background:acolyte", "definition_version": 1,
+    "name": "acolyte", "name_th": "ศิษย์วัด",
+    "pitch_th": "โตมาในร่มเงาของศรัทธา — รู้บทสวดก่อนรู้จักโลก",
+    "ability_options": ["int", "wis", "cha"],
+    "skill_proficiencies": ["insight", "religion"],
+    "tool_proficiency": "อุปกรณ์อาลักษณ์",
+    "origin_feat": "Magic Initiate (Cleric)",
+    "equipment_th": ["สายประคำ", "หนังสือสวด", "ธูปหอม"]
+  }
+]
