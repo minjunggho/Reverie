@@ -1,13 +1,13 @@
-"""Guided character creation — a short conversation, not a form.
+"""Guided character creation — STAGE A: discover the person (§19).
 
-Flow: `!rv character` (no args) opens a draft → the player's plain Thai messages
-route here (bridge checks for an active draft) → the CreationGuidance AI extracts
-hook fields and asks ONE question per turn → when ready, a confirm step → the
-engine creates the Character from the class PRESET (AI never emits stats), grants
-starting gear, stores hooks, and posts a CHARACTER_REVEAL.
+`!rv character` opens a draft → the player's plain Thai messages route here →
+the CreationGuidance AI extracts hook fields and asks ONE adaptive question per
+turn → a REFLECTION card mirrors back what was heard ([ถูกต้อง]/[แก้ไข] — the AI
+may summarize, never invent accepted facts) → then STAGE B (build_flow.py) walks
+the actual SRD 5.2.1 choices, where the AI recommends and the PLAYER chooses
+class, species, background, abilities, skills, and spells.
 
-Bounded: after MAX_STEPS the flow reveals with the best data it has rather than
-interrogating forever. Cancel anytime with 'ยกเลิก'.
+Bounded: after MAX_STEPS Stage A moves on with what it has. Cancel: 'ยกเลิก'.
 """
 from __future__ import annotations
 
@@ -48,6 +48,9 @@ class CreationFlowService:
     def __init__(self, db, provider: LLMProvider) -> None:
         self.db = db
         self.provider = provider
+        from app.services.campaigns.build_flow import BuildFlow
+
+        self.build = BuildFlow(db)
 
     # --- queries ---------------------------------------------------------------
     async def active_draft(self, session, member_id: str) -> CharacterDraft | None:
@@ -85,14 +88,20 @@ class CreationFlowService:
 
         data = dict(draft.data or {})
 
-        # Confirm step: the reveal proposal is on the table.
+        # Stage B in progress? Delegate everything to the deterministic build walk.
+        if data.get("_build"):
+            return await self.build.handle(draft, data, text, channel_id)
+
+        # Reflection step: the mirror of what the DM heard is on the table.
         if data.get("_awaiting_confirm"):
             if text.startswith("✏") or CONFIRM_EDIT in text:
                 data["_awaiting_confirm"] = False
                 await self._save(draft, data, step_inc=0)
                 return self._ask(channel_id, "อยากปรับตรงไหน บอกมาได้เลย —")
-            if text.startswith("✅") or any(w in text for w in ("ใช่", "โอเค", "สร้างเลย", "เอาเลย", "ตามนั้น")):
-                return await self._reveal(draft, data, channel_id)
+            if text.startswith("✅") or any(w in text for w in ("ใช่", "โอเค", "ถูกต้อง", "เอาเลย", "ตามนั้น")):
+                # Concept accepted → Stage B: the rules build (player chooses all).
+                data["_awaiting_confirm"] = False
+                return await self.build.start(draft, data, channel_id)
             # Anything else = an adjustment in prose; fall through to the guide.
             data["_awaiting_confirm"] = False
 
@@ -102,8 +111,9 @@ class CreationFlowService:
             if key in HOOK_KEYS and isinstance(value, str) and value.strip():
                 data[key] = value.strip()
         if guidance.proposed_class:
+            # Stage A never fixes the class — it becomes the Stage-B recommendation.
             cls = guidance.proposed_class.strip().lower()
-            data["class"] = cls if cls in SUPPORTED_CLASSES else infer_class_from_concept(
+            data["_class_hint"] = cls if cls in SUPPORTED_CLASSES else infer_class_from_concept(
                 data.get("concept", "") + " " + text
             )
 
@@ -114,7 +124,7 @@ class CreationFlowService:
             data["_awaiting_confirm"] = True
             data["_summary"] = guidance.reveal_summary or data.get("concept", "")
             await self._save(draft, data)
-            return self._confirm_proposal(channel_id, data)
+            return self._reflection_card(channel_id, data)
 
         await self._save(draft, data)
         question = guidance.next_question or "เล่าเพิ่มอีกนิดได้ไหม?"
@@ -142,12 +152,11 @@ class CreationFlowService:
     @staticmethod
     def _complete_enough(data: dict, *, force: bool) -> bool:
         identity = sum(1 for k in ("origin", "desire", "fear", "flaw") if data.get(k))
-        ok = bool(data.get("concept")) and bool(data.get("name")) and identity >= 2
         if force:
             data.setdefault("name", "นิรนาม")
             data.setdefault("concept", "นักผจญภัยปริศนา")
             return True
-        return ok and bool(data.get("class"))
+        return bool(data.get("concept")) and bool(data.get("name")) and identity >= 2
 
     async def _save(self, draft: CharacterDraft, data: dict, step_inc: int = 1) -> None:
         async with self.db.unit_of_work() as s:
@@ -160,57 +169,26 @@ class CreationFlowService:
             channel_id, question, kind=MessageKind.CHARACTER_CREATION, title="สร้างตัวละคร",
         )])
 
-    def _confirm_proposal(self, channel_id: str, data: dict) -> BridgeResult:
-        cls = data.get("class", "fighter")
-        preset = CLASS_PRESETS[cls]
-        body_lines = [data.get("_summary") or data.get("concept", "")]
-        if data.get("appearance"):
-            body_lines.append(f"\n{data['appearance']}")
-        fields = [
-            {"name": "สาย", "value": f"{CLASS_TH.get(cls, cls)} ({cls})", "inline": True},
-            {"name": "HP / AC", "value": f"{preset['max_hp']} / {preset['ac']}", "inline": True},
-            {"name": "ทักษะถนัด", "value": ", ".join(preset["proficiencies"]), "inline": False},
-        ]
+    _REFLECT_LABEL = {
+        "concept": None, "origin": "ที่มา", "desire": "สิ่งที่ต้องการ",
+        "fear": "สิ่งที่กลัว", "flaw": "จุดอ่อนในใจ", "connection": "คนสำคัญ",
+        "appearance": "รูปลักษณ์",
+    }
+
+    def _reflection_card(self, channel_id: str, data: dict) -> BridgeResult:
+        """Mirror back what the DM heard — facts only, no mechanics, no class."""
+        lines = []
+        if data.get("concept"):
+            lines.append(f"*{data['concept']}*")
+        for key, label in self._REFLECT_LABEL.items():
+            if label and data.get(key):
+                lines.append(f"• {label}: {data[key]}")
         return BridgeResult(handled=True, responses=[OutboundMessage(
-            channel_id, "\n".join(body_lines),
-            kind=MessageKind.CHARACTER_CREATION, title=f"{data.get('name', '?')} — ใช่คนนี้ไหม?",
-            data={"fields": fields}, choices=[CONFIRM_YES, CONFIRM_EDIT],
-        )])
-
-    async def _reveal(self, draft: CharacterDraft, data: dict, channel_id: str) -> BridgeResult:
-        cls = data.get("class") or infer_class_from_concept(data.get("concept", ""))
-        preset = CLASS_PRESETS[cls]
-        hooks = {k: v for k, v in data.items() if k in HOOK_KEYS and k not in ("name",)}
-
-        async with self.db.unit_of_work() as s:
-            char = await CharacterService(s).create_character(
-                member_id=draft.member_id, name=data.get("name", "นิรนาม"), char_class=cls,
-                abilities=preset["abilities"], proficiencies=preset["proficiencies"],
-                max_hp=preset["max_hp"], ac=preset["ac"], set_active=True,
-            )
-            char.hooks = hooks
-            char.appearance = data.get("appearance", "")
-            gear = await InventoryService(s).grant_starting_gear(character=char)
-            row = await s.get(CharacterDraft, draft.id)
-            row.status = "DONE"
-
-        summary = data.get("_summary") or data.get("concept", "")
-        fields = [
-            {"name": "สาย", "value": f"{CLASS_TH.get(cls, cls)}", "inline": True},
-            {"name": "HP / AC", "value": f"{preset['max_hp']} / {preset['ac']}", "inline": True},
-            {"name": "🎒 สัมภาระเริ่มต้น", "value": "\n".join(f"• {g}" for g in gear) or "—",
-             "inline": False},
-        ]
-        hook_lines = [f"• {data[k]}" for k in ("desire", "fear", "flaw", "connection")
-                      if data.get(k)]
-        if hook_lines:
-            fields.append({"name": "สิ่งที่ติดตัวมา", "value": "\n".join(hook_lines),
-                           "inline": False})
-        return BridgeResult(handled=True, state_mutated=True, responses=[OutboundMessage(
-            channel_id, summary, kind=MessageKind.CHARACTER_REVEAL,
-            title=f"🎭 {char.name}",
-            data={"fields": fields,
-                  "footer": "ดูรายละเอียดได้ทุกเมื่อ: !rv sheet / !rv inventory"},
+            channel_id, "\n".join(lines),
+            kind=MessageKind.CHARACTER_CREATION,
+            title=f"สิ่งที่ข้าได้ยินจากเรื่องของ {data.get('name', 'เจ้า')}",
+            data={"footer": "ถ้าถูกต้อง เดี๋ยวไปต่อส่วนกฎเกม — เจ้าเป็นคนเลือกทุกอย่างเอง"},
+            choices=[CONFIRM_YES, CONFIRM_EDIT],
         )])
 
     async def _cancel(self, draft: CharacterDraft, channel_id: str) -> BridgeResult:
