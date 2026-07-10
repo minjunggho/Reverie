@@ -18,8 +18,10 @@ from app.schemas.llm_io import (
     AdjudicationDecision,
     ClassificationResult,
     ConsequenceProposal,
+    CreationGuidance,
     Narration,
     NPCResponse,
+    OpeningScene,
     PostSessionReport,
     Recap,
 )
@@ -107,4 +109,16 @@ class LLMProvider(ABC):
         return await self.structured_complete(
             response_model=PostSessionReport, messages=messages,
             task="process_post_session_continuity", temperature=0.3,
+        )
+
+    async def guide_character_creation(self, messages: list[LLMMessage]) -> CreationGuidance:
+        return await self.structured_complete(
+            response_model=CreationGuidance, messages=messages,
+            task="guide_character_creation", temperature=0.6,
+        )
+
+    async def generate_session_opening(self, messages: list[LLMMessage]) -> OpeningScene:
+        return await self.structured_complete(
+            response_model=OpeningScene, messages=messages,
+            task="generate_session_opening", temperature=0.8,
         )

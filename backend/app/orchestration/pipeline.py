@@ -41,6 +41,7 @@ from app.models.processed_message import ProcessedMessage
 from app.models.session import Session
 from app.orchestration.commitment import CommittedAction
 from app.orchestration.context import ResolvedContext
+from app.presentation import MessageKind
 from app.services.events import EventService
 from app.services.scenes import SceneService
 from app.services.sessions import SessionService
@@ -151,11 +152,18 @@ class CommittedActionPipeline:
                 scene_id=scene_id, actor_entity=actor,
             )
             _, rejected = await applier.apply_valid(consequence.deltas)
+            private_reveals = list(applier.private_reveals)
 
             pm = await s.get(ProcessedMessage, ctx.processed_message_id) if ctx.processed_message_id else None
             if pm is not None:
                 pm.stage = ProcessingStage.COMMITTED.value
                 pm.category = MessageCategory.COMMITTED_ACTION.value
+                # Record the factual outcome IN the commit txn so recovery can
+                # restate it if narration/delivery later fails (never re-execute).
+                pm.result = {
+                    "outcome": outcome,
+                    "roll_line": self._roll_line(check_result, outcome),
+                }
 
             session_row = await s.get(Session, ctx.session_id) if ctx.session_id else None
             if session_row is not None:
@@ -176,17 +184,52 @@ class CommittedActionPipeline:
             )
 
         # Step 18-19: cache response + mark SENT.
+        roll_line = self._roll_line(check_result, outcome)
         async with self.db.unit_of_work() as s:
             pm = await s.get(ProcessedMessage, ctx.processed_message_id) if ctx.processed_message_id else None
             if pm is not None:
                 pm.stage = ProcessingStage.SENT.value
-                pm.result = {"response": narration.text, "outcome": outcome}
+                pm.result = {"response": narration.text, "outcome": outcome,
+                             "roll_line": roll_line}
 
+        out = OutboundMessage(
+            ctx.channel_id, narration.text,
+            kind=MessageKind.CHECK_RESOLUTION,
+            data={
+                "roll_line": roll_line,
+                "decision_prompt": narration.decision_prompt,
+                "outcome": outcome,
+            },
+        )
+        responses = [out]
+        # Engine-enforced private delivery of committed reveals (never public).
+        for reveal in private_reveals:
+            discord_id = await self._discord_id_for_character(reveal["character_id"])
+            if discord_id is not None:
+                responses.append(OutboundMessage(
+                    ctx.channel_id, reveal["fact"], kind=MessageKind.PRIVATE_SECRET,
+                    title="เฉพาะเจ้าเท่านั้นที่รู้", private_to_discord_id=discord_id,
+                    data={"footer": "คนอื่นในโต๊ะไม่เห็นข้อความนี้"},
+                ))
         return BridgeResult(
             handled=True, category=MessageCategory.COMMITTED_ACTION, state_mutated=True,
-            responses=[OutboundMessage(ctx.channel_id, narration.text)],
+            responses=responses,
             note=f"outcome={outcome}; consequence={consequence.consequence_class.value}",
         )
+
+    async def _discord_id_for_character(self, character_id: str) -> str | None:
+        from app.models.campaign import CampaignMember
+        from app.models.user import User
+
+        async with self.db.session() as s:
+            char = await s.get(Character, character_id)
+            if char is None:
+                return None
+            member = await s.get(CampaignMember, char.owner_member_id)
+            if member is None:
+                return None
+            user = await s.get(User, member.user_id)
+            return user.discord_user_id if user else None
 
     # --- helpers -------------------------------------------------------------
     async def _enter_clarification(
@@ -277,6 +320,30 @@ class CommittedActionPipeline:
         if interpretation.missing_information:
             return interpretation.missing_information[0]
         return "ช่วยบอกให้ชัดขึ้นอีกนิดได้ไหม"
+
+    # Thai skill display names for the visible dice line.
+    _SKILL_TH = {
+        "stealth": "ย่องเงียบ", "perception": "สังเกต", "investigation": "สืบค้น",
+        "athletics": "กำลังกาย", "acrobatics": "ผาดโผน", "persuasion": "โน้มน้าว",
+        "deception": "ลวงหลอก", "intimidation": "ข่มขู่", "insight": "อ่านใจ",
+        "survival": "เอาตัวรอด", "medicine": "รักษา", "arcana": "เวทวิทยา",
+        "history": "ประวัติศาสตร์", "nature": "ธรรมชาติ", "religion": "ศาสนา",
+        "sleight_of_hand": "มือไว", "animal_handling": "สัตว์", "performance": "การแสดง",
+    }
+
+    @classmethod
+    def _roll_line(cls, check_result, outcome: str) -> str:
+        """The player-visible mechanical line, built ONLY from committed numbers."""
+        verdict = "สำเร็จ ✓" if outcome == "success" else "พลาด ✗"
+        if check_result is None:
+            return verdict if outcome == "success" else f"เป็นไปไม่ได้ — {verdict}"
+        name = check_result.skill or check_result.ability
+        th = cls._SKILL_TH.get(name, "")
+        label = f"{name.capitalize()}{f' ({th})' if th else ''}"
+        return (
+            f"{label}: {check_result.natural_roll} + {check_result.modifier} = "
+            f"{check_result.total} vs DC {check_result.dc} — {verdict}"
+        )
 
     @staticmethod
     def _result_summary(check_result, outcome: str, decision) -> str:

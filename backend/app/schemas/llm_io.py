@@ -80,8 +80,12 @@ class ConsequenceProposal(BaseModel):
 
 # --- Narration ---------------------------------------------------------------
 class Narration(BaseModel):
+    """Progressive-disclosure narration: short Thai lines in `text` (with line
+    breaks), plus an optional single open decision point. The narrator NEVER puts
+    mechanics in `text` — the engine renders the committed roll separately."""
     text: str
     style: str = "concise"  # "concise" | "cinematic"
+    decision_prompt: Optional[str] = None  # one open question, Thai, or None
 
 
 # --- Recap -------------------------------------------------------------------
@@ -108,3 +112,28 @@ class NPCResponse(BaseModel):
 class PostSessionReport(BaseModel):
     player_summary: str
     continuity_report: dict[str, Any] = Field(default_factory=dict)
+
+
+# --- Guided character creation -------------------------------------------------
+class CreationGuidance(BaseModel):
+    """One turn of the guided creation conversation. The AI extracts hook fields
+    from what the player just said and asks AT MOST one focused next question.
+    The engine owns mechanics: `proposed_class` is validated against the supported
+    subset and mapped to a preset — the AI never emits stats."""
+    updated_fields: dict[str, str] = Field(default_factory=dict)
+    # keys allowed: concept, origin, desire, fear, flaw, connection, appearance, name
+    proposed_class: Optional[str] = None
+    next_question: Optional[str] = None      # Thai, ONE question, or None
+    ready_to_reveal: bool = False
+    reveal_summary: str = ""                 # Thai identity paragraph for the reveal
+
+
+# --- Session opening (session 1 / hook-aware) ----------------------------------
+class OpeningScene(BaseModel):
+    """A generated opening. Situation lines follow progressive disclosure; the
+    engine renders them — the AI cannot mutate state or invent mechanics here."""
+    title: str                               # Thai scene/session title
+    situation_lines: list[str] = Field(default_factory=list)   # 3-6 short Thai lines
+    pressure: str = ""                       # the disturbance/pressure line
+    decision_prompt: str = ""                # one open question
+    used_hooks: list[str] = Field(default_factory=list)        # which hooks it drew on
