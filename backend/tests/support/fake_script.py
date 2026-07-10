@@ -22,8 +22,10 @@ from app.schemas.llm_io import (
     AdjudicationDecision,
     ClassificationResult,
     ConsequenceProposal,
+    CreationGuidance,
     Narration,
     NPCResponse,
+    OpeningScene,
     PostSessionReport,
     ProposedDelta,
     Recap,
@@ -104,11 +106,12 @@ def _adjudicate(messages, _model) -> AdjudicationDecision:
             clarification_question="จะจัดการยามยังไง?",
             rationale="วิธีการต่างกันให้ผลกลไกต่างกันมาก",
         )
-    if "หน้าต่าง" in text and ("ไม่ให้" in text and "เห็น" in text or "ย่อง" in text or "ค่อยๆ" in text):
+    if ("ย่อง" in text or "แอบ" in text or ("ไม่ให้" in text and "เห็น" in text)
+            or ("ค่อยๆ" in text and "หน้าต่าง" in text)):
         return AdjudicationDecision(
             resolution_type=ResolutionType.ABILITY_CHECK, ability="dex", skill="stealth",
             dc_band=DifficultyBand.MEDIUM,
-            rationale="ต้องเคลื่อนที่โดยไม่ให้ยามที่กำลังเฝ้าอยู่สังเกตเห็น",
+            rationale="ต้องเคลื่อนที่โดยไม่ให้เป้าหมายสังเกตเห็น",
         )
     if "ประตู" in text and "เปิด" in text:
         return AdjudicationDecision(
@@ -151,10 +154,12 @@ def _narrate(messages, _model) -> Narration:
         return Narration(
             text="เจ้าค่อยๆ เคลื่อนตัวไปจนถึงหน้าต่าง\nยามยังยืนหันหลังอยู่ ไม่ทันสังเกต",
             style="concise",
+            decision_prompt="ข้างนอกหน้าต่างคือลานหลังบ้าน — จะทำอะไรต่อ?",
         )
     return Narration(
         text="รองเท้าของเจ้าครูดกับพื้นหิน\nยามหันขวับมาทางเสียงนั้นทันที",
         style="concise",
+        decision_prompt=None,
     )
 
 
@@ -178,6 +183,64 @@ def _post_session(messages, _model) -> PostSessionReport:
     )
 
 
+def _creation_guide(messages, _model) -> CreationGuidance:
+    """Deterministic 3-turn creation conversation keyed off KNOWN fields."""
+    from app.services.campaigns.creation_flow import extract_name
+
+    known = _marker(messages, "KNOWN")
+    msg = _marker(messages, "MESSAGE")
+
+    if "concept=" not in known:
+        return CreationGuidance(
+            updated_fields={"concept": msg},
+            next_question="ฟังดูมีเรื่องราว — เขาโตมายังไง แล้วตอนนี้ต้องการอะไรที่สุด?",
+        )
+    if "desire=" not in known:
+        return CreationGuidance(
+            updated_fields={"origin": msg, "desire": "อยากพิสูจน์ว่าตัวเองไม่ใช่แค่อดีตของตัวเอง",
+                            "fear": "กลัวถูกทิ้งอีกครั้ง"},
+            next_question="จุดอ่อนหรือความขัดแย้งในใจของเขาคืออะไร แล้วเขาชื่ออะไรดี?",
+        )
+    name = extract_name(msg) or "นิรนาม"
+    concept = ""
+    for part in known.split(";"):
+        if part.strip().startswith("concept="):
+            concept = part.split("=", 1)[1]
+    proposed = "rogue" if any(w in concept for w in ("มีด", "โจร", "โกหก")) else \
+               "wizard" if "เวท" in concept else "fighter"
+    return CreationGuidance(
+        updated_fields={"flaw": msg, "name": name, "connection": "รู้จักใครบางคนในปาร์ตี้มาก่อน",
+                        "appearance": "ตัวเล็ก ตาไว มีดสั้นซ่อนในแขนเสื้อ"},
+        proposed_class=proposed, ready_to_reveal=True,
+        reveal_summary=f"{name} — {concept}",
+    )
+
+
+def _session_opening(messages, _model) -> OpeningScene:
+    """Fake opening that provably uses a character hook from the context."""
+    blob = _joined(messages)
+    used = []
+    hook_line = ""
+    for line in blob.splitlines():
+        if line.strip().startswith("- ") and "desire=" in line:
+            frag = line.split("desire=", 1)[1].split(";", 1)[0].strip()
+            if frag:
+                used.append(f"desire:{frag}")
+                hook_line = frag
+            break
+    return OpeningScene(
+        title="ฝนแรกที่ประตูเมืองเก่า",
+        situation_lines=[
+            "ฝนเพิ่งหยุด กลิ่นดินเปียกลอยทั่วลาน",
+            "พวกเจ้ายืนอยู่หน้าประตูเมืองที่ปิดเร็วกว่าปกติ",
+            f"มีคนจำหน้าเจ้าได้ — เรื่องที่ว่า{hook_line or 'พวกเจ้ามีธุระในเมือง'} ไปถึงหูใครบางคนแล้ว",
+        ],
+        pressure="ยามบนกำแพงเริ่มชี้มือมาทางนี้ และประตูจะปิดสนิทในไม่ช้า",
+        decision_prompt="ประตูกำลังจะปิด — พวกเจ้าจะทำยังไง?",
+        used_hooks=used,
+    )
+
+
 def _npc_response(messages, _model) -> NPCResponse:
     # Default: cautious in-character reply, no proposed deltas. The utterance may echo
     # only what the NPC was told is KNOWN_TO_NPC. Tests override to propose deltas.
@@ -193,4 +256,6 @@ def install_default_script(fake: FakeLLMProvider) -> FakeLLMProvider:
     fake.on("generate_safe_recap", _recap)
     fake.on("process_post_session_continuity", _post_session)
     fake.on("generate_npc_response", _npc_response)
+    fake.on("guide_character_creation", _creation_guide)
+    fake.on("generate_session_opening", _session_opening)
     return fake

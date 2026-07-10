@@ -1,8 +1,44 @@
 # PROGRESS — Reverie
 
-**Status:** MVP complete. All 13 phases + the §34 vertical slice + §31/§32
-concurrency/recovery are implemented and covered by **74 passing automated tests**
-(`cd backend && python -m pytest -q`).
+**Status:** MVP complete + **player/DM experience overhaul** implemented.
+All 13 phases + the §34 vertical slice + §31/§32 concurrency/recovery + the
+experience overhaul (docs/experience-overhaul.md) are covered by **88 passing
+automated tests** (`cd backend && python -m pytest -q`), including the two-player
+acceptance journey (`tests/test_acceptance_journey.py`).
+
+## Experience overhaul (2026-07-09) — what changed
+- **Presentation contract**: every player-facing message is kinded
+  (`app/presentation`, 21 kinds incl. REVERIE_WELCOME…TECHNICAL_ERROR); the Discord
+  adapter renders embeds/colors/buttons (`discord_bot/render.py`); button clicks
+  round-trip as typed text (uniform + testable).
+- **Guided character creation**: `!rv character` opens a Thai conversation
+  (CharacterDraft state machine + CreationGuidance job) → hooks (origin/desire/
+  fear/flaw/connection/appearance) stored on Character → CHARACTER_REVEAL with
+  class preset + starting gear. Quick path preserved.
+- **Session Zero**: `!rv setup` — 4 friendly questions → campaign profile
+  (tone/balance/assistance/boundaries).
+- **Openings**: Session 1 is AI-generated from a bounded context (profile +
+  character hooks + location) and must tie in an established hook; sessions ≥2 get
+  recap + place/time continuity. No hardcoded tavern.
+- **Readable resolution**: one CHECK_RESOLUTION message = short narration lines +
+  visible engine-owned dice line + optional decision prompt. Mechanics never in prose.
+- **Error staging**: bridge consults ProcessedMessage.stage — pre-commit failures
+  say "nothing happened, retry"; post-commit narration failures restate the
+  committed result and never re-execute. No more bare "internal error".
+- **Views**: `!rv sheet / inventory / journal / party` (journal derives from
+  player-visible events — leak-proof by construction). Items: ItemDefinition/
+  InventoryEntry + class starting gear + ITEM_GAINED events.
+- **NPC dialogue**: CHARACTER_DIALOGUE at a visible NPC routes to the epistemic
+  social service (NPC_DIALOGUE kind, named speaker).
+- **Private secrets**: `reveal_secret` consequence delta can only point at a
+  PRE-AUTHORED Secret row; delivery is an engine-enforced DM (PRIVATE_SECRET).
+- **Closing**: deliberate beat → SESSION_END chronicle (decisions/discoveries/
+  items/objectives) → one-tap feedback stored on Session.feedback.
+- **Narration policy**: progressive disclosure + banned stock phrases
+  (docs/thai-dm-style.md); manual eval fixtures in `backend/evals/`.
+- **DB (additive)**: characters.hooks/appearance, character_drafts,
+  item_definitions, inventory_entries, sessions.feedback; campaign.config gains
+  profile/setup_state keys.
 
 ## Key architectural decisions
 - **Tests run on SQLite (`aiosqlite`)**; production targets PostgreSQL (`asyncpg`).

@@ -4,6 +4,28 @@ All player-facing DM output is primarily **Thai**. The engine understands casual
 Thai, Thai slang, Thai–English code-switching, retained English D&D terms, Thai
 D&D terms, first-person action descriptions, and friend-group speech.
 
+## Narration policy: progressive disclosure (experience overhaul)
+
+More detail is NOT automatically better. Default narration is 2–5 short lines,
+line-broken between beats, in this order:
+
+1. immediate action / sensory change (1 line)
+2. mechanical or situational result (1 line)
+3. only the most decision-relevant observable details (0–2 lines)
+4. a discovery, pressure, NPC reaction, or new decision point — when one exists
+
+Mechanics (rolls, DCs, HP) never appear in the prose: the engine renders the
+committed roll as a separate structured line (🎲 field on CHECK_RESOLUTION).
+When a new decision point opens, the narrator emits exactly one open question in
+`decision_prompt` — never a menu.
+
+**Banned stock phrases** unless grounded in established campaign facts:
+สัญลักษณ์ลึกลับ · บรรยากาศน่าขนลุก · ความรู้สึกที่อธิบายไม่ได้ · พลังงานโบราณ ·
+การมีอยู่อันมืดมิด · พลังชั่วร้ายแผ่ซ่าน.
+
+Manual evaluation: `backend/evals/` fixtures + `python -m evals.run_eval`
+(see the checklist in `backend/evals/README.md`).
+
 These are mechanically equivalent inputs:
 ```
 ! กูค่อยๆ ย่องไปดูว่าข้างในมีใคร
