@@ -13,8 +13,10 @@ Scaffolded in later phases (documented in PROGRESS.md, not yet imported here):
 """
 from app.models.campaign import Campaign, CampaignMember
 from app.models.character import Character
+from app.models.character_draft import CharacterDraft
 from app.models.combat import Combatant, CombatEncounter
 from app.models.event import Event
+from app.models.items import InventoryEntry, ItemDefinition
 from app.models.knowledge import KnowledgeRecord, Secret
 from app.models.location import Location
 from app.models.npc import NPC
@@ -44,4 +46,7 @@ __all__ = [
     "ScheduledWorldEvent",
     "CombatEncounter",
     "Combatant",
+    "CharacterDraft",
+    "ItemDefinition",
+    "InventoryEntry",
 ]

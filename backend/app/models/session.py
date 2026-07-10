@@ -28,4 +28,6 @@ class Session(Base, TimestampMixin):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     attendance: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # Lightweight optional post-session feedback: {member_id: emoji/word}.
+    feedback: Mapped[dict] = mapped_column(JSON, default=dict)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)

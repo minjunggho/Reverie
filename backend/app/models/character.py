@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import JSON, Integer, String
+from sqlalchemy import JSON, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, fk_id, pk_column
@@ -40,6 +40,13 @@ class Character(Base, TimestampMixin):
 
     conditions: Mapped[list[str]] = mapped_column(JSON, default=list)
     resources: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+    # Narrative hooks — what makes this character USABLE by the DM engine.
+    # Keys: concept, origin, desire, fear, flaw, connection, appearance (Thai text).
+    # Scene/opening context builders retrieve these to create character-relevant
+    # opportunities; they are data for the DM, never auto-plot.
+    hooks: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    appearance: Mapped[str] = mapped_column(Text, default="")
 
     def ability_score(self, ability: str) -> int:
         return int(getattr(self, f"{ability.lower()}_score"))
