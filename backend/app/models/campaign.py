@@ -21,6 +21,8 @@ def default_campaign_config() -> dict[str, Any]:
         "failure_progress_level": "moderate",
         # Not every rest is punished by world pressure.
         "punish_every_rest": False,
+        # Dice ritual: PLAYER_CLICK (player taps 🎲 for visible checks) | AUTO.
+        "dice_mode": "PLAYER_CLICK",
         # Supported-rules-subset flags (documented in app/tabletop/rules).
         "rules_subset": {
             "ability_checks": True,

@@ -67,12 +67,21 @@ def decide_clarification(
     interpretation: ActionInterpretation, decision: AdjudicationDecision
 ) -> ClarificationResult:
     """Clarify only when the missing info meaningfully changes target/method/
-    resolution/risk/consequence/interpretation. Prefer assume-and-state otherwise."""
-    if decision.needs_clarification:
+    resolution/risk/consequence/interpretation. Prefer assume-and-state otherwise.
+
+    ENGINE GATE (playtest fix): an adjudicator's clarification request is honored
+    only when the interpreter ALSO found material missing information or read the
+    intent with low confidence. "! แอบฟังต่อไป" in a scene with one established
+    conversation is a complete intent — an eager "ฟังเรื่องอะไร?" gets suppressed
+    here regardless of what the model proposed."""
+    interpreter_unsure = bool(interpretation.missing_information) or (
+        interpretation.intent_confidence < CLARIFY_CONFIDENCE_THRESHOLD
+    )
+    if decision.needs_clarification and interpreter_unsure:
         return ClarificationResult(
             needs_clarification=True,
             question=decision.clarification_question,
-            reason="adjudicator flagged ambiguity affecting resolution",
+            reason="ambiguity affects resolution (both judges unsure)",
         )
     if interpretation.missing_information and interpretation.intent_confidence < CLARIFY_CONFIDENCE_THRESHOLD:
         return ClarificationResult(

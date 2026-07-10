@@ -130,6 +130,10 @@ async def build_consequence_context(
     ]
     if target_ref:
         lines.append(f"TARGET: {target_ref}")
+    # Authored fragments this scene may surface (the ONLY legal reveal_fragment texts).
+    if scene is not None and (scene.allowed_clues or []):
+        lines.append("ALLOWED_CLUES:")
+        lines.extend(f"- {clue}" for clue in scene.allowed_clues)
     return [
         {"role": "system", "content": CONSEQUENCE_SYSTEM},
         {"role": "user", "content": "\n".join(lines)},

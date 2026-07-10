@@ -32,9 +32,15 @@ class Scene(Base, TimestampMixin):
     relevant_object_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
     immediate_threat_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
 
-    # A pending committed action awaiting clarification (CLARIFICATION_REQUIRED).
+    # A pending committed action awaiting clarification OR a player dice click
+    # (pending_action["kind"]: "clarification" | "check").
     pending_action_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     pending_action: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
+    # Authored clue fragments that MAY surface in this scene (e.g. on a failed
+    # check). The LLM can time a reveal but never author one: reveal_fragment
+    # deltas are validated against this list.
+    allowed_clues: Mapped[list[str]] = mapped_column(JSON, default=list)
 
     scene_start_game_time: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(16), default=SceneStatus.ACTIVE.value)

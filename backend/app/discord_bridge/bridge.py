@@ -25,7 +25,7 @@ log = get_logger(__name__)
 from app.services.campaigns import CampaignService, CharacterService
 from app.services.messages import ProcessedMessageService
 from app.services.scenes import SceneService
-from app.services.sessions import SessionService
+from app.services.sessions.session_service import SessionService
 
 
 class NonCommittedRouter(Protocol):

@@ -44,7 +44,7 @@ from app.orchestration.context import ResolvedContext
 from app.presentation import MessageKind
 from app.services.events import EventService
 from app.services.scenes import SceneService
-from app.services.sessions import SessionService
+from app.services.sessions.session_service import SessionService
 from app.tabletop.adjudication import (
     DeltaApplier,
     check_modifier,
@@ -76,8 +76,18 @@ class CommittedActionPipeline:
     async def resume_clarification(
         self, ctx: ResolvedContext, *, answer_text: str, pending: dict
     ) -> BridgeResult:
+        """Resumes whatever is pending for this member: a clarification answer, or
+        a dice-ritual click (pending['kind'] == 'check')."""
+        if pending.get("kind") == "check":
+            return await self._resume_check(ctx, answer_text=answer_text, pending=pending)
+
         original = pending.get("action_text", "")
         merged = f"{original} ({answer_text})".strip()
+        await self._clear_pending(ctx)
+        # Do not clarify twice — proceed with the merged intent (assume-and-state).
+        return await self._process(ctx, merged, allow_clarify=False)
+
+    async def _clear_pending(self, ctx: ResolvedContext) -> None:
         async with self.db.unit_of_work() as s:
             scene = await SceneService(s).get_active_scene(ctx.session_id)
             if scene is not None:
@@ -86,8 +96,6 @@ class CommittedActionPipeline:
             if session_row is not None:
                 session_row.active_play_state = ActivePlayState.TABLE_OPEN.value
                 session_row.version += 1
-        # Do not clarify twice — proceed with the merged intent (assume-and-state).
-        return await self._process(ctx, merged, allow_clarify=False)
 
     # --- core ----------------------------------------------------------------
     async def _process(self, ctx: ResolvedContext, action_text: str, *, allow_clarify: bool) -> BridgeResult:
@@ -95,6 +103,10 @@ class CommittedActionPipeline:
         async with self.db.session() as read:
             scene = await SceneService(read).get_active_scene(ctx.session_id) if ctx.session_id else None
             character = await read.get(Character, ctx.character_id) if ctx.character_id else None
+            from app.models.campaign import Campaign
+
+            campaign = await read.get(Campaign, ctx.campaign_id)
+            dice_mode = (campaign.config or {}).get("dice_mode", "PLAYER_CLICK") if campaign else "AUTO"
             interpretation = await self.interpreter.run(
                 read, action_text=action_text, scene=scene, character=character
             )
@@ -104,14 +116,36 @@ class CommittedActionPipeline:
             )
             target_ref = self._primary_npc_target(scene)
 
-        # Step 10: clarification.
+        # Step 10: clarification (engine-gated — see decide_clarification).
         if allow_clarify:
             clarify = decide_clarification(interpretation, decision)
             if clarify.needs_clarification:
                 question = clarify.question or self._phrase_missing(interpretation)
                 return await self._enter_clarification(ctx, action_text, question)
 
-        # Steps 11-12: adjudicate resolution + deterministic dice.
+        # The dice ritual: a visible player check pauses for the player's roll.
+        needs_roll = (
+            decision.resolution_type not in (ResolutionType.AUTOMATIC_SUCCESS,
+                                             ResolutionType.AUTOMATIC_FAILURE)
+            and character is not None
+        )
+        if needs_roll and dice_mode == "PLAYER_CLICK":
+            return await self._enter_pending_check(
+                ctx, action_text=action_text, interpretation=interpretation,
+                decision=decision, character=character, target_ref=target_ref,
+            )
+
+        return await self._resolve_commit_narrate(
+            ctx, action_text=action_text, goal=interpretation.goal,
+            method=interpretation.method, decision=decision,
+            character=character, target_ref=target_ref, ritual=False,
+        )
+
+    async def _resolve_commit_narrate(
+        self, ctx: ResolvedContext, *, action_text: str, goal: str, method: str,
+        decision, character: Character | None, target_ref: str | None, ritual: bool,
+    ) -> BridgeResult:
+        # Steps 11-12: deterministic resolution (server dice + modifiers + DC).
         check_result, outcome = self._resolve_mechanics(decision, character)
 
         # Step 13: consequence proposal.
@@ -132,9 +166,8 @@ class CommittedActionPipeline:
             await events.record(
                 campaign_id=ctx.campaign_id, session_id=ctx.session_id, scene_id=scene_id,
                 event_type=EventType.PLAYER_ACTION_COMMITTED, actor_entity=actor,
-                payload={"action_text": action_text, "goal": interpretation.goal,
-                         "method": interpretation.method,
-                         "summary": f"{interpretation.goal}"},
+                payload={"action_text": action_text, "goal": goal,
+                         "method": method, "summary": goal},
                 visibility=Visibility.PARTY, narrative_significance=20,
             )
             if check_result is not None:
@@ -151,8 +184,10 @@ class CommittedActionPipeline:
                 s, campaign_id=ctx.campaign_id, session_id=ctx.session_id,
                 scene_id=scene_id, actor_entity=actor,
             )
+            applier.allowed_clues = list(scene_row.allowed_clues or []) if scene_row else []
             _, rejected = await applier.apply_valid(consequence.deltas)
             private_reveals = list(applier.private_reveals)
+            fragments = list(applier.revealed_fragments)
 
             pm = await s.get(ProcessedMessage, ctx.processed_message_id) if ctx.processed_message_id else None
             if pm is not None:
@@ -192,16 +227,36 @@ class CommittedActionPipeline:
                 pm.result = {"response": narration.text, "outcome": outcome,
                              "roll_line": roll_line}
 
-        out = OutboundMessage(
-            ctx.channel_id, narration.text,
-            kind=MessageKind.CHECK_RESOLUTION,
-            data={
-                "roll_line": roll_line,
-                "decision_prompt": narration.decision_prompt,
-                "outcome": outcome,
-            },
+        fragment_field = (
+            [{"name": "ได้ยินมาแว่วๆ", "value": "\n".join(f"“{f}”" for f in fragments),
+              "inline": False}] if fragments else []
         )
-        responses = [out]
+        if ritual:
+            # ROLL and NARRATION are separate presentation objects (§28).
+            responses = [
+                OutboundMessage(
+                    ctx.channel_id, "", kind=MessageKind.CHECK_RESOLUTION,
+                    title=self._check_title(check_result),
+                    data={"roll_line": roll_line, "outcome": outcome},
+                ),
+                OutboundMessage(
+                    ctx.channel_id, narration.text, kind=MessageKind.SCENE_FRAME,
+                    data={"decision_prompt": narration.decision_prompt,
+                          "fields": fragment_field} if fragment_field else
+                         {"decision_prompt": narration.decision_prompt},
+                ),
+            ]
+        else:
+            responses = [OutboundMessage(
+                ctx.channel_id, narration.text,
+                kind=MessageKind.CHECK_RESOLUTION,
+                data={
+                    "roll_line": roll_line,
+                    "decision_prompt": narration.decision_prompt,
+                    "outcome": outcome,
+                    **({"fields": fragment_field} if fragment_field else {}),
+                },
+            )]
         # Engine-enforced private delivery of committed reveals (never public).
         for reveal in private_reveals:
             discord_id = await self._discord_id_for_character(reveal["character_id"])
@@ -231,6 +286,101 @@ class CommittedActionPipeline:
             user = await s.get(User, member.user_id)
             return user.discord_user_id if user else None
 
+    # --- the dice ritual (pending check) --------------------------------------
+    ROLL_TRIGGERS = ("ทอย", "🎲", "roll")
+    CANCEL_WORDS = ("ยกเลิก", "cancel")
+
+    async def _enter_pending_check(
+        self, ctx: ResolvedContext, *, action_text: str, interpretation, decision,
+        character: Character, target_ref: str | None,
+    ) -> BridgeResult:
+        from app.core.ids import new_id
+
+        pending = {
+            "id": new_id(), "kind": "check",
+            "member_id": ctx.member_id, "character_id": ctx.character_id,
+            "action_text": action_text,
+            "goal": interpretation.goal, "method": interpretation.method,
+            "decision": decision.model_dump(mode="json"),
+            "target_ref": target_ref,
+        }
+        async with self.db.unit_of_work() as s:
+            scene = await SceneService(s).get_active_scene(ctx.session_id) if ctx.session_id else None
+            if scene is not None:
+                await SceneService(s).set_pending_action(scene, pending)
+            session_row = await s.get(Session, ctx.session_id) if ctx.session_id else None
+            if session_row is not None:
+                session_row.active_play_state = ActivePlayState.CLARIFICATION_REQUIRED.value
+                session_row.version += 1
+            pm = await s.get(ProcessedMessage, ctx.processed_message_id) if ctx.processed_message_id else None
+            if pm is not None:
+                pm.stage = ProcessingStage.ADJUDICATED.value
+                pm.category = MessageCategory.COMMITTED_ACTION.value
+                pm.pending_action_id = pending["id"]
+
+        label, mod_line = self._check_label_and_mods(decision, character)
+        return BridgeResult(
+            handled=True, category=MessageCategory.COMMITTED_ACTION, state_mutated=False,
+            responses=[OutboundMessage(
+                ctx.channel_id, mod_line, kind=MessageKind.CHECK_PROMPT,
+                title=label, choices=["🎲 ทอย d20"],
+                data={"footer": "โชคชะตาอยู่ในมือเจ้า"},
+            )],
+            note="pending check (dice ritual)",
+        )
+
+    async def _resume_check(
+        self, ctx: ResolvedContext, *, answer_text: str, pending: dict
+    ) -> BridgeResult:
+        text = (answer_text or "").strip()
+        low = text.lower()
+        if any(w in low for w in self.CANCEL_WORDS):
+            await self._clear_pending(ctx)
+            return BridgeResult(handled=True, responses=[OutboundMessage(
+                ctx.channel_id, "ถอนมือออกมาก่อน — ยังไม่มีอะไรเกิดขึ้น",
+                kind=MessageKind.TABLE_NOTICE)])
+        if text.startswith("!"):
+            # The player changed their mind with a new committed action.
+            await self._clear_pending(ctx)
+            return await self._process(ctx, text.lstrip("!").strip(), allow_clarify=True)
+        if not any(t in low for t in self.ROLL_TRIGGERS):
+            return BridgeResult(handled=True, responses=[OutboundMessage(
+                ctx.channel_id, "ลูกเต๋ายังรออยู่ — แตะ 🎲 เพื่อทอย หรือพิมพ์ 'ยกเลิก'",
+                kind=MessageKind.TABLE_NOTICE)])
+
+        from app.schemas.llm_io import AdjudicationDecision
+
+        decision = AdjudicationDecision.model_validate(pending["decision"])
+        async with self.db.session() as read:
+            character = await read.get(Character, pending.get("character_id"))
+        await self._clear_pending(ctx)
+        return await self._resolve_commit_narrate(
+            ctx, action_text=pending.get("action_text", ""),
+            goal=pending.get("goal", ""), method=pending.get("method", ""),
+            decision=decision, character=character,
+            target_ref=pending.get("target_ref"), ritual=True,
+        )
+
+    def _check_label_and_mods(self, decision, character: Character) -> tuple[str, str]:
+        skill = normalize_skill(decision.skill)
+        ability = normalize_ability(decision.ability) or (
+            ability_for_skill(skill) if skill else "wis"
+        )
+        modifier, proficient = check_modifier(character, ability, skill)
+        name = skill or ability
+        th = self._SKILL_TH.get(name, "")
+        label = f"{name.replace('_', ' ').title()}{f' ({th})' if th else ''}"
+        prof_note = " · ถนัด" if proficient else ""
+        return label, f"{character.name} — โมดิฟายเออร์ {modifier:+d}{prof_note}"
+
+    @classmethod
+    def _check_title(cls, check_result) -> str:
+        if check_result is None:
+            return "ผลการตัดสิน"
+        name = check_result.skill or check_result.ability
+        th = cls._SKILL_TH.get(name, "")
+        return f"{name.replace('_', ' ').title()}{f' ({th})' if th else ''}"
+
     # --- helpers -------------------------------------------------------------
     async def _enter_clarification(
         self, ctx: ResolvedContext, action_text: str, question: str
@@ -239,6 +389,7 @@ class CommittedActionPipeline:
 
         pending = {
             "id": new_id(),
+            "kind": "clarification",
             "member_id": ctx.member_id,
             "character_id": ctx.character_id,
             "action_text": action_text,

@@ -17,7 +17,9 @@ from app.models.npc import NPC
 from app.schemas.llm_io import ProposedDelta
 from app.services.events import EventService
 
-ALLOWED_DELTA_KINDS = frozenset({"advance_time", "raise_suspicion", "note", "reveal_secret"})
+ALLOWED_DELTA_KINDS = frozenset(
+    {"advance_time", "raise_suspicion", "note", "reveal_secret", "reveal_fragment"}
+)
 
 
 class DeltaApplier:
@@ -39,6 +41,10 @@ class DeltaApplier:
         # Private reveals committed this action: [{"character_id", "fact"}].
         # The pipeline turns these into PRIVATE_SECRET direct messages.
         self.private_reveals: list[dict] = []
+        # Authored clue fragments the current scene permits (reveal_fragment gate).
+        self.allowed_clues: list[str] = []
+        # Party-visible fragments committed this action (pipeline shows them).
+        self.revealed_fragments: list[str] = []
 
     def validate(self, delta: ProposedDelta) -> None:
         if delta.kind not in ALLOWED_DELTA_KINDS:
@@ -61,6 +67,15 @@ class DeltaApplier:
             if not delta.payload.get("secret_id"):
                 raise ValidationError("reveal_secret requires payload.secret_id "
                                       "(only PRE-AUTHORED secrets can be revealed)")
+        if delta.kind == "reveal_fragment":
+            fragment = (delta.payload.get("text") or "").strip()
+            if not fragment:
+                raise ValidationError("reveal_fragment requires payload.text")
+            allowed = self.allowed_clues or []
+            if not any(fragment in clue or clue in fragment for clue in allowed):
+                raise ValidationError(
+                    "reveal_fragment must match an AUTHORED clue for this scene — "
+                    "the model may time a reveal, never invent one")
 
     async def apply(self, delta: ProposedDelta) -> list[Event]:
         self.validate(delta)
@@ -73,6 +88,8 @@ class DeltaApplier:
             return [await self._raise_suspicion(delta)]
         if delta.kind == "reveal_secret":
             return [await self._reveal_secret(delta)]
+        if delta.kind == "reveal_fragment":
+            return [await self._reveal_fragment(delta)]
         return []  # unreachable (validate() guards)
 
     async def apply_all(self, deltas: list[ProposedDelta]) -> list[Event]:
@@ -139,6 +156,20 @@ class DeltaApplier:
             witnesses=[delta.target],
             payload={"secret_id": secret.id, "summary": "ได้รู้บางอย่างที่คนอื่นยังไม่รู้"},
             narrative_significance=40,
+        )
+
+    async def _reveal_fragment(self, delta: ProposedDelta) -> Event:
+        """A PARTY-visible partial clue (e.g. overheard '...ไม่ใช่ของมนุษย์') —
+        validated against the scene's authored clues; usually the teeth of a
+        failed-but-interesting check."""
+        fragment = delta.payload["text"].strip()
+        self.revealed_fragments.append(fragment)
+        return await self.events.record(
+            campaign_id=self.campaign_id, session_id=self.session_id, scene_id=self.scene_id,
+            event_type=EventType.KNOWLEDGE_GAINED, actor_entity=self.actor_entity,
+            visibility=Visibility.PARTY,
+            payload={"fragment": fragment, "summary": f"ได้ยินมาแว่วๆ: “{fragment}”"},
+            narrative_significance=30,
         )
 
     async def _raise_suspicion(self, delta: ProposedDelta) -> Event:
