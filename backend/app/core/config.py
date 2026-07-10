@@ -8,8 +8,10 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///./reverie_dev.sqlite3"
 
 
 class Settings(BaseSettings):
@@ -24,7 +26,7 @@ class Settings(BaseSettings):
     # --- Database ---
     # Async SQLAlchemy URL. Defaults to a local SQLite file for dev; tests override
     # this to an in-memory SQLite. Production sets a postgresql+asyncpg URL.
-    database_url: str = Field(default="sqlite+aiosqlite:///./reverie_dev.sqlite3")
+    database_url: str = Field(default=DEFAULT_DATABASE_URL)
     db_echo: bool = Field(default=False)
 
     # --- LLM provider ---
@@ -42,6 +44,30 @@ class Settings(BaseSettings):
 
     # --- Misc ---
     log_level: str = Field(default="INFO")
+
+    # Treat blank .env lines (e.g. `REVERIE_DATABASE_URL=`) as "unset" rather than
+    # as an empty string that would otherwise override the sensible defaults.
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def _blank_db_url_is_default(cls, v: object) -> object:
+        if v is None or (isinstance(v, str) and v.strip() == ""):
+            return DEFAULT_DATABASE_URL
+        return v
+
+    @field_validator(
+        "anthropic_api_key", "openai_api_key", "discord_bot_token", "database_url",
+        mode="before",
+    )
+    @classmethod
+    def _strip(cls, v: object) -> object:
+        return v.strip() if isinstance(v, str) else v
+
+    @field_validator("anthropic_api_key", "openai_api_key", "discord_bot_token", mode="before")
+    @classmethod
+    def _blank_secret_is_none(cls, v: object) -> object:
+        if isinstance(v, str) and v.strip() == "":
+            return None
+        return v
 
     @property
     def is_sqlite(self) -> bool:
