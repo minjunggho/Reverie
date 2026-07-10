@@ -115,39 +115,110 @@ async def test_post_commit_narration_crash_restates_the_result(db, provider):
 
 # --- guided character creation ------------------------------------------------------
 
+async def walk_nara_creation(table, author="owner-1", name="DM"):
+    """Stage A conversation + full Stage B build for Nara the rogue. Returns the
+    final reveal BridgeResult."""
+    await table.send("!rv character", author=author, name=name)
+    r = await table.send("อยากเป็นผู้หญิงที่โตมากับโจร ไม่ค่อยพูด ใช้มีด แล้วชอบโกหกคน",
+                         author=author, name=name)
+    assert "?" in r.responses[0].content                    # one focused question
+    await table.send("โตในซอกตลาดล่าง อยากมีที่ของตัวเอง", author=author, name=name)
+    r = await table.send("เธอปากไม่ตรงกับใจ ไว้ใจใครยาก ชื่อ Nara", author=author, name=name)
+    # STAGE A reflection: facts heard, no mechanics decided yet.
+    assert "Nara" in (r.responses[0].title or "")
+    assert r.responses[0].choices
+    assert "HP" not in str(r.responses[0].data)             # nothing auto-built
+
+    # STAGE B — the player chooses everything; the engine only recommends.
+    r = await table.send("✅ ใช่ นี่แหละตัวข้า", author=author, name=name)
+    assert "Class" in (r.responses[0].title or "")
+    assert "แนะนำ" in r.responses[0].content                # a ⭐ recommendation exists
+    r = await table.send("นักย่องเบา (rogue)", author=author, name=name)
+    assert "Species" in (r.responses[0].title or "")
+    r = await table.send("มนุษย์ (human)", author=author, name=name)
+    assert "Background" in (r.responses[0].title or "")
+    r = await table.send("อดีตคนนอกกฎหมาย (criminal)", author=author, name=name)
+    assert "Standard Array" in r.responses[0].content
+    r = await table.send("ใช้แบบแนะนำ", author=author, name=name)
+    assert "+2" in r.responses[0].choices[0]                # background ASI choice
+    r = await table.send("+2 DEX, +1 INT", author=author, name=name)
+    # Class skills: rogue picks 4 (criminal's two are excluded from options).
+    assert "เลือกแล้ว 0 / 4" in r.responses[0].content
+    for skill in ("ผาดโผน (acrobatics)", "สังเกตการณ์ (perception)",
+                  "ลวงหลอก (deception)", "อ่านใจคน (insight)"):
+        r = await table.send(skill, author=author, name=name)
+    # Human Skillful: one more skill of any kind.
+    assert "หัวไว" in (r.responses[0].title or "")
+    r = await table.send("สืบค้น (investigation)", author=author, name=name)
+    # Rogue Expertise: two of the proficient skills.
+    assert "Expertise" in (r.responses[0].title or "")
+    r = await table.send("ลวงหลอก (deception)", author=author, name=name)
+    r = await table.send("มือไว (sleight_of_hand)", author=author, name=name)
+    # Review card, then finalize.
+    assert "ตรวจทาน" in (r.responses[0].title or "")
+    return await table.send("✅ สร้างเลย", author=author, name=name)
+
+
 async def test_guided_creation_conversation_produces_hooks(db, provider):
     world = await build_world(db)
     table = Table(db, provider)
-    # p2's member has Bront already; use a fresh member: the owner creates one.
-    r = await table.send("!rv character", author="owner-1", name="DM")
-    assert r.responses[0].kind == MessageKind.CHARACTER_CREATION
-
-    r = await table.send("อยากเป็นผู้หญิงที่โตมากับโจร ไม่ค่อยพูด ใช้มีด แล้วชอบโกหกคน",
-                         author="owner-1", name="DM")
-    assert r.responses[0].kind == MessageKind.CHARACTER_CREATION
-    assert "?" in r.responses[0].content                    # exactly one focused question
-
-    r = await table.send("โตในซอกตลาดล่าง อยากมีที่ของตัวเอง", author="owner-1", name="DM")
-    r = await table.send("เธอปากไม่ตรงกับใจ ไว้ใจใครยาก ชื่อ Nara", author="owner-1", name="DM")
-    # Confirm proposal with choices.
-    assert r.responses[0].choices
-    assert "Nara" in (r.responses[0].title or "")
-
-    r = await table.send("✅ ใช่ นี่แหละตัวข้า", author="owner-1", name="DM")
-    out = r.responses[0]
-    assert out.kind == MessageKind.CHARACTER_REVEAL
+    r = await walk_nara_creation(table)
+    assert r.responses[0].kind == MessageKind.CHARACTER_REVEAL
 
     async with db.session() as s:
         nara = (await s.execute(
             select(Character).where(Character.name == "Nara")
         )).scalar_one()
-        assert nara.char_class == "rogue"                   # mapped from the fantasy
+        assert nara.char_class == "rogue"                   # chosen, not assumed
+        assert nara.species == "human" and nara.background == "criminal"
+        # Recommended array for rogue (dex/int/con primary) + ASI +2 DEX +1 INT.
+        assert nara.dex_score == 17 and nara.int_score == 15 and nara.con_score == 13
+        # Skills: criminal 2 + class 4 + human skillful 1 = 7, no duplicates.
+        assert len(nara.proficiencies) == 7
+        assert "stealth" in nara.proficiencies              # from criminal background
+        assert nara.expertise == ["deception", "sleight_of_hand"]
+        assert nara.save_proficiencies == ["dex", "int"]
+        assert nara.max_hp == 8 + 1                         # d8 + CON(+1)
         hooks = nara.hooks or {}
         assert hooks.get("concept") and hooks.get("desire") and hooks.get("flaw")
-        # Starting gear was granted.
+        # Grant provenance: "where did I get stealth?" is answerable.
+        from app.models.progression import CharacterGrant
+        stealth_grant = (await s.execute(
+            select(CharacterGrant).where(CharacterGrant.character_id == nara.id,
+                                         CharacterGrant.key == "stealth")
+        )).scalar_one()
+        assert stealth_grant.source_type == "BACKGROUND"
+        # Starting gear was granted (class + background equipment).
         from app.services.campaigns.inventory_service import InventoryService
         items = await InventoryService(s).list_inventory(nara.id)
-        assert len(items) >= 3
+        assert len(items) >= 5
+
+
+async def test_sheet_v2_and_skill_explanation(db, provider):
+    """The sheet exposes real capabilities; `!rv skill` answers 'ทำไมถึง +N?'."""
+    world = await build_world(db)
+    table = Table(db, provider)
+    await walk_nara_creation(table)
+
+    r = await table.send("!rv sheet", author="owner-1", name="DM")
+    sheet = r.responses[0]
+    names = [f["name"] for f in sheet.data["fields"]]
+    assert any("Initiative" in n for n in names)
+    assert any("เซฟวิ่งโธรว์" in n for n in names)
+    assert any("Passive Perception" in n for n in names)
+    assert any("Hit Dice" in n for n in names)
+    skills_field = next(f for f in sheet.data["fields"] if "ทักษะถนัด" in f["name"])
+    assert "★" in skills_field["value"]                     # expertise marked
+
+    # 'ทำไม deception +3?' — CHA -1, Expertise +4 (prof 2 doubled), explained.
+    r = await table.send("!rv skill deception", author="owner-1", name="DM")
+    body = r.responses[0].content
+    assert "+3" in (r.responses[0].title or "")
+    assert "Expertise +4" in body and "CHA -1" in body
+
+    # A non-caster gets a graceful spells answer.
+    r = await table.send("!rv spells", author="owner-1", name="DM")
+    assert "ไม่ใช่ผู้ใช้เวท" in r.responses[0].content
 
 
 async def test_creation_messages_never_hit_the_classifier(db, provider):

@@ -71,24 +71,20 @@ async def test_two_player_full_journey(db, provider):
     r = await table.send("ไม่มี ข้ามได้", OWNER, "นิค")
     assert "พร้อมแล้ว" in r.responses[0].content
 
-    # ---- 2. both players join; P1 creates via the immersive conversation --------
+    # ---- 2. both players join; P1 creates via the immersive two-stage flow ------
     await table.send("!rv join", OWNER, "นิค")   # owner also plays
     await table.send("!rv join", P2, "ไหม")
 
-    await table.send("!rv character", OWNER, "นิค")
-    await table.send("อยากเป็นผู้หญิงที่โตมากับโจร ไม่ค่อยพูด ใช้มีด แล้วชอบโกหกคน",
-                     OWNER, "นิค")
-    await table.send("โตในซอกตลาดล่าง อยากมีที่ของตัวเองสักที่", OWNER, "นิค")
-    r = await table.send("เธอไว้ใจใครยาก ชื่อ Nara", OWNER, "นิค")
-    assert r.responses[0].choices                           # confirm step, not a fait accompli
-    r = await table.send("✅ ใช่ นี่แหละตัวข้า", OWNER, "นิค")
+    from tests.test_experience_overhaul import walk_nara_creation
 
-    # ---- 3. final reveal: real hooks + supported mechanics ----------------------
+    r = await walk_nara_creation(table, author=OWNER, name="นิค")
+
+    # ---- 3. final reveal: real hooks + player-chosen supported mechanics --------
     reveal = r.responses[0]
     assert reveal.kind == MessageKind.CHARACTER_REVEAL
     async with db.session() as s:
         nara = (await s.execute(select(Character).where(Character.name == "Nara"))).scalar_one()
-        assert nara.char_class == "rogue"
+        assert nara.char_class == "rogue"                   # chosen by the player
         assert nara.hooks.get("desire") and nara.hooks.get("flaw")
         campaign_id = nara.campaign_id
 
@@ -122,18 +118,22 @@ async def test_two_player_full_journey(db, provider):
     async with db.session() as s:
         assert (await s.execute(select(func.count(Event.id)))).scalar_one() == events_before
 
-    # ---- 6-9. ! Thai action -> adjudication -> server dice -> commit -> narration
+    # ---- 6-9. ! Thai action -> adjudication -> DICE RITUAL -> commit -> narration
     provider.on("plan_consequence", lambda m, model: ConsequenceProposal(
         consequence_class=ConsequenceClass.SUCCESS,
         deltas=[ProposedDelta(kind="reveal_secret", target=f"character:{nara.id}",
                               payload={"secret_id": secret_id})],
     ))
     r = await table.send("! ฉันย่องเข้าไปใกล้ๆ แอบดูข้อมือของยาม ไม่ให้เขาเห็น", OWNER, "นิค")
+    assert r.responses[0].kind == MessageKind.CHECK_PROMPT   # the table holds its breath
+    assert r.state_mutated is False
+    r = await table.send("🎲 ทอย d20", OWNER, "นิค")          # the player rolls
     public = [m for m in r.responses if m.private_to_discord_id is None]
     private = [m for m in r.responses if m.private_to_discord_id is not None]
     assert public[0].kind == MessageKind.CHECK_RESOLUTION
-    assert "17 + 5 = 22" in public[0].data["roll_line"]     # server d20=17, dex+prof=+5
-    assert "22" not in public[0].content                    # prose stays prose
+    assert "17 + 5 = 22" in public[0].data["roll_line"]     # server d20=17, DEX+3 prof+2
+    assert public[1].kind == MessageKind.SCENE_FRAME        # narration arrives separately
+    assert "22" not in public[1].content                    # prose stays prose
     async with db.session() as s:
         check = (await s.execute(select(Event).where(
             Event.event_type == EventType.ABILITY_CHECK_RESOLVED.value))).scalar_one()

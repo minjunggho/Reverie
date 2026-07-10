@@ -1,10 +1,62 @@
 # PROGRESS — Reverie
 
-**Status:** MVP complete + **player/DM experience overhaul** implemented.
-All 13 phases + the §34 vertical slice + §31/§32 concurrency/recovery + the
-experience overhaul (docs/experience-overhaul.md) are covered by **88 passing
-automated tests** (`cd backend && python -m pytest -q`), including the two-player
-acceptance journey (`tests/test_acceptance_journey.py`).
+**Status:** MVP + experience overhaul + **rules-complete evolution (SRD 5.2.1)**.
+**107 passing automated tests** (`cd backend && python -m pytest -q`), including
+the two-player acceptance journey with the full guided character build and the
+dice ritual.
+
+## Rules evolution (2026-07-09) — what changed
+Baseline researched and documented: **SRD 5.2.1, CC-BY-4.0** (docs/rules-sources.md,
+docs/rules-coverage-audit.md, docs/next-architecture.md).
+
+- **Rule Definition System**: versioned JSON content (`app/rules_content/srd_5_2_1/`)
+  — 6 classes (L1 chassis), 4 species with traits, 4 backgrounds (2024-style: ASI
+  trio + Origin feat + 2 skills + tool + equipment), 30 spells with Thai summaries,
+  resource definitions. Loaded by a validated read-only registry
+  (ruleset_id/definition_id/definition_version).
+- **Character v2**: species/background split from backstory; saves, Expertise,
+  languages, tool proficiencies, temp HP, speed, Hit Dice, death saves, Exhaustion,
+  dying/stable/dead. Grant provenance (`CharacterGrant` — "where did I get this?"),
+  spells with kind/prepared state, `ResourceState`, `ActiveEffect`.
+- **Derivation engine** (`tabletop/rules/derive.py`): every derived value computed
+  with an explainable breakdown — `!rv skill arcana` answers "ทำไมถึง +5" with the
+  actual composition. HP/AC/passives/spell DC never AI-assigned.
+- **Resource engine + rests**: generic max formulas + recharge semantics (long rest,
+  short-rest partial, Arcane-Recovery cycle). Short/Long Rest are domain operations
+  on the world clock; a perceivable world event inside the window **interrupts** the
+  rest (no benefits, 2024 restart rule).
+- **Damage pipeline**: typed components resolved independently (Resistance/
+  Vulnerability/Immunity before totaling), temp HP absorbs first (keep-higher),
+  dying/death saves/instant death per SRD, healing revives; damage triggers
+  **Concentration saves** (DC max(10, dmg/2)); one concentration effect at most.
+- **Two-stage creation**: Stage A conversation → reflection card (facts heard, no
+  mechanics) → Stage B guided build where the **player chooses everything** —
+  class/species/background (⭐ recommended, never auto-applied), Standard Array
+  arrangement, background ASI, class skills (legal counts, duplicate handling),
+  species trait choices, Rogue Expertise, cantrips/spellbook/prepared — finalized
+  in one transaction with full provenance + starting gear.
+- **Dice ritual**: campaign `dice_mode` (default PLAYER_CLICK) — visible checks
+  pause at a CHECK_PROMPT [🎲 ทอย d20]; the SERVER rolls on tap; ROLL and NARRATION
+  arrive as separate messages. AUTO preserves immediate resolution. Hidden checks
+  stay silent.
+- **Clarification restraint**: engine gate — an adjudicator's clarification is
+  honored only when the interpreter also found material missing info ("! แอบฟังต่อไป"
+  with an established conversation never asks "ฟังเรื่องอะไร?"). Prompts updated
+  with the counter-example; A/B/C choice prompts banned in narration.
+- **Failure with teeth**: `Scene.allowed_clues` + `reveal_fragment` delta — the
+  model may *time* a partial reveal ("...ไม่ใช่ของมนุษย์") but only from authored
+  clue text; inventions are rejected.
+- **Views v2**: full sheet (saves ●, Expertise ★, passives, initiative, speed, Hit
+  Dice, death saves, spell DC/slots), `!rv spells` (cantrips/spellbook/prepared ✦/
+  concentration banner), `!rv skill <name>` breakdown.
+- DB additions (additive; delete stale dev sqlite): character v2 columns,
+  character_grants, character_spells, resource_states, active_effects,
+  scenes.allowed_clues.
+
+**Deferred (designed in docs/next-architecture.md §8):** level-up + subclasses +
+executable feats (E2), spell execution engine (E3), combat economy v2 (E4),
+campaign Markdown import + DM canon split + blind-owner mode (E5), Grimoire
+Activity + DM Studio (E6), Homebrew Lab (E7).
 
 ## Experience overhaul (2026-07-09) — what changed
 - **Presentation contract**: every player-facing message is kinded

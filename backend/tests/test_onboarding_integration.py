@@ -73,11 +73,18 @@ async def test_full_onboarding_then_play(db, provider):
     assert MessageKind.SCENE_FRAME in kinds
     assert "เซสชันที่ 1" in (r.responses[0].title or "")
 
-    # Now a committed Thai action plays through the game bridge with a server roll.
+    # A committed Thai action now pauses at the dice ritual (PLAYER_CLICK default):
     r = await table.send("! ผมค่อยๆ ย่องไปดูหน้าต่าง ไม่ให้ยามเห็น", author="u-p1", name="กี้")
+    assert r.responses[0].kind == MessageKind.CHECK_PROMPT
+    assert "🎲 ทอย d20" in r.responses[0].choices
+    assert r.state_mutated is False                  # nothing rolled yet
+
+    # The player taps the die: SERVER rolls; ROLL and NARRATION arrive separately.
+    r = await table.send("🎲 ทอย d20", author="u-p1", name="กี้")
     assert r.state_mutated and "outcome=success" in r.note
     assert r.responses[0].kind == MessageKind.CHECK_RESOLUTION
     assert "21" in r.responses[0].data["roll_line"]  # 16 + (3 DEX + 2 prof)
+    assert r.responses[1].kind == MessageKind.SCENE_FRAME  # narration, separate object
 
     async with db.session() as s:
         check = (

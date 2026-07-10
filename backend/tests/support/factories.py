@@ -44,6 +44,9 @@ async def build_world(db: Database) -> World:
             owner_display_name="DM",
         )
         await camp.activate_campaign(campaign.id)
+        # Legacy factory worlds resolve checks immediately (AUTO); the dice-ritual
+        # (PLAYER_CLICK, the production default) has its own dedicated tests.
+        campaign.config = {**(campaign.config or {}), "dice_mode": "AUTO"}
 
         p1 = await camp.add_member(
             campaign_id=campaign.id, discord_user_id="disc-p1", display_name="กี้",
@@ -56,12 +59,12 @@ async def build_world(db: Database) -> World:
         owner = await camp.resolve_member(campaign.id, "owner-1")
 
         kael = await chars.create_character(
-            member_id=p1.id, name="Kael", ancestry="halfling", char_class="rogue",
+            member_id=p1.id, name="Kael", species="halfling", char_class="rogue",
             abilities={"dex": 16, "wis": 12, "int": 13}, proficiencies=["stealth", "perception"],
             level=1, max_hp=9, ac=14,
         )
         bront = await chars.create_character(
-            member_id=p2.id, name="Bront", ancestry="dwarf", char_class="fighter",
+            member_id=p2.id, name="Bront", species="dwarf", char_class="fighter",
             abilities={"str": 16, "con": 15}, proficiencies=["athletics"],
             level=1, max_hp=13, ac=16,
         )
