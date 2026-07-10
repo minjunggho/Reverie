@@ -22,6 +22,12 @@ from app.models.location import Location
 from app.models.npc import NPC
 from app.models.npc_epistemic import NPCFact, NPCRelationship
 from app.models.processed_message import ProcessedMessage
+from app.models.progression import (
+    ActiveEffect,
+    CharacterGrant,
+    CharacterSpell,
+    ResourceState,
+)
 from app.models.scene import Scene
 from app.models.session import Session
 from app.models.user import User
@@ -49,4 +55,8 @@ __all__ = [
     "CharacterDraft",
     "ItemDefinition",
     "InventoryEntry",
+    "CharacterGrant",
+    "CharacterSpell",
+    "ResourceState",
+    "ActiveEffect",
 ]

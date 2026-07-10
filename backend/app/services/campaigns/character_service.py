@@ -19,7 +19,7 @@ class CharacterService:
         *,
         member_id: str,
         name: str,
-        ancestry: str = "human",
+        species: str = "human",
         char_class: str = "fighter",
         abilities: dict[str, int] | None = None,
         proficiencies: list[str] | None = None,
@@ -32,13 +32,18 @@ class CharacterService:
         if member is None:
             raise NotFoundError(f"member {member_id} not found")
         validate_class(char_class)
+        # Registry-known chassis for the quick path (saves, hit die, speed).
+        from app.rules_content import get_registry
+
+        cls = get_registry().get_class(char_class)
+        spec = get_registry().species.get(species.lower())
 
         abilities = abilities or {}
         char = Character(
             campaign_id=member.campaign_id,
             owner_member_id=member.id,
             name=name,
-            ancestry=ancestry,
+            species=species,
             char_class=char_class,
             str_score=abilities.get("str", 10),
             dex_score=abilities.get("dex", 10),
@@ -47,11 +52,15 @@ class CharacterService:
             wis_score=abilities.get("wis", 10),
             cha_score=abilities.get("cha", 10),
             proficiencies=proficiencies or [],
+            save_proficiencies=list(cls.saving_throws),
             proficiency_bonus=proficiency_bonus_for_level(level),
             level=level,
             max_hp=max_hp,
             hp=max_hp,
             ac=ac,
+            speed=spec.speed if spec else 30,
+            hit_die=cls.hit_die,
+            hit_dice_remaining=level,
         )
         self.session.add(char)
         await self.session.flush()
