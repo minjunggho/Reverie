@@ -17,7 +17,7 @@ from app.models.npc import NPC
 from app.schemas.llm_io import ProposedDelta
 from app.services.events import EventService
 
-ALLOWED_DELTA_KINDS = frozenset({"advance_time", "raise_suspicion", "note"})
+ALLOWED_DELTA_KINDS = frozenset({"advance_time", "raise_suspicion", "note", "reveal_secret"})
 
 
 class DeltaApplier:
@@ -36,6 +36,9 @@ class DeltaApplier:
         self.session_id = session_id
         self.scene_id = scene_id
         self.actor_entity = actor_entity
+        # Private reveals committed this action: [{"character_id", "fact"}].
+        # The pipeline turns these into PRIVATE_SECRET direct messages.
+        self.private_reveals: list[dict] = []
 
     def validate(self, delta: ProposedDelta) -> None:
         if delta.kind not in ALLOWED_DELTA_KINDS:
@@ -51,6 +54,13 @@ class DeltaApplier:
             minutes = delta.payload.get("minutes")
             if not isinstance(minutes, int) or minutes <= 0:
                 raise ValidationError("advance_time requires payload.minutes > 0")
+        if delta.kind == "reveal_secret":
+            kind, _ = parse_entity_ref(delta.target or "")
+            if kind != "character":
+                raise ValidationError("reveal_secret must target a character:<id>")
+            if not delta.payload.get("secret_id"):
+                raise ValidationError("reveal_secret requires payload.secret_id "
+                                      "(only PRE-AUTHORED secrets can be revealed)")
 
     async def apply(self, delta: ProposedDelta) -> list[Event]:
         self.validate(delta)
@@ -61,6 +71,8 @@ class DeltaApplier:
             return []  # the world clock records the canonical event(s)
         if delta.kind == "raise_suspicion":
             return [await self._raise_suspicion(delta)]
+        if delta.kind == "reveal_secret":
+            return [await self._reveal_secret(delta)]
         return []  # unreachable (validate() guards)
 
     async def apply_all(self, deltas: list[ProposedDelta]) -> list[Event]:
@@ -98,6 +110,35 @@ class DeltaApplier:
         await WorldClockService(self.session).advance_time(
             campaign_id=self.campaign_id, minutes=minutes,
             session_id=self.session_id, scene_id=self.scene_id, actor_entity=self.actor_entity,
+        )
+
+    async def _reveal_secret(self, delta: ProposedDelta) -> Event:
+        """Reveal a PRE-AUTHORED Secret to one character, privately.
+
+        The LLM can only point at an existing Secret row (by id); it can never
+        invent secret content. Delivery is engine-enforced: a PLAYER_ONLY event +
+        a private message queued for the pipeline."""
+        from app.models.knowledge import Secret
+
+        _, character_id = parse_entity_ref(delta.target)
+        secret = await self.session.get(Secret, delta.payload["secret_id"])
+        if secret is None or secret.campaign_id != self.campaign_id:
+            raise ValidationError("unknown secret_id — only pre-authored secrets exist")
+        if secret.revealed:
+            raise ValidationError("secret already revealed")
+        secret.revealed = True
+        vis_map = dict(secret.visibility_map or {})
+        vis_map.setdefault("characters", []).append(character_id)
+        secret.visibility_map = vis_map
+
+        self.private_reveals.append({"character_id": character_id, "fact": secret.fact})
+        return await self.events.record(
+            campaign_id=self.campaign_id, session_id=self.session_id, scene_id=self.scene_id,
+            event_type=EventType.KNOWLEDGE_GAINED, actor_entity=self.actor_entity,
+            target_entities=[delta.target], visibility=Visibility.PLAYER_ONLY,
+            witnesses=[delta.target],
+            payload={"secret_id": secret.id, "summary": "ได้รู้บางอย่างที่คนอื่นยังไม่รู้"},
+            narrative_significance=40,
         )
 
     async def _raise_suspicion(self, delta: ProposedDelta) -> Event:

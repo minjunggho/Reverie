@@ -25,15 +25,29 @@ def build_bridge(
 ) -> DiscordBridge:
     provider = provider or get_provider()
     rng = rng or SystemRandomness()
+    from app.services.campaigns.creation_flow import CreationFlowService
+    from app.services.campaigns.session_zero import SessionZeroService
+
     router = MessageRouter(db, provider)
     pipeline = CommittedActionPipeline(db, provider, rng)
     return DiscordBridge(
-        db, router=router, pipeline=pipeline, serializer=serializer or SessionSerializer()
+        db, router=router, pipeline=pipeline,
+        serializer=serializer or SessionSerializer(),
+        creation_flow=CreationFlowService(db, provider),
+        session_zero=SessionZeroService(db),
     )
 
 
 def build_admin_bridge(db: Database, *, provider: LLMProvider | None = None) -> AdminBridge:
-    return AdminBridge(db, provider or get_provider())
+    provider = provider or get_provider()
+    from app.services.campaigns.creation_flow import CreationFlowService
+    from app.services.campaigns.session_zero import SessionZeroService
+
+    return AdminBridge(
+        db, provider,
+        creation_flow=CreationFlowService(db, provider),
+        session_zero=SessionZeroService(db),
+    )
 
 
 def build_default_bridge() -> DiscordBridge:

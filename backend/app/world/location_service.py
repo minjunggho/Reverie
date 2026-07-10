@@ -1,6 +1,7 @@
 """Location CRUD. Description layers feed the retrieval layer (obvious vs hidden)."""
 from __future__ import annotations
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import NotFoundError
@@ -40,3 +41,13 @@ class LocationService:
         if loc is None:
             raise NotFoundError(f"location {location_id} not found")
         return loc
+
+    async def latest_location(self, campaign_id: str) -> Location | None:
+        """Most recently created location — the continuity default for reopening."""
+        return (
+            await self.session.execute(
+                select(Location)
+                .where(Location.campaign_id == campaign_id)
+                .order_by(Location.created_at.desc())
+            )
+        ).scalars().first()
