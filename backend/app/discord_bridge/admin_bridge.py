@@ -21,17 +21,17 @@ from app.presentation import MessageKind
 from app.services.campaigns import CampaignService, CharacterService
 from app.services.campaigns.inventory_service import InventoryService
 from app.services.campaigns.presets import CLASS_PRESETS, CLASS_TH
-from app.services.sessions import (
-    PostSessionService,
-    SessionClosingService,
-    SessionOpeningService,
-    SessionService,
-)
+from app.services.sessions.closing_service import SessionClosingService
+from app.services.sessions.opening_service import SessionOpeningService
+from app.services.sessions.post_session_service import PostSessionService
+from app.services.sessions.session_service import SessionService
 from app.services.views import (
     build_character_sheet,
     build_inventory_view,
     build_journal_view,
     build_party_view,
+    build_skill_explain,
+    build_spells_view,
 )
 from app.world import LocationService
 
@@ -43,7 +43,8 @@ HELP_LINES = (
     "`!rv join` — นั่งร่วมโต๊ะ",
     "`!rv character` — สร้างตัวละครแบบคุยกัน (แนะนำ) · หรือ `!rv character <ชื่อ> <คลาส>`",
     "`!rv session start` / `!rv session end` — เริ่ม/จบเซสชัน (เจ้าของโต๊ะ)",
-    "`!rv sheet` · `!rv inventory` · `!rv journal` · `!rv party` — ดูตัวละคร/ของ/บันทึก/ปาร์ตี้",
+    "`!rv sheet` · `!rv spells` · `!rv inventory` · `!rv journal` · `!rv party` — ดูตัวละคร/คาถา/ของ/บันทึก/ปาร์ตี้",
+    "`!rv skill <ชื่อ>` — ทำไมทักษะนี้ถึงได้เท่านี้",
 )
 
 
@@ -83,6 +84,8 @@ class AdminBridge:
                 "character": self._character,
                 "session": self._session,
                 "sheet": self._sheet,
+                "spells": self._spells,
+                "skill": self._skill,
                 "inventory": self._inventory,
                 "journal": self._journal,
                 "party": self._party,
@@ -240,6 +243,32 @@ class AdminBridge:
                 return self._notice(ctx.inbound, "ยังไม่มีตัวละคร — `!rv character`")
             msg = await build_character_sheet(s, character=char,
                                               channel_id=ctx.inbound.channel_id)
+        return BridgeResult(handled=True, responses=[msg])
+
+    async def _spells(self, ctx: _Ctx) -> BridgeResult:
+        campaign, member = await self._resolve(ctx)
+        if member is None:
+            return self._notice(ctx.inbound, "ยังไม่ได้ร่วมโต๊ะ — `!rv join`")
+        async with self.db.session() as s:
+            char = await CharacterService(s).get_active_character(member)
+            if char is None:
+                return self._notice(ctx.inbound, "ยังไม่มีตัวละคร — `!rv character`")
+            msg = await build_spells_view(s, character=char,
+                                          channel_id=ctx.inbound.channel_id)
+        return BridgeResult(handled=True, responses=[msg])
+
+    async def _skill(self, ctx: _Ctx) -> BridgeResult:
+        campaign, member = await self._resolve(ctx)
+        if member is None:
+            return self._notice(ctx.inbound, "ยังไม่ได้ร่วมโต๊ะ — `!rv join`")
+        if not ctx.args:
+            return self._notice(ctx.inbound, "ใช้: `!rv skill <ชื่อทักษะ>` เช่น `!rv skill arcana`")
+        async with self.db.session() as s:
+            char = await CharacterService(s).get_active_character(member)
+            if char is None:
+                return self._notice(ctx.inbound, "ยังไม่มีตัวละคร — `!rv character`")
+            msg = await build_skill_explain(s, character=char, skill=" ".join(ctx.args),
+                                            channel_id=ctx.inbound.channel_id)
         return BridgeResult(handled=True, responses=[msg])
 
     async def _inventory(self, ctx: _Ctx) -> BridgeResult:
