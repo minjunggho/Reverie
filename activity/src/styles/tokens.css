@@ -1,0 +1,48 @@
+/* Reverie design tokens — dark fantasy, refined, calm, readable.
+   Never a SaaS dashboard, never a parchment texture. */
+:root {
+  /* Background: near-black charcoal with a subtle blue undertone. */
+  --bg: #0b0e13;
+  --bg-raise: #10141c;
+
+  /* Surfaces: layered dark slate with soft borders + inner highlights. */
+  --surface-1: #141924;
+  --surface-2: #1a2130;
+  --surface-3: #212a3c;
+  --border-soft: rgba(148, 163, 190, 0.10);
+  --border-strong: rgba(148, 163, 190, 0.20);
+  --inner-light: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+
+  /* Accents. */
+  --gold: #c9a961;             /* aged muted gold — primary */
+  --gold-dim: #9a8148;
+  --gold-faint: rgba(201, 169, 97, 0.12);
+  --rain: #7fa8c9;             /* silver-rain blue — secondary */
+  --rain-faint: rgba(127, 168, 201, 0.12);
+  --danger: #a43a3f;           /* deep ritual red */
+  --danger-faint: rgba(164, 58, 63, 0.14);
+  --success: #6f8a68;          /* desaturated moss green */
+  --success-faint: rgba(111, 138, 104, 0.14);
+
+  /* Text. */
+  --text: #e9e5da;             /* warm off-white */
+  --text-2: #a7adba;           /* muted cool gray */
+  --text-3: #6d7484;
+
+  /* Typography — Thai readability is mandatory. */
+  --font-body: "Noto Sans Thai", "Sarabun", "Leelawadee UI", "Segoe UI",
+    system-ui, -apple-system, sans-serif;
+  --font-display: "Noto Serif Thai", "Sarabun", "Leelawadee UI", Georgia, serif;
+  --font-mono: "Cascadia Code", "SF Mono", Consolas, monospace;
+
+  --radius-s: 6px;
+  --radius-m: 10px;
+  --radius-l: 14px;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 6px 24px rgba(0, 0, 0, 0.45);
+
+  --touch: 44px;               /* minimum touch target */
+
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
