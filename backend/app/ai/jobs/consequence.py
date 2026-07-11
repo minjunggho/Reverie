@@ -26,10 +26,11 @@ class ConsequencePlanner:
 
     async def run(
         self, session: AsyncSession, *, action_text: str, outcome: str,
-        scene: Scene | None, target_ref: str | None,
+        scene: Scene | None, target_ref: str | None, resolved_targets=None,
     ) -> ConsequenceProposal:
         messages = await build_consequence_context(
-            session, action_text=action_text, outcome=outcome, scene=scene, target_ref=target_ref
+            session, action_text=action_text, outcome=outcome, scene=scene,
+            target_ref=target_ref, resolved_targets=resolved_targets,
         )
         try:
             return await self.provider.plan_consequence(messages)

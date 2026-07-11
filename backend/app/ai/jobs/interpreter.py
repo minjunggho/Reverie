@@ -24,10 +24,11 @@ class ActionInterpreter:
 
     async def run(
         self, session: AsyncSession, *, action_text: str,
-        scene: Scene | None, character: Character | None,
+        scene: Scene | None, character: Character | None, directory=None,
     ) -> ActionInterpretation:
         messages = await build_action_interpretation_context(
-            session, action_text=action_text, scene=scene, character=character
+            session, action_text=action_text, scene=scene, character=character,
+            directory=directory,
         )
         try:
             return await self.provider.interpret_committed_action(messages)

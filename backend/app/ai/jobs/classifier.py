@@ -22,10 +22,11 @@ class TableMessageClassifier:
         self.provider = provider
 
     async def run(
-        self, session: AsyncSession, *, message_text: str, scene: Scene | None
+        self, session: AsyncSession, *, message_text: str, scene: Scene | None,
+        speaker_name: str | None = None,
     ) -> ClassificationResult:
         messages = await build_classification_context(
-            session, message_text=message_text, scene=scene
+            session, message_text=message_text, scene=scene, speaker_name=speaker_name,
         )
         try:
             return await self.provider.classify_table_message(messages)

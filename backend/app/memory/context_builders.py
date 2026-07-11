@@ -68,59 +68,100 @@ def _character_capabilities(character: Character | None) -> str:
     )
 
 
+def _directory_block(directory) -> str:
+    """Render the present cast with canonical names + types (never raw refs alone),
+    so the model can tie a name like 'Aria' to an established player character
+    instead of inventing a stranger. Bounded: names/types only, no backstories,
+    no player-only knowledge."""
+    if directory is None:
+        return ""
+    lines: list[str] = []
+    if directory.actor is not None:
+        st = f"; สถานะ={directory.actor.observable_state}" if directory.actor.observable_state else ""
+        lines.append(f"ACTOR: {directory.actor.canonical_name} [PLAYER_CHARACTER]"
+                     f" ({directory.actor.entity_ref}){st}")
+    pcs = [e for e in directory.present_player_characters if not e.is_actor]
+    if pcs:
+        lines.append("PRESENT_PLAYER_CHARACTERS:")
+        for e in pcs:
+            st = f" · {e.observable_state}" if e.observable_state else ""
+            lines.append(f"- {e.canonical_name} [PLAYER_CHARACTER] ({e.entity_ref}){st}")
+    npcs = directory.present_npcs
+    if npcs:
+        lines.append("PRESENT_ENTITIES:")
+        for e in npcs:
+            alias = f" (aka {', '.join(e.aliases)})" if e.aliases else ""
+            lines.append(f"- {e.canonical_name} [NPC]{alias} ({e.entity_ref})")
+    return "\n".join(lines)
+
+
+def _targets_block(resolved_targets) -> str:
+    if not resolved_targets:
+        return ""
+    lines = ["TARGETS:"]
+    for e in resolved_targets:
+        st = f" · {e.observable_state}" if e.observable_state else ""
+        lines.append(f"- {e.canonical_name} [{e.entity_type}] ({e.entity_ref}){st}")
+    return "\n".join(lines)
+
+
 # --- Phase 5: classification -------------------------------------------------
 async def build_classification_context(
-    session: AsyncSession, *, message_text: str, scene: Scene | None
+    session: AsyncSession, *, message_text: str, scene: Scene | None,
+    speaker_name: str | None = None,
 ) -> list[LLMMessage]:
     brief = await scene_brief(session, scene)
+    speaker = f"SPEAKER: {speaker_name}\n" if speaker_name else ""
     return [
         {"role": "system", "content": CLASSIFIER_SYSTEM},
-        {"role": "user", "content": f"SCENE: {brief.as_text()}\nMESSAGE: {message_text}"},
+        {"role": "user", "content": f"SCENE: {brief.as_text()}\n{speaker}MESSAGE: {message_text}"},
     ]
 
 
-# --- Phase 6: interpretation -------------------------------------------------
+# --- Phase 6: interpretation (party-aware) -----------------------------------
 async def build_action_interpretation_context(
-    session: AsyncSession, *, action_text: str, scene: Scene | None, character: Character | None
+    session: AsyncSession, *, action_text: str, scene: Scene | None,
+    character: Character | None, directory=None,
 ) -> list[LLMMessage]:
     brief = await scene_brief(session, scene)
+    parts = [f"SCENE: {brief.as_text()}"]
+    dir_block = _directory_block(directory)
+    if dir_block:
+        parts.append(dir_block)
+    else:
+        parts.append(f"CHARACTER: {_character_capabilities(character)}")
+    parts.append(f"ACTION: {action_text}")
     return [
         {"role": "system", "content": INTERPRETER_SYSTEM},
-        {
-            "role": "user",
-            "content": (
-                f"SCENE: {brief.as_text()}\n"
-                f"CHARACTER: {_character_capabilities(character)}\n"
-                f"ACTION: {action_text}"
-            ),
-        },
+        {"role": "user", "content": "\n".join(parts)},
     ]
 
 
-# --- Phase 7: adjudication ---------------------------------------------------
+# --- Phase 7: adjudication (typed actor + targets) ---------------------------
 async def build_adjudication_context(
     session: AsyncSession, *, action_text: str, interpretation_summary: str,
-    scene: Scene | None, character: Character | None,
+    scene: Scene | None, character: Character | None, directory=None,
+    resolved_targets=None,
 ) -> list[LLMMessage]:
     brief = await scene_brief(session, scene)
+    parts = [f"SCENE: {brief.as_text()}"]
+    dir_block = _directory_block(directory)
+    parts.append(dir_block if dir_block else f"CHARACTER: {_character_capabilities(character)}")
+    tgt = _targets_block(resolved_targets)
+    if tgt:
+        parts.append(tgt)
+    parts.append(f"INTERPRETATION: {interpretation_summary}")
+    parts.append(f"ACTION: {action_text}")
     return [
         {"role": "system", "content": ADJUDICATOR_SYSTEM},
-        {
-            "role": "user",
-            "content": (
-                f"SCENE: {brief.as_text()}\n"
-                f"CHARACTER: {_character_capabilities(character)}\n"
-                f"INTERPRETATION: {interpretation_summary}\n"
-                f"ACTION: {action_text}"
-            ),
-        },
+        {"role": "user", "content": "\n".join(parts)},
     ]
 
 
 # --- Phase 7/8: consequence planning -----------------------------------------
 async def build_consequence_context(
     session: AsyncSession, *, action_text: str, outcome: str, scene: Scene | None,
-    target_ref: str | None = None,
+    target_ref: str | None = None, resolved_targets=None,
 ) -> list[LLMMessage]:
     brief = await scene_brief(session, scene)
     lines = [
@@ -128,7 +169,10 @@ async def build_consequence_context(
         f"ACTION: {action_text}",
         f"OUTCOME: {outcome}",
     ]
-    if target_ref:
+    tgt = _targets_block(resolved_targets)
+    if tgt:
+        lines.append(tgt)
+    elif target_ref:
         lines.append(f"TARGET: {target_ref}")
     # Authored fragments this scene may surface (the ONLY legal reveal_fragment texts).
     if scene is not None and (scene.allowed_clues or []):
@@ -143,16 +187,19 @@ async def build_consequence_context(
 # --- Phase 8: narration ------------------------------------------------------
 async def build_narration_context(
     session: AsyncSession, *, action_text: str, outcome: str, result_summary: str,
-    scene: Scene | None, target_ref: str | None = None,
+    scene: Scene | None, target_ref: str | None = None, directory=None,
+    resolved_targets=None,
 ) -> list[LLMMessage]:
     brief = await scene_brief(session, scene)
-    lines = [
-        f"SCENE: {brief.as_text()}",
-        f"ACTION: {action_text}",
-        f"OUTCOME: {outcome}",
-        f"RESULT: {result_summary}",
-    ]
-    if target_ref:
+    lines = [f"SCENE: {brief.as_text()}"]
+    dir_block = _directory_block(directory)
+    if dir_block:
+        lines.append(dir_block)
+    lines += [f"ACTION: {action_text}", f"OUTCOME: {outcome}", f"RESULT: {result_summary}"]
+    tgt = _targets_block(resolved_targets)
+    if tgt:
+        lines.append(tgt)
+    elif target_ref:
         lines.append(f"TARGET: {target_ref}")
     return [
         {"role": "system", "content": THAI_DM_STYLE + "\n" + NARRATOR_SYSTEM_EXTRA},

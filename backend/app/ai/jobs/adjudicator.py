@@ -25,7 +25,8 @@ class AdjudicationJudge:
 
     async def run(
         self, session: AsyncSession, *, action_text: str,
-        interpretation: ActionInterpretation, scene: Scene | None, character: Character | None,
+        interpretation: ActionInterpretation, scene: Scene | None,
+        character: Character | None, directory=None, resolved_targets=None,
     ) -> AdjudicationDecision:
         summary = (
             f"goal={interpretation.goal}; method={interpretation.method}; "
@@ -35,7 +36,8 @@ class AdjudicationJudge:
         )
         messages = await build_adjudication_context(
             session, action_text=action_text, interpretation_summary=summary,
-            scene=scene, character=character,
+            scene=scene, character=character, directory=directory,
+            resolved_targets=resolved_targets,
         )
         try:
             return await self.provider.adjudicate_uncertain_action(messages)
