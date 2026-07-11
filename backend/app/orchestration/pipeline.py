@@ -25,7 +25,7 @@ from app.ai.jobs import (
     ConsequencePlanner,
     DMNarrator,
 )
-from app.core.ids import SYSTEM_ACTOR, entity_ref
+from app.core.ids import SYSTEM_ACTOR, entity_ref, parse_entity_ref
 from app.core.logging import get_logger
 from app.discord_bridge.dto import BridgeResult, OutboundMessage
 from app.models.character import Character
@@ -64,6 +64,7 @@ log = get_logger(__name__)
 class CommittedActionPipeline:
     def __init__(self, db, provider, rng) -> None:
         self.db = db
+        self.provider = provider
         self.rng = rng
         self.dice = DiceEngine(rng)
         self.interpreter = ActionInterpreter(provider)
@@ -124,11 +125,25 @@ class CommittedActionPipeline:
             # Resolve linguistic mentions ONCE, at the engine boundary.
             resolution = directory.resolve_mentions(interpretation.target_references)
 
+        # Resting is its own domain flow, routed BEFORE adjudication: the numbers
+        # come from RestService, never from a generic ability check.
+        if interpretation.rest_intent and ctx.session_id:
+            return await self._handle_rest(ctx, action_text=action_text, interpretation=interpretation)
+
         # Movement is its own domain flow: the engine resolves the destination from
         # the world graph (never the narrator). No dice, no invented scenery.
-        if interpretation.movement_intent and ctx.session_id:
+        # FOLLOW_SOURCE/LOCAL_MOVEMENT stay in the current Location (adjudicated
+        # normally below) — "follow that sound" must never reach WorldExpansion.
+        # Only SEARCH_FOR_PLACE (or the legacy unset "NONE", for callers that only
+        # set the old `movement_intent` boolean) may fall back to it; a failed
+        # CANONICAL_TRAVEL/RETURN_OR_EXIT match gets a clarification, never a new
+        # Location.
+        kind = interpretation.movement_kind
+        if (interpretation.movement_intent and ctx.session_id
+                and kind not in ("FOLLOW_SOURCE", "LOCAL_MOVEMENT", "REST")):
             reference = interpretation.movement_reference or action_text
-            return await self.travel.travel(ctx, reference=reference)
+            allow_expansion = kind in ("SEARCH_FOR_PLACE", "NONE")
+            return await self.travel.travel(ctx, reference=reference, allow_expansion=allow_expansion)
 
         async with self.db.session() as read:
             scene = await SceneService(read).get_active_scene(ctx.session_id) if ctx.session_id else None
@@ -160,6 +175,15 @@ class CommittedActionPipeline:
         pc_targets = [e for e in resolution.resolved if e.entity_type == PLAYER_CHARACTER]
         if interpretation.commands_other_pc and pc_targets:
             return await self._agency_safe_response(ctx, directory.actor, pc_targets)
+
+        # Step 10c2: a voluntary NPC social action (ask/greet/thank/threaten/
+        # bargain/tell/request-decision) is routed to NPCSocialService per resolved
+        # NPC — never the generic narrator, which must not invent NPC dialogue or
+        # facts (Fix 3). Targets come from the SAME resolved-mention list used
+        # everywhere else; no first-NPC fallback.
+        npc_targets = [e for e in resolution.resolved if e.entity_type != PLAYER_CHARACTER]
+        if interpretation.social_intent and npc_targets and ctx.character_id:
+            return await self._handle_social(ctx, action_text=action_text, npc_targets=npc_targets)
 
         # Step 10d: ordinary clarification gate.
         if allow_clarify:
@@ -367,6 +391,114 @@ class CommittedActionPipeline:
                 return None
             user = await s.get(User, member.user_id)
             return user.discord_user_id if user else None
+
+    # --- social actions: engine-routed, NPC-authorized -------------------------
+    async def _handle_social(
+        self, ctx: ResolvedContext, *, action_text: str, npc_targets: list[EntityContext],
+    ) -> BridgeResult:
+        """A voluntary NPC-directed social action. Each resolved NPC answers from
+        ITS OWN epistemic + protocol-authorized context (NPCSocialService); the
+        generic narrator never touches this — it cannot invent NPC dialogue, rules,
+        or facts. No roll: whether a social roll is warranted is a fiction-level
+        judgement NPCSocialService/the adjudicator upstream already declined to
+        force here (Fix 3)."""
+        from app.npcs import NPCSocialService
+
+        social_svc = NPCSocialService(self.db, self.provider)
+        responses: list[OutboundMessage] = []
+        for npc_ec in npc_targets[:4]:
+            _, npc_id = parse_entity_ref(npc_ec.entity_ref)
+            social = await social_svc.respond(
+                campaign_id=ctx.campaign_id, npc_id=npc_id,
+                listener_ref=entity_ref("character", ctx.character_id),
+                utterance=action_text, session_id=ctx.session_id,
+            )
+            responses.append(OutboundMessage(
+                ctx.channel_id, social.utterance, kind=MessageKind.NPC_DIALOGUE,
+                title=npc_ec.canonical_name,
+            ))
+
+        async with self.db.unit_of_work() as s:
+            scene_row = await SceneService(s).get_active_scene(ctx.session_id) if ctx.session_id else None
+            scene_id = scene_row.id if scene_row else None
+            actor = entity_ref("character", ctx.character_id)
+            await EventService(s).record(
+                campaign_id=ctx.campaign_id, session_id=ctx.session_id, scene_id=scene_id,
+                event_type=EventType.PLAYER_ACTION_COMMITTED, actor_entity=actor,
+                target_entities=[e.entity_ref for e in npc_targets],
+                payload={"action_text": action_text, "summary": action_text, "social": True},
+                visibility=Visibility.PARTY, narrative_significance=15,
+            )
+            pm = await s.get(ProcessedMessage, ctx.processed_message_id) if ctx.processed_message_id else None
+            if pm is not None:
+                pm.stage = ProcessingStage.SENT.value
+                pm.category = MessageCategory.COMMITTED_ACTION.value
+                pm.result = {"response": responses[0].content if responses else "", "social": True}
+            session_row = await s.get(Session, ctx.session_id) if ctx.session_id else None
+            if session_row is not None:
+                session_row.active_play_state = ActivePlayState.TABLE_OPEN.value
+                session_row.version += 1
+            if scene_row is not None:
+                self._bump_spotlight(scene_row, actor)
+
+        return BridgeResult(
+            handled=True, category=MessageCategory.COMMITTED_ACTION, state_mutated=True,
+            responses=responses, note="social_intent -> NPCSocialService",
+        )
+
+    # --- resting: a real domain operation, never a generic ability check -------
+    async def _handle_rest(
+        self, ctx: ResolvedContext, *, action_text: str, interpretation,
+    ) -> BridgeResult:
+        if interpretation.rest_kind == "ambiguous":
+            return await self._enter_clarification(
+                ctx, action_text, "จะพักสั้นประมาณหนึ่งชั่วโมง หรือพักยาวคืนนี้?")
+        if not ctx.character_id:
+            return self._table_note(ctx, "ยังไม่รู้ว่าใครกำลังพัก")
+
+        from app.tabletop.rest.rest_service import RestService
+
+        # Actor-only for this slice regardless of rest_scope — a solo player must
+        # never be able to silently commit another player's character to sleep
+        # (documented limitation; see PROGRESS.md).
+        character_ids = [ctx.character_id]
+        rest = RestService(self.db, self.rng)
+        if interpretation.rest_kind == "short":
+            outcome = await rest.short_rest(
+                campaign_id=ctx.campaign_id, character_ids=character_ids, session_id=ctx.session_id)
+        else:
+            outcome = await rest.long_rest(
+                campaign_id=ctx.campaign_id, character_ids=character_ids, session_id=ctx.session_id)
+
+        async with self.db.unit_of_work() as s:
+            pm = await s.get(ProcessedMessage, ctx.processed_message_id) if ctx.processed_message_id else None
+            if pm is not None:
+                pm.stage = ProcessingStage.SENT.value
+                pm.category = MessageCategory.COMMITTED_ACTION.value
+            session_row = await s.get(Session, ctx.session_id) if ctx.session_id else None
+            if session_row is not None:
+                session_row.active_play_state = ActivePlayState.TABLE_OPEN.value
+                session_row.version += 1
+
+        kind_th = "ยาว" if outcome.kind == "long" else "สั้น"
+        if not outcome.completed:
+            body = (f"การพัก{kind_th}ถูกขัดจังหวะ — ไม่ได้รับประโยชน์จากการพัก\n\n"
+                    + "\n".join(f"• {n}" for n in outcome.interrupted_by))
+            return BridgeResult(
+                handled=True, category=MessageCategory.COMMITTED_ACTION, state_mutated=True,
+                responses=[OutboundMessage(ctx.channel_id, body, kind=MessageKind.SCENE_TRANSITION,
+                                           title=f"พัก{kind_th}ถูกขัดจังหวะ")],
+                note=f"rest={outcome.kind} interrupted",
+            )
+        lines = [f"{name}: " + ("; ".join(notes) if notes else "ไม่มีอะไรเปลี่ยนแปลง")
+                for name, notes in outcome.notes_th.items()]
+        body = f"พัก{kind_th}เสร็จสิ้น" + ("\n\n" + "\n".join(lines) if lines else "")
+        return BridgeResult(
+            handled=True, category=MessageCategory.COMMITTED_ACTION, state_mutated=True,
+            responses=[OutboundMessage(ctx.channel_id, body, kind=MessageKind.SCENE_TRANSITION,
+                                       title=f"พัก{kind_th}เสร็จสิ้น")],
+            note=f"rest={outcome.kind} completed",
+        )
 
     # --- the dice ritual (pending check) --------------------------------------
     ROLL_TRIGGERS = ("ทอย", "🎲", "roll")

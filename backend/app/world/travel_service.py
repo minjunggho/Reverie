@@ -10,6 +10,8 @@ ordinary place BEFORE narration (and it persists).
 """
 from __future__ import annotations
 
+from sqlalchemy import select
+
 from app.ai.llm.base import LLMProvider
 from app.ai.narration_guard import screen_decision_prompt, screen_narration
 from app.core.errors import LLMError
@@ -18,7 +20,8 @@ from app.discord_bridge.dto import BridgeResult, OutboundMessage
 from app.memory.context_builders import build_scene_frame_context
 from app.memory.scene_context import SceneContextBuilder
 from app.models.character import Character
-from app.models.enums import ActivePlayState, MessageCategory, ProcessingStage
+from app.models.enums import ActivePlayState, MessageCategory, ProcessingStage, SceneMode
+from app.models.npc import NPC
 from app.models.processed_message import ProcessedMessage
 from app.models.session import Session
 from app.presentation import MessageKind
@@ -36,7 +39,7 @@ class TravelService:
         self.provider = provider
         self.expansion = WorldExpansionService(db, provider)
 
-    async def travel(self, ctx, *, reference: str) -> BridgeResult:
+    async def travel(self, ctx, *, reference: str, allow_expansion: bool = True) -> BridgeResult:
         async with self.db.session() as read:
             scene = await SceneService(read).get_active_scene(ctx.session_id) if ctx.session_id else None
             actor = await read.get(Character, ctx.character_id) if ctx.character_id else None
@@ -64,6 +67,11 @@ class TravelService:
             dest_id = match.connection.to_location_id
             travel_minutes = match.connection.travel_minutes
         else:
+            if not allow_expansion:
+                # CANONICAL_TRAVEL/RETURN_OR_EXIT with no matching edge: a focused
+                # navigation clarification, never a fabricated Location (Fix 6).
+                return self._note(
+                    ctx, f"{actor_name}ไม่รู้ทางไปตรงนั้น — มีทางไหนที่รู้จักบ้าง?")
             dest = await self.expansion.find_or_expand(
                 campaign_id=ctx.campaign_id, from_location_id=current_id, request=reference)
             if dest is None:
@@ -77,7 +85,11 @@ class TravelService:
                         travel_minutes = e.travel_minutes
                         break
 
-        # Advance the world (threats/events tick), move the party together, transition.
+        # Advance the world (threats/events tick), move the party, then a REAL scene
+        # transition: close the origin Scene and open a fresh one at the destination
+        # (Fix 5). A Scene is not a Location — nothing location-specific (present
+        # cast, objects, threats, clues, purpose) carries over; it is rebuilt from
+        # canon at the destination, never inherited from the scene being left.
         perceivable: list[str] = []
         async with self.db.unit_of_work() as s:
             if travel_minutes > 0:
@@ -86,8 +98,8 @@ class TravelService:
                     session_id=ctx.session_id, actor_entity=f"character:{ctx.character_id}")
                 perceivable = list(clock.perceivable_notes)
             scene_row = await SceneService(s).get_active_scene(ctx.session_id) if ctx.session_id else None
-            movers: list[str] = []
             if scene_row is not None:
+                movers: list[str] = []
                 for ref in list(scene_row.participants or []):
                     kind, cid = parse_entity_ref(ref)
                     if kind == "character" and cid:
@@ -98,10 +110,22 @@ class TravelService:
                     await PositionService(s).move(
                         character_id=cid, to_location_id=dest_id, campaign_id=ctx.campaign_id,
                         session_id=ctx.session_id, from_location_id=current_id)
-                scene_row.location_id = dest_id
-                scene_row.pending_action = None
-                scene_row.pending_action_id = None
-                scene_row.version += 1
+
+                dest_npc_refs = [f"npc:{n.id}" for n in (await s.execute(
+                    select(NPC).where(NPC.campaign_id == ctx.campaign_id,
+                                      NPC.current_location_id == dest_id))).scalars()]
+                from app.models.campaign import Campaign
+
+                campaign_row = await s.get(Campaign, ctx.campaign_id)
+                game_time = campaign_row.current_game_time if campaign_row else 0
+                await SceneService(s).close_scene(scene_row)
+                await SceneService(s).create_scene(
+                    session_id=scene_row.session_id, location_id=dest_id,
+                    mode=SceneMode(scene_row.mode) if scene_row.mode else SceneMode.EXPLORATION,
+                    participants=[f"character:{cid}" for cid in movers],
+                    visible_entity_ids=dest_npc_refs,
+                    scene_start_game_time=game_time,
+                )
             session_row = await s.get(Session, ctx.session_id) if ctx.session_id else None
             if session_row is not None:
                 session_row.active_play_state = ActivePlayState.TABLE_OPEN.value
