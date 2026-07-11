@@ -75,12 +75,13 @@ async def test_import_review_identifies_all_sections(db, provider):
     admin = AdminBridge(db, provider)
     draft, body = await _import_last_funeral(admin, db)
     review = draft.proposal["_review"]["counts"]
-    assert review["locations"] == 5
-    assert review["important_npcs"] == 3
+    assert review["locations"] == 7
+    assert review["important_npcs"] == 6
     assert review["secrets"] == 2
     assert review["clues"] >= 4
     assert review["factions"] == 1
     assert review["threats"] == 1
+    assert review["protocols"] == 1
     assert review["session_prep"] == 1
     assert review["world_facts"] == 3
     # Warnings surface real structural gaps (Seraphine has no location).
@@ -97,7 +98,7 @@ async def test_approve_commits_canon_atomically(db, provider):
     await admin.handle(_msg(f"!rv campaign import approve {draft.id}"))
     async with db.session() as s:
         locs = list((await s.execute(select(Location))).scalars())
-        assert len(locs) == 5
+        assert len(locs) == 7
         assert all(l.provenance == "IMPORTED" for l in locs)
         # Geography: tavern's parent is Ash Quarter.
         tavern = next(l for l in locs if l.name == "Grey Wolf Tavern")
@@ -189,8 +190,13 @@ async def test_walking_outside_transitions_to_canonical_location(db, provider):
         street = (await s.execute(select(Location).where(
             Location.name == "Bellmaker Street"))).scalar_one()
         assert veskan.location_id == street.id          # canonical position moved
-        scene = await s.get(Scene, opening.scene_id)
-        assert scene.location_id == street.id
+        from app.services.scenes import SceneService
+
+        old_scene = await s.get(Scene, opening.scene_id)
+        assert old_scene.status == "CLOSED"              # a REAL transition, not an in-place mutation
+        new_scene = await SceneService(s).get_active_scene(opening.session_id)
+        assert new_scene.id != opening.scene_id
+        assert new_scene.location_id == street.id
 
 
 async def test_travel_up_advances_time_and_ticks_threats(db, provider):
