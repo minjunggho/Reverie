@@ -1,9 +1,85 @@
 # PROGRESS — Reverie
 
-**Status:** MVP + experience overhaul + **rules-complete evolution (SRD 5.2.1)**.
-**107 passing automated tests** (`cd backend && python -m pytest -q`), including
-the two-player acceptance journey with the full guided character build and the
-dice ritual.
+**Status:** MVP + experience overhaul + rules evolution (SRD 5.2.1) +
+**P0 multiplayer identity fix**.
+
+## P0 multiplayer identity / party-context fix (2026-07-10)
+
+**Confirmed root cause (traced against the code, all 9 points verified):**
+
+1. `DiscordBridge.handle_inbound` correctly resolves the SENDER → CampaignMember →
+   active Character (the actor). ✔ actor identity was never the bug.
+2. `CommittedActionPipeline._process` loads scene + acting character + campaign and
+   passes **only the acting Character** into the interpreter/adjudicator. ✔ confirmed.
+3. `build_action_interpretation_context` emits `SCENE / CHARACTER / ACTION` where
+   CHARACTER is only the actor — no directory of the other present PCs. ✔ confirmed.
+4. `SceneBrief` carries mode/purpose/location/visible_entities but **never hydrates
+   `scene.participants`** — the party refs exist on the scene but reach no prompt. ✔.
+5. `visible_entities` are passed as **raw refs** (`character:abc`, `npc:xyz`) with no
+   canonical name or type, so the model can't tie "Aria" to `character:<aria_id>`. ✔.
+6. Session OPENING is party-aware (it hydrates all attendees' names/hooks); that
+   context is thrown away for normal active play. ✔ confirmed the asymmetry.
+7. `ActionInterpretation.target_references` is extracted but the pipeline **never
+   resolves or uses it**. ✔ confirmed.
+8. `_primary_npc_target(scene)` returns the **first `npc:` ref by list order** from
+   `immediate_threat_ids + visible_entity_ids` — ignores `target_references`, never
+   resolves a player-character target, and mis-targets (`! ผมขู่พ่อค้า` → Guard). ✔.
+9. `build_narration_context` receives only a raw `target_ref` string — no typed
+   actor/target/present-party identity. ✔ confirmed.
+
+**Net:** the party's canonical identities live on `scene.participants`, but nothing
+downstream of session-open hydrates them, resolves target mentions against them, or
+distinguishes a present player-character from an NPC. So another player's character
+mentioned by name reads as an unknown person.
+
+**Architecture of the fix (see below in this doc + docs/multiplayer-identity.md):**
+a SceneEntityDirectory hydrates the *present* entities (PC vs NPC, canonical name,
+controller) — presence = `scene.participants`/`visible_entity_ids`, **not** party
+membership; an EntityResolver maps `target_references` → canonical refs with
+conservative precedence; the pipeline resolves ONCE at the engine boundary and
+propagates typed actor+targets into adjudication/consequence/narration; PC-agency
+is structurally enforced (the engine refuses to execute a command over another PC's
+voluntary choice — not merely a narrator instruction); `_primary_npc_target` is
+replaced by resolved-target selection.
+
+**Architecture changes (files):** `app/entities/` (SceneEntityDirectory +
+EntityContext + resolver); `Character.aliases`, `Scene.spotlight`,
+`ActionInterpretation.commands_other_pc`; party-aware context builders +
+interpreter/adjudicator/consequence/narrator jobs; pipeline resolves target
+mentions once, gates ambiguity/presence/PC-agency, threads typed targets through
+the dice ritual, records resolved targets on the committed event, and bumps
+spotlight; `_primary_npc_target` (first-by-order) removed — NPC consequence target
+is the resolved NPC or the scene's *immediate threat*; router preserves dialogue
+speaker identity. Prompts updated (interpreter target_references + commands_other_pc;
+narrator actor/target non-swap + PC-agency). See docs/multiplayer-identity.md.
+
+**Migration:** additive columns only (`characters.aliases`, `scenes.spotlight`);
+`create_all` covers tests; delete the local dev SQLite once; Postgres gets an
+Alembic autorevision. Existing campaigns remain usable.
+
+**Tests added (`tests/test_multiplayer_identity.py`, 14):** actor mapping per
+sender · party name → existing PC (no NPC invention) · Thai alias · command-over-PC
+refused · declaring another PC's action refused · physical action on unconscious PC
+allowed · NPC target by name not list order · same-name ambiguity → one clarify ·
+absent party member not reachable · Discord name ≠ character alias · actor/target
+distinct in directory · party view == scene directory · dialogue speaker preserved ·
+no PLAYER_ONLY leak into another player's action context.
+
+**Remaining multiplayer limitations (documented, not regressions):**
+- No multi-scene parallel simulation — a split party shares one active scene;
+  absent PCs are known-but-not-present (correct), but two simultaneous sub-scenes
+  aren't modeled yet.
+- Contextual/pronoun target resolution ("the guard", "her") beyond exact
+  canonical/alias is deferred — unmatched mentions fall through to normal handling.
+- Aliases are explicit (`Character.aliases`); no automatic Thai transliteration and
+  no `!rv alias` command yet.
+- Spotlight is awareness only (last_actor + counts); no active "spread the
+  spotlight" director behavior.
+
+---
+
+**107 → 124 passing automated tests** (`cd backend && python -m pytest -q`),
+including a dedicated multiplayer identity suite.
 
 ## Rules evolution (2026-07-09) — what changed
 Baseline researched and documented: **SRD 5.2.1, CC-BY-4.0** (docs/rules-sources.md,
@@ -182,3 +258,17 @@ cd backend
 python -m pytest -q          # 74 tests
 uvicorn app.main:app         # from backend/ (or: uvicorn app.main:app --app-dir backend)
 ```
+# P0 multiplayer identity audit (2026-07-10)
+
+Verified root cause: `DiscordBridge` correctly resolves the sending campaign member and that
+member's active `Character`, and session opening correctly turns attending members' active
+characters into `Scene.participants`. The normal committed-action path then loses the group:
+`CommittedActionPipeline._process()` hydrates only the acting character; `SceneBrief` ignores
+participants and exposes visible entities as raw refs; interpretation target mentions are never
+resolved; `_primary_npc_target()` instead selects the first threat/visible NPC; and adjudication,
+consequence, and narration receive no explicit typed actor/target/party identities. Thus a second
+PC is neither linguistically discoverable nor protected as player-controlled after scene opening.
+Attendance, party membership, and scene presence are stored separately, but the read/context
+layer did not preserve that distinction. The fix is a bounded, scene-authoritative entity
+directory plus deterministic name/alias resolution, threaded as canonical actor and targets
+through adjudication, commitment, and narration, with explicit other-PC agency rules.

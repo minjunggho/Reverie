@@ -45,3 +45,8 @@ class Scene(Base, TimestampMixin):
     scene_start_game_time: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(16), default=SceneStatus.ACTIVE.value)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+    # Spotlight awareness (NOT turn order): keeps quiet characters from vanishing
+    # from the DM's awareness. {"last_actor": ref, "action_counts": {ref: n}}.
+    # Presence != participation != spotlight != turn order (docs/multiplayer-identity.md).
+    spotlight: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)

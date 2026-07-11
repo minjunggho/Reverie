@@ -72,6 +72,10 @@ class Character(Base, TimestampMixin):
     hooks: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     appearance: Mapped[str] = mapped_column(Text, default="")
 
+    # Explicit alternate names for entity resolution (e.g. Thai transliteration
+    # "อาเรีย" for "Aria"). The player's Discord display name is NOT an alias.
+    aliases: Mapped[list[str]] = mapped_column(JSON, default=list)
+
     def ability_score(self, ability: str) -> int:
         return int(getattr(self, f"{ability.lower()}_score"))
 

@@ -35,6 +35,11 @@ class ActionInterpretation(BaseModel):
     risk_awareness: list[str] = Field(default_factory=list)
     intent_confidence: float = Field(ge=0.0, le=1.0)
     missing_information: list[str] = Field(default_factory=list)
+    # True when the action tries to dictate ANOTHER player character's *voluntary*
+    # choice (e.g. "Aria follows me", "Aria opens the door"). A physical action
+    # involving another PC who cannot choose (dragging an unconscious ally) is False.
+    # The engine refuses to execute when this is True (PC agency is inviolable).
+    commands_other_pc: bool = False
 
 
 # --- Adjudication ------------------------------------------------------------
