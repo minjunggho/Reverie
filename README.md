@@ -19,7 +19,24 @@ backend/
   discord_bot/    # thin discord.py adapter -> app/discord_bridge only
   tests/          # pytest (runs on SQLite, no external services)
   alembic/        # migrations (PostgreSQL target)
+activity/         # Discord Activity frontend (E6): player Grimoire + DM Studio
+                  # React + TS + Vite; served by FastAPI at /activity in production
 docs/             # architecture, domain model, state machine, ai-boundaries, ...
+```
+
+## The Grimoire Activity (E6)
+A Discord Activity gives every player a rich character Grimoire and gives the
+campaign owner a DM Studio — projections over the same canonical engine state
+(the Activity is never a second source of truth). See
+`docs/activity-architecture.md`, `docs/activity-local-development.md`, and
+`docs/activity-deployment.md` (includes the Discord Developer Portal steps).
+
+```bash
+cd activity && npm install
+npm run dev          # http://localhost:5173/activity/?mock=1  (mock mode, no Discord)
+npm test             # Vitest component tests
+npm run build        # production build -> served by FastAPI at /activity
+npm run e2e          # Playwright E2E + screenshot matrix (after build)
 ```
 
 ## Requirements
@@ -43,6 +60,9 @@ All secrets come from the environment (never committed). See `.env.example`.
 | `REVERIE_LLM_MODEL` | model id for the active provider |
 | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | provider API key (only if that provider is active) |
 | `DISCORD_BOT_TOKEN` | Discord bot token (only needed to run the live bot) |
+| `DISCORD_CLIENT_ID` | Discord application id (public; needed for the Activity) |
+| `DISCORD_CLIENT_SECRET` | Discord OAuth client secret (server-side only; Activity auth) |
+| `REVERIE_ACTIVITY_SESSION_SECRET` | HMAC key for Activity session tokens (production) |
 | `REVERIE_LOG_LEVEL` | log level (default `INFO`) |
 
 The engine boots and the full test suite passes with `REVERIE_LLM_PROVIDER=fake`

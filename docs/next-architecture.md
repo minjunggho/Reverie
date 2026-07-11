@@ -112,16 +112,16 @@ validates the fragment is a substring/exact match of an authored clue before
 committing a PARTY-visible KNOWLEDGE_GAINED. The LLM can *time* a reveal, never
 *author* lore. Suspicion/time/noise deltas already exist and stay.
 
-## 8. Roadmap of remaining slices (design-complete, not yet shipped)
+## 8. Roadmap of remaining slices
 
-| Slice | Content |
-|---|---|
-| E2 | Level-up workflow (guided grants from level tables), subclasses at L3, executable Origin feats |
-| E3 | Spell execution engine: areas, durations, upcasting, ritual; effect primitives beyond damage/heal/condition/resource/reveal |
-| E4 | Combat economy v2: actions/bonus/reactions, movement+OA, condition mechanical effects |
-| E5 | Campaign Markdown import → structured DM canon (factions, NPCs, secrets, clues, revelation paths) with import review; player-safe vs DM canon authorization split extended; blind-owner mode |
-| E6 | Grimoire Activity (mobile-first player binder) + DM Studio (role-gated) — backend APIs return only authorized data; no CSS-hiding of secrets |
-| E7 | Homebrew Lab: classify (existing / reskin / new mechanic), AI proposes → primitives validate → owner approves |
+| Slice | Status | Content |
+|---|---|---|
+| E2 | not shipped | Level-up workflow (guided grants from level tables), subclasses at L3, executable Origin feats |
+| E3 | not shipped | Spell execution engine: areas, durations, upcasting, ritual; effect primitives beyond damage/heal/condition/resource/reveal |
+| E4 | not shipped | Combat economy v2: actions/bonus/reactions, movement+OA, condition mechanical effects |
+| E5 | **SHIPPED** | Campaign Markdown import → structured DM canon with import review; canonical geography/travel; player-safe vs DM canon authorization split (see docs/world-canon.md) |
+| E6 | **SHIPPED** | Grimoire Activity (mobile-first player binder) + DM Studio (role-gated) — backend APIs return only authorized data; no CSS-hiding of secrets (see docs/activity-architecture.md) |
+| E7 | not shipped | Homebrew Lab: classify (existing / reskin / new mechanic), AI proposes → primitives validate → owner approves |
 
 Storage responsibilities (mandate §10): mechanics = versioned JSON content; runtime
 state = PostgreSQL; long-form authoring = Markdown (imported, never executed);

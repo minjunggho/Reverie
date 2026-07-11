@@ -19,19 +19,23 @@ owns state or randomness.
 
 ```
 discord_bot/  (discord.py client, thin)         <- I/O edge, no game logic
-     |  calls
-     v
-app/discord_bridge/  (application-facing bridge)  <- translates Discord I/O <-> engine DTOs
-     |  calls
-     v
-app/orchestration/  (committed-action pipeline, per-session queue)
-     |  uses
-     v
+     |  calls                                      activity/ (React Grimoire/DM Studio)
+     v                                                  |  HTTPS (bearer Activity session)
+app/discord_bridge/  (application-facing bridge)        v
+     |  calls                                      app/api/activity/ (auth+authz routes)
+     v                                                  |  calls
+app/orchestration/  (committed-action pipeline)    app/services/activity/ (projections)
+     |  uses                                            |
+     v                                                  v
 app/services/ + app/tabletop/ + app/npcs/ + app/world/  (THE ENGINE: all game logic)
      |  uses
      v
 app/models/ (SQLAlchemy canonical state) + app/db/  (transactions)
 ```
+
+The Activity (E6) is a second I/O edge with the same discipline: routes
+authenticate/authorize and call projection builders; no game logic in HTTP
+handlers, no rule math in React (see `docs/activity-architecture.md`).
 
 - **No Discord types leak inward.** `discord_bridge` accepts primitive/DTO input
   (`InboundMessage`) and returns `OutboundMessage`. The bot never imports engine

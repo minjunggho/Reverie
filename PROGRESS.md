@@ -1,8 +1,154 @@
 # PROGRESS — Reverie
 
 **Status:** MVP + experience overhaul + rules evolution (SRD 5.2.1) + P0 multiplayer
-identity fix + E5 campaign canon & world navigation + **P0 playtest correctness fix**
-(NPC grounding/routing, scene transitions, movement precision, rest routing).
+identity fix + E5 campaign canon & world navigation + P0 playtest correctness fix +
+**E6 Grimoire Activity + DM Studio (SHIPPED)**.
+
+## E6 — Grimoire Activity + DM Studio (2026-07-11)
+
+### Shipped
+
+**Architecture implemented.** A real Discord Activity: React 18 + TypeScript +
+Vite frontend (`activity/`) over a new authenticated Activity API
+(`/api/activity/v1`). Production build served same-origin by FastAPI at
+`/activity` (SPA fallback in `app/main.py`); dev uses the Vite proxy. The
+Activity is a projection/control surface only — every derived number
+(modifiers, breakdowns, DCs, passives, resources, concentration) is computed
+by the existing derivation engine server-side; React recomputes nothing and
+authorizes nothing.
+
+**Auth flow.** Embedded App SDK → authorize (identify+guilds) → code →
+`POST /auth/exchange` → server-side token exchange with the Discord client
+secret → `/users/@me` identity verification → Reverie User upsert →
+short-lived HMAC session token (identity only — role/campaign are re-resolved
+from the DB per request). Token in memory only; expiry → re-auth screen.
+Forged campaign/member/role/guild values are inert (docs/activity-auth.md).
+
+**Endpoints.** `GET /config`, `POST /auth/exchange`, `GET /context`, player
+`GET /campaigns/{id}/grimoire/{overview,skills,spellbook,features,inventory,
+story,party,chronicle}`, owner-gated `GET /campaigns/{id}/studio/
+{command-center,scene,world,npcs,npcs/{nid},threats,secrets,events,imports}`,
+and the only mutations: `POST .../studio/imports/{iid}/{approve,reject,repair}`
+via the existing CanonImportService inside unit_of_work.
+
+**Views.** Grimoire: Overview (HP bar w/ temp-HP, conditions, death saves,
+concentration banner, stat medallions, resource pips → provenance sheet),
+Abilities/Saves/all-18-Skills (sort/filter, tap → real Breakdown + passive),
+Spellbook (DC/attack/slots, prepared/concentration/ritual filters, detail
+sheets; explicitly read-only preparation — no fake controls), Features (grouped
+by provenance with พร้อมใช้/ใช้หมดแล้ว/กลไกยังไม่รองรับ states), Inventory
+(search/filter), Story (hooks + own private discoveries), Party (observable
+state only; other players' exact HP absent from the payload), Chronicle
+(session-grouped journal, visibility filtered in SQL). DM Studio: Command
+Center, Current Scene (canon location vs scene state vs present entities kept
+distinct; stale NPC refs surfaced as warnings, never as present), World
+(hierarchical explorer + provenance filters + canonical edges; deliberate
+no-graph-renderer decision), NPCs (objective canon / protocols / epistemic
+knowledge / relationships separated), Threats (restrained progress, read-only),
+Secrets & Clues (per-clue discovery state + ordered protocols), Events
+(inspector w/ visibility filters + expandable technical detail), Imports
+(approve/reject/repair with confirmations + toasts).
+
+**Mutations.** Import approve/reject/protocol-repair only — owner-authorized
+server-side, confirmed in UI, domain-service-committed, results toasted and
+projections refreshed. No set-HP/teleport/set-progress endpoints exist.
+
+**Authorization tests (backend, 13).** Token roundtrip/expiry/bad-signature;
+401s for missing/expired sessions; server-side OAuth exchange; context
+resolution incl. forged guild + non-member; engine-derived skill totals ==
+`skill_bonus` for all 18 skills; JSON-payload absence of DM_ONLY + other
+players' PLAYER_ONLY data across all eight grimoire endpoints; own private
+discovery visible only to its owner; forged campaign ids (403/404); player
+403 on all eight studio endpoints, owner 200; role-from-DB (frontend role
+flags ignored); NPC knowledge/canon separation; stale scene refs excluded;
+full import lifecycle incl. double-approve → 409.
+
+**Frontend tests (10, Vitest+RTL).** Overview renders real state incl.
+concentration + conditions; resource tracker accessible + provenance sheet;
+skill breakdown sheet shows INT+Proficiency=total; proficient-only filter;
+spellbook concentration banner + prepared filter; DM switch hidden from
+players / shown to owners; permission-denied state; mobile bottom nav;
+import approve confirmation flow → success toast.
+
+**E2E/screenshots (28 Playwright tests).** 8 screens × {375×812, 768×1024,
+1440×900} with a hard no-horizontal-overflow assertion on every capture, plus
+NPC-detail sheet, mobile bottom-nav navigation, outside-Discord fallback state,
+and a full player→DM navigation journey across all 16 views.
+
+**Visual QA findings (screenshots inspected).** Mobile overview: identity, HP
+bar (with hatched temp-HP), concentration banner, medallions and bottom nav
+all legible at 375px with no overflow. Desktop Command Center reads as a
+control room (warnings, party positions, thin threat progress — no quest
+bars). NPC detail cleanly separates canon/protocols/beliefs. Fixed during QA:
+full-page screenshot black band (html background), Playwright selector
+ambiguity, Vite 6/Vitest type conflict (pinned Vite 5). Remaining nits
+accepted: Thai glyph rendering depends on system fonts (no webfont by design —
+Discord Activity CSP), tablet uses the mobile nav below 900px.
+
+**Commands.**
+`cd backend && python -m pytest -q` · `cd activity && npm run typecheck &&
+npm test && npm run build && npm run e2e` · dev: `npm run dev` →
+`http://localhost:5173/activity/?mock=1`.
+
+**Known limitations.** Spell preparation is read-only (no safe domain service
+outside the rest flow — labeled, not faked). Live updates are focus-refresh +
+30s visible-tab polling, not push. The Discord Developer Portal steps (URL
+mapping, Enable Activities, entry point) are documented in
+docs/activity-deployment.md but must be performed by the app owner — the
+repository cannot claim they are configured. Campaign selection outside a
+bound channel shows the user's campaigns but deep-launching into one is not
+yet wired (open the Activity from the campaign's channel).
+
+### Audit (verified against the repo head before any E6 edit)
+
+- **Current frontend state: none.** No `activity/`, no Node tooling, no static
+  assets. The only UI Reverie has is Discord embeds rendered from
+  `OutboundMessage`s.
+- **Current API state:** FastAPI app factory (`app/main.py`) mounts exactly two
+  routers — `/health` (+`/health/db`) and read-only `/admin` observability
+  endpoints. No auth of any kind exists on HTTP; the Discord bot is the only
+  authenticated surface. No CORS, no static file serving, no session concept.
+- **Authorization boundaries available to build on:** `User.discord_user_id`
+  (unique), `CampaignMember.role` (`OWNER`/`PLAYER`),
+  `CampaignService.resolve_member(campaign_id, discord_user_id)`,
+  `Campaign.game_channel_id` (one campaign per channel — the binding used by the
+  bot), and `Visibility` enum enforced at retrieval in
+  `EventService.list_visible_events` and the E5 scene-context/canon queries.
+- **Data projections needed** (all raw material already exists, engine-authoritative):
+  - Character sheet math: `tabletop/rules/derive.py` (`skill_bonus`/`save_bonus`
+    return `Breakdown(total, parts)` — exactly the "modifier explanation" the
+    Activity must show), `passive_perception`, `initiative_bonus`,
+    `spellcasting_block`.
+  - Resources: `ResourceEngine.get/…` over `ResourceState` + registry
+    `ResourceDef` (recharge kind, Thai name).
+  - Concentration: `ConcentrationService.current` over `ActiveEffect`.
+  - Spells: `CharacterSpell` (+ registry `SpellDef` concise Thai summaries).
+  - Grants/provenance: `CharacterGrant` (source_type ∈ CLASS/SPECIES/BACKGROUND/…).
+  - Inventory: `InventoryService.list_inventory` → (entry, ItemDefinition).
+  - Chronicle: `EventService.list_visible_events` (PUBLIC/PARTY; PLAYER_ONLY needs
+    a witness filter added at the query level, not in the client).
+  - DM Studio: `Scene`/`Session`/`Location`(+`LocationConnection`)/`NPC`(+
+    `NPCFact`/`NPCRelationship` via `NPCKnowledgeService`)/`Threat`/
+    `ScheduledWorldEvent`/`Secret`/`CampaignCanonRecord`(clues + protocols)/
+    `CanonImport` + `CanonImportService` (approve/reject/repair_protocols are the
+    only Activity mutations — all already validated domain operations).
+- **Proposed files:** backend `app/api/activity/` (router `/api/activity/v1`),
+  `app/auth/activity.py` (Discord OAuth code exchange + HMAC-signed short-lived
+  session token; no new dependency — httpx already present), `app/services/
+  activity/` (player + DM projection builders returning plain JSON-safe dicts,
+  never ORM rows); frontend `activity/` (Vite + React + TS + @discord/
+  embedded-app-sdk + CSS-module design system + Vitest/RTL + Playwright).
+  Production build served by FastAPI at `/activity` (same origin as the API).
+- **Read-only vs mutating:** everything in the Activity is read-only EXCEPT
+  campaign-import approve / reject / protocol-repair (existing
+  `CanonImportService` operations, owner-gated server-side). Spell preparation
+  has no existing domain service ("เปลี่ยนคาถาที่เตรียมไว้ได้หลังพักยาว" is a rest-flow
+  concern), so the Spellbook is explicitly read-only and labeled as such — no
+  fake controls, no new mutation invented for E6.
+- **Reused domain services (no game logic in routes or React):** all of the
+  above; routes authenticate → authorize (member/role resolved server-side from
+  the verified Discord identity, never from a frontend flag) → call projections/
+  services → return JSON.
 
 ## P0 playtest correctness fix (2026-07-11)
 
