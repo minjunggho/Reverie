@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import JSON, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import JSON, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, fk_id, pk_column
@@ -23,6 +23,8 @@ def default_campaign_config() -> dict[str, Any]:
         "punish_every_rest": False,
         # Dice ritual: PLAYER_CLICK (player taps 🎲 for visible checks) | AUTO.
         "dice_mode": "PLAYER_CLICK",
+        # Who owns objective world facts: AUTHORITATIVE_WORLD (default) | COLLABORATIVE.
+        "world_mode": "AUTHORITATIVE_WORLD",
         # Supported-rules-subset flags (documented in app/tabletop/rules).
         "rules_subset": {
             "ability_checks": True,
@@ -46,6 +48,12 @@ class Campaign(Base, TimestampMixin):
     config: Mapped[dict[str, Any]] = mapped_column(JSON, default=default_campaign_config)
     # In-world minutes since the campaign epoch. Engine-owned; never set by the LLM.
     current_game_time: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Campaign canon (E5). Player-safe brief + central question + Session 1 prep.
+    # Deep lore lives in CampaignCanonRecord / Secret / NPC / Threat / Location.
+    brief: Mapped[str] = mapped_column(Text, default="")
+    central_question: Mapped[str] = mapped_column(Text, default="")
+    session_prep: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     status: Mapped[str] = mapped_column(String(16), default=CampaignStatus.SETUP.value)
     # Monotonic event sequence counter for this campaign (assigned under lock).
     event_seq: Mapped[int] = mapped_column(Integer, default=0)

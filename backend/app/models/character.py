@@ -68,6 +68,10 @@ class Character(Base, TimestampMixin):
     conditions: Mapped[list[str]] = mapped_column(JSON, default=list)
     resources: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)  # legacy misc
 
+    # Canonical physical position (where this character IS). Scene presence derives
+    # from co-location; supports party splits. NULL until placed at session start.
+    location_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+
     # Narrative hooks (experience overhaul) — the DM engine's raw material.
     hooks: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     appearance: Mapped[str] = mapped_column(Text, default="")

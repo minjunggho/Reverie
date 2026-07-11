@@ -16,6 +16,13 @@ from app.presentation import MessageKind
 
 
 @dataclass(frozen=True)
+class InboundAttachment:
+    filename: str
+    content_type: str | None
+    data: bytes
+
+
+@dataclass(frozen=True)
 class InboundMessage:
     """A message the bot received in a game channel, reduced to primitives."""
     discord_message_id: str
@@ -25,6 +32,7 @@ class InboundMessage:
     author_display_name: str
     content: str
     is_bot: bool = False
+    attachments: tuple[InboundAttachment, ...] = ()
 
 
 @dataclass

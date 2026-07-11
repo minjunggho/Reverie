@@ -12,6 +12,7 @@ Scaffolded in later phases (documented in PROGRESS.md, not yet imported here):
     CombatEncounter/Combatant (Phase 13), ItemDefinition/InventoryEntry, Quest.
 """
 from app.models.campaign import Campaign, CampaignMember
+from app.models.canon_import import CanonImport
 from app.models.character import Character
 from app.models.character_draft import CharacterDraft
 from app.models.combat import Combatant, CombatEncounter
@@ -32,11 +33,13 @@ from app.models.scene import Scene
 from app.models.session import Session
 from app.models.user import User
 from app.models.world import ScheduledWorldEvent, Threat
+from app.models.world_graph import CampaignCanonRecord, LocationConnection
 
 __all__ = [
     "User",
     "Campaign",
     "CampaignMember",
+    "CanonImport",
     "Character",
     "Session",
     "Scene",
@@ -59,4 +62,6 @@ __all__ = [
     "CharacterSpell",
     "ResourceState",
     "ActiveEffect",
+    "LocationConnection",
+    "CampaignCanonRecord",
 ]
