@@ -1,7 +1,182 @@
 # PROGRESS — Reverie
 
 **Status:** MVP + experience overhaul + rules evolution (SRD 5.2.1) + P0 multiplayer
-identity fix + **E5 campaign canon & world navigation**. **133 passing tests.**
+identity fix + E5 campaign canon & world navigation + **P0 playtest correctness fix**
+(NPC grounding/routing, scene transitions, movement precision, rest routing).
+
+## P0 playtest correctness fix (2026-07-11)
+
+Scope: fix six real multiplayer-playtest failures only. Does **not** touch character
+options, Scene Planner, combat, dice, rests math, or the campaign import location/NPC
+pipeline beyond adding one new optional section (Protocol).
+
+### Root-cause verification (confirmed against the repo head before any edit)
+
+1. **Imported ordered protocols had no structured home.** `canon_import.py` only ever
+   wrote `Campaign.brief`/`central_question`/`CampaignCanonRecord` (unordered facts).
+   A "five numbered rules" block had nowhere canonical to live, so an NPC asked to
+   repeat them had nothing grounded to retrieve — confirmed.
+2. **`build_npc_response_context` (context_builders.py) fed an NPC only its own
+   `NPCFact` rows** (`NPCKnowledgeService.facts_npc_may_use`) — no protocol context
+   existed to feed even if it had been structured — confirmed.
+3. **Committed (`!`) social actions never reached `NPCSocialService`.**
+   `CommittedActionPipeline._resolve_commit_narrate` (pipeline.py) always ran
+   adjudication → consequence → the generic `DMNarrator`, regardless of whether the
+   action was "ask Mother Veyra a question." The generic narrator (a Thai-prose LLM
+   with only ACTOR/TARGETS/OUTCOME text) was therefore the thing inventing NPC
+   dialogue and rules — confirmed. `NPCSocialService` (epistemic-scoped, engine-
+   validated) already existed and was correct, but only `MessageRouter` (non-`!`
+   chat) called it.
+4. **`MessageRouter._visible_npc` picked the FIRST npc ref in
+   `scene.visible_entity_ids`**, ignoring any name in the player's message —
+   confirmed, literally list-order selection, for the *non-committed* chat path.
+   (The committed pipeline already used `SceneEntityDirectory.resolve_mentions` for
+   targeting per the P0 multiplayer fix — but committed social actions never reached
+   an NPC-authorized responder at all, per #3.)
+5. **`SceneEntityDirectory.build` trusted `scene.visible_entity_ids` /
+   `immediate_threat_ids` unconditionally** — it never checked
+   `NPC.current_location_id` against `scene.location_id`. Confirmed as the direct
+   cause of "NPCs teleport to every location": nothing ever purged a stale NPC ref.
+6. **`TravelService.travel` mutated `scene_row.location_id` in place** and left
+   `visible_entity_ids`/`immediate_threat_ids`/`relevant_object_ids`/`allowed_clues`/
+   `purpose` untouched — confirmed root cause of #5's symptom: every destination
+   scene was really the *origin* scene wearing a new location id, so the origin's
+   NPCs stayed "present" forever.
+7. **Any `movement_intent=True` with no matching graph exit fell straight into
+   `WorldExpansionService.find_or_expand`** (`TravelService.travel`, no gate) —
+   confirmed cause of "follow that sound" minting a permanent shop.
+   `ActionInterpretation` had only a boolean `movement_intent`, with no distinction
+   between canonical travel, local movement, following a source, or searching for an
+   unauthored place — confirmed.
+8. **`RestService` (`tabletop/rest/rest_service.py`) was fully implemented and
+   correct but was never called from `CommittedActionPipeline`** — confirmed;
+   `ActionInterpretation` had no rest fields at all, so natural-language rest fell
+   through to ordinary ability-check adjudication.
+
+### Fixes (files changed)
+
+- **Protocol representation** — reused `CampaignCanonRecord` (`category="protocol"`,
+  `data={"key","rules":[ordered],"known_by":[names]}`) rather than a new table.
+  `canon_import.py`: new `ProtocolProposal`, `## Protocol: Title` Markdown block
+  (`### Key`/`### Visibility`/`### Known By`/`### Rules`, deterministic parsing —
+  no LLM), review counts + validation (unique key, ≥1 rule, order preserved, known-by
+  NPCs exist, legal visibility), committed atomically in `approve()`. Added
+  `CanonImportService.repair_protocols` — an idempotent, protocol-only backfill for
+  an *already-approved* campaign: it parses a **newly uploaded** revision's stored
+  `source_text` for `## Protocol:` blocks only and adds any missing-by-key records,
+  never touching locations/NPCs/secrets (which would otherwise conflict on
+  re-approval). Owner workflow: re-upload the revised file (`!rv campaign import`,
+  new draft because the content hash differs), then `!rv campaign import repair
+  <new-draft-id>` instead of `approve`.
+- **Grounded factual NPC answers** — `NPCKnowledgeService.protocols_known_by` reads
+  ordered protocol records where the NPC's name is in `known_by`.
+  `build_npc_response_context` now includes a `PROTOCOLS:` block (ordered, verbatim)
+  and the NPC's `COMMUNICATION_MODE`. `NPC_RESPONSE_SYSTEM` instructs: if the
+  listener asks about a listed protocol, the rules must be reproduced verbatim, in
+  order, with no additions/omissions/substitutions.
+- **All committed NPC-directed social actions route through `NPCSocialService`** —
+  `ActionInterpreter`/`ActionInterpretation` gained `social_intent: bool` (ask/greet/
+  thank/threaten/bargain/tell/request-decision). `CommittedActionPipeline` now
+  branches before adjudication: if `social_intent` and there is ≥1 resolved NPC
+  target, it calls `NPCSocialService.respond()` once per resolved NPC (from
+  `SceneEntityDirectory`, never first-in-list) and returns their grounded responses
+  directly — no roll, no generic `DMNarrator` rewriting NPC meaning. Physical
+  framing (if any) stays server-authored, not model-authored.
+- **NPC communication mode** — `NPC.communication_mode` (default `"SPOKEN"`;
+  `SLATE`/`SIGN`/`NONVERBAL`/`OTHER`). `NPCResponse` gained optional
+  `spoken_text`/`written_text`/`nonverbal_action` (kept `utterance` for backward
+  compatibility). `NPCSocialService` — not the prompt alone — deterministically
+  composes the final display text: a non-`SPOKEN` NPC's line is rendered as a
+  written/nonverbal action, never as attributed spoken dialogue, regardless of what
+  the model put in `utterance`.
+- **Named NPC target resolution for ordinary (non-`!`) dialogue** —
+  `MessageRouter` now builds a `SceneEntityDirectory` and resolves
+  `ClassificationResult.target_references` (new field, classifier prompt updated
+  in step with the interpreter's own target-extraction contract) through
+  `resolve_mentions`, exactly like the committed pipeline. First-NPC selection is
+  removed. Exactly one present NPC with no explicit name is still inferred
+  (unchanged single-NPC scenes keep working); multiple named targets each get their
+  own grounded, communication-mode-correct reply; a genuinely ambiguous mention gets
+  one focused clarification question instead of a guess.
+- **NPC location hard invariant** — `SceneEntityDirectory.build` now only treats an
+  `npc:` ref from `visible_entity_ids`/`immediate_threat_ids` as present when
+  `NPC.campaign_id` matches and `NPC.current_location_id == scene.location_id`;
+  stale refs are silently skipped (never surfaced to context, dialogue, or
+  narration).
+- **Real scene transition on travel** — `TravelService.travel` now closes the
+  origin `Scene` (`SceneService.close_scene`) and creates a **new** `Scene` at the
+  destination: only the traveling player-character refs carry over as
+  `participants`; `visible_entity_ids` is rebuilt from
+  `NPC.current_location_id == destination` (never inherited); `relevant_object_ids`/
+  `immediate_threat_ids`/`allowed_clues`/`purpose`/`dramatic_question` all reset.
+  Character `location_id` moves (`PositionService`, already correct) are preserved.
+  Returning later creates yet another fresh scene at the same canonical `Location` —
+  no stale opening replay.
+- **Precise movement-intent typing** — `ActionInterpretation` gained
+  `movement_kind: CANONICAL_TRAVEL | LOCAL_MOVEMENT | FOLLOW_SOURCE |
+  SEARCH_FOR_PLACE | RETURN_OR_EXIT | REST | NONE` alongside the existing boolean
+  `movement_intent` (kept for backward compatibility with scripts that don't set
+  `movement_kind` — those default to the pre-fix behavior, which is exactly the old
+  "resolve exit, else expand" path, so the pre-existing E5 travel/expansion tests
+  are untouched). `CommittedActionPipeline` now branches on `movement_kind`:
+  `FOLLOW_SOURCE`/`LOCAL_MOVEMENT` never enter `TravelService` at all (adjudicated
+  normally, in place); `CANONICAL_TRAVEL`/`RETURN_OR_EXIT` call
+  `TravelService.travel(..., allow_expansion=False)` — a failed match returns a
+  focused "which way?" clarification, never a new `Location`; only
+  `SEARCH_FOR_PLACE` (and the unset/legacy default) allows
+  `WorldExpansionService`.
+- **Natural-language rest routing** — `ActionInterpretation` gained `rest_intent`,
+  `rest_kind` (`short`/`long`/`ambiguous`), `rest_scope` (`actor`/`party_request`).
+  `CommittedActionPipeline` routes a rest intent to `RestService` before
+  adjudication: `ambiguous` asks one clarification
+  ("พักสั้นหนึ่งชั่วโมง หรือพักยาวคืนนี้?"); otherwise it calls
+  `RestService.short_rest`/`long_rest` and renders the real `RestOutcome`
+  (completed vs. interrupted) — the narrator never touches rest numbers.
+  **Documented limitation**: `party_request` is accepted by the schema but the
+  engine still only rests the acting player's own character in this slice (no
+  multi-player consent flow yet) — a solo player can never be forced to sleep by
+  another player's action.
+
+### Tests added
+
+`tests/test_playtest_fixes.py` — the 16 scenarios from the playtest report against
+an extended Last Funeral of God fixture (new `## Protocol:` section; `Black Chapel`
+location; `Mother Veyra`/`Father Caldus`/`Sister Nara` NPCs, Sister Nara
+`communication_mode=SLATE`): exact five-rule recall in order with no invented rules;
+Sister Nara never produces spoken dialogue; named-NPC resolution among three present
+NPCs; multi-NPC thanks with per-NPC correctness; leaving Black Chapel produces a
+clean destination scene while Veyra/Caldus/Nara stay behind; returning later is a
+new scene, not a replay; searching for a smith may create one persistent shop;
+following a vague sound creates no new `Location`; leaving a generated shop returns
+via the canonical reverse edge (no new valley/forge); short/long/ambiguous/
+interrupted rest; PC rest agency (actor-only); no secret leak through protocol/NPC
+grounding; stale `scene.visible_entity_ids` refs are excluded from the directory.
+
+### Known remaining limitations
+
+- Party rest requests do not yet have a consent flow; only actor-only rest is wired.
+- `FOLLOW_SOURCE`/`LOCAL_MOVEMENT` are adjudicated as ordinary ability checks in this
+  slice — there is no dedicated "tracking/investigation" resolution table yet; that
+  is reasonable groundwork for the (separate, out-of-scope) Scene Planner.
+- The protocol repair path only backfills protocols; a campaign whose *locations or
+  NPCs* changed after approval still has no general re-sync path (unchanged from
+  before this fix — out of scope here).
+
+### Final test run
+
+`cd backend && python -m pytest -q` → **148 passed**, 4 failed. All 16 new
+`test_playtest_fixes.py` tests pass, all 9 `test_world_canon.py` tests pass against
+the extended fixture. The 4 failures (`test_acceptance_journey.py::
+test_two_player_full_journey`, `test_character_options_expansion.py::
+test_finalize_character_persists_planned_subclass`, `test_experience_overhaul.py::
+test_guided_creation_conversation_produces_hooks`, `test_experience_overhaul.py::
+test_sheet_v2_and_skill_explanation`) are **pre-existing and unrelated** — confirmed
+by stashing every file this fix touched and re-running: they fail identically on
+that baseline. Their root cause is entirely inside the separate, already-in-progress
+character-option-expansion work (`build_flow.py`/`finalize.py`/`character.py`/
+`rules_content/*`, none of which this fix touches) — a new "choose planned subclass"
+Stage B step now appears where those tests still expect the old Species step next.
+Out of scope for this fix per explicit instruction not to touch character options.
 
 ## E5 — campaign canon & world navigation (2026-07-10)
 
