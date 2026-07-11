@@ -15,6 +15,7 @@ from app.ai.jobs.classifier import TableMessageClassifier
 from app.ai.llm.base import LLMProvider
 from app.core.ids import entity_ref, parse_entity_ref
 from app.discord_bridge.dto import BridgeResult, OutboundMessage
+from app.models.character import Character
 from app.models.enums import MessageCategory, ProcessingStage
 from app.models.npc import NPC
 from app.models.processed_message import ProcessedMessage
@@ -36,14 +37,18 @@ class MessageRouter:
         self.classifier = TableMessageClassifier(provider)
 
     async def handle(self, ctx: ResolvedContext) -> BridgeResult:
-        # 1. classify (read-only).
+        # 1. classify (read-only). Speaker identity is preserved: normal dialogue
+        #    belongs to the SENDER's character, not to unattributed table talk.
         async with self.db.session() as read:
             scene = (
                 await SceneService(read).get_active_scene(ctx.session_id)
                 if ctx.session_id else None
             )
+            speaker = await read.get(Character, ctx.character_id) if ctx.character_id else None
+            speaker_name = speaker.name if speaker is not None else None
             result = await self.classifier.run(
-                read, message_text=ctx.inbound.content, scene=scene
+                read, message_text=ctx.inbound.content, scene=scene,
+                speaker_name=speaker_name,
             )
             npc_target = self._visible_npc(scene) if scene is not None else None
             if npc_target is not None:
@@ -75,16 +80,19 @@ class MessageRouter:
             responses.append(OutboundMessage(ctx.channel_id, answer,
                                              kind=MessageKind.TABLE_NOTICE))
 
-        # 3. operational bookkeeping only — NOT a game event.
+        # 3. operational bookkeeping only — NOT a game event. Speaker identity is
+        #    retained on the record so later scene context knows who spoke.
+        speaker_ref = entity_ref("character", ctx.character_id) if ctx.character_id else None
         async with self.db.unit_of_work() as s:
             if ctx.processed_message_id:
                 pm = await s.get(ProcessedMessage, ctx.processed_message_id)
                 if pm is not None:
                     svc = ProcessedMessageService(s)
                     await svc.set_category(pm, result.category)
-                    await svc.set_result(
-                        pm, {"response": responses[0].content} if responses else {}
-                    )
+                    res: dict = {"speaker": speaker_ref, "speaker_name": speaker_name}
+                    if responses:
+                        res["response"] = responses[0].content
+                    await svc.set_result(pm, res)
                     await svc.advance_stage(pm, ProcessingStage.SENT)
 
         return BridgeResult(
@@ -92,7 +100,7 @@ class MessageRouter:
             category=result.category,
             responses=responses,
             state_mutated=False,
-            note="non-committed message; no canonical state change",
+            note=f"non-committed; speaker={speaker_name or '-'}; no canonical state change",
         )
 
     @staticmethod

@@ -39,6 +39,8 @@ from app.models.enums import (
 )
 from app.models.processed_message import ProcessedMessage
 from app.models.session import Session
+from app.entities import EntityContext, SceneEntityDirectory
+from app.entities.directory import PLAYER_CHARACTER
 from app.orchestration.commitment import CommittedAction
 from app.orchestration.context import ResolvedContext
 from app.presentation import MessageKind
@@ -99,7 +101,8 @@ class CommittedActionPipeline:
 
     # --- core ----------------------------------------------------------------
     async def _process(self, ctx: ResolvedContext, action_text: str, *, allow_clarify: bool) -> BridgeResult:
-        # Steps 1-9: load context, interpret, adjudicate (all read-only).
+        # Steps 1-9: load context, hydrate the present cast, interpret, resolve
+        # target mentions to canonical identities, adjudicate (all read-only).
         async with self.db.session() as read:
             scene = await SceneService(read).get_active_scene(ctx.session_id) if ctx.session_id else None
             character = await read.get(Character, ctx.character_id) if ctx.character_id else None
@@ -107,16 +110,45 @@ class CommittedActionPipeline:
 
             campaign = await read.get(Campaign, ctx.campaign_id)
             dice_mode = (campaign.config or {}).get("dice_mode", "PLAYER_CLICK") if campaign else "AUTO"
-            interpretation = await self.interpreter.run(
-                read, action_text=action_text, scene=scene, character=character
+
+            directory = await SceneEntityDirectory(read).build(
+                scene, actor_character_id=ctx.character_id, campaign_id=ctx.campaign_id
             )
+            interpretation = await self.interpreter.run(
+                read, action_text=action_text, scene=scene, character=character,
+                directory=directory,
+            )
+            # Resolve linguistic mentions ONCE, at the engine boundary.
+            resolution = directory.resolve_mentions(interpretation.target_references)
             decision = await self.adjudicator.run(
                 read, action_text=action_text, interpretation=interpretation,
-                scene=scene, character=character,
+                scene=scene, character=character, directory=directory,
+                resolved_targets=resolution.resolved,
             )
-            target_ref = self._primary_npc_target(scene)
 
-        # Step 10: clarification (engine-gated — see decide_clarification).
+        # Step 10a: ambiguous mention -> one focused clarification (test 8).
+        if allow_clarify and resolution.ambiguous:
+            mention, cands = resolution.ambiguous[0]
+            names = " หรือ ".join(c.canonical_name for c in cands)
+            return await self._enter_clarification(
+                ctx, action_text, f"“{mention}” หมายถึง {names} คนไหน?"
+            )
+
+        # Step 10b: the ONLY named target is a known party member who is not in this
+        # scene -> not physically reachable (test 9). Party membership != presence.
+        if resolution.not_present and not resolution.resolved:
+            names = ", ".join(e.canonical_name for e in resolution.not_present)
+            return self._table_note(
+                ctx, f"{names} ไม่ได้อยู่ในฉากนี้ตอนนี้ — เอื้อมไม่ถึงตัว"
+            )
+
+        # Step 10c: PC AGENCY — the action tries to dictate another player
+        # character's voluntary choice. The engine refuses to execute it (tests 4/5).
+        pc_targets = [e for e in resolution.resolved if e.entity_type == PLAYER_CHARACTER]
+        if interpretation.commands_other_pc and pc_targets:
+            return await self._agency_safe_response(ctx, directory.actor, pc_targets)
+
+        # Step 10d: ordinary clarification gate.
         if allow_clarify:
             clarify = decide_clarification(interpretation, decision)
             if clarify.needs_clarification:
@@ -132,27 +164,38 @@ class CommittedActionPipeline:
         if needs_roll and dice_mode == "PLAYER_CLICK":
             return await self._enter_pending_check(
                 ctx, action_text=action_text, interpretation=interpretation,
-                decision=decision, character=character, target_ref=target_ref,
+                decision=decision, character=character,
+                resolved_targets=resolution.resolved,
             )
 
         return await self._resolve_commit_narrate(
             ctx, action_text=action_text, goal=interpretation.goal,
             method=interpretation.method, decision=decision,
-            character=character, target_ref=target_ref, ritual=False,
+            character=character, resolved_targets=resolution.resolved, ritual=False,
         )
 
     async def _resolve_commit_narrate(
         self, ctx: ResolvedContext, *, action_text: str, goal: str, method: str,
-        decision, character: Character | None, target_ref: str | None, ritual: bool,
+        decision, character: Character | None,
+        resolved_targets: list[EntityContext], ritual: bool,
     ) -> BridgeResult:
+        # The NPC that a consequence may act on: the explicitly RESOLVED NPC target
+        # if the player named one, otherwise the scene's immediate THREAT (the danger
+        # being faced — e.g. the guard who notices a failed stealth). Never the first
+        # entity by list order.
+        npc_targets = [e for e in resolved_targets if e.entity_type != PLAYER_CHARACTER]
+        target_ref = npc_targets[0].entity_ref if npc_targets else None
         # Steps 11-12: deterministic resolution (server dice + modifiers + DC).
         check_result, outcome = self._resolve_mechanics(decision, character)
 
-        # Step 13: consequence proposal.
+        # Step 13: consequence proposal (typed targets, so an NPC delta can never
+        # land on a player character just because a name looked NPC-ish).
         async with self.db.session() as read:
             scene2 = await SceneService(read).get_active_scene(ctx.session_id) if ctx.session_id else None
+            reactor_ref = target_ref or self._immediate_threat_npc(scene2)
             consequence = await self.consequence.run(
-                read, action_text=action_text, outcome=outcome, scene=scene2, target_ref=target_ref
+                read, action_text=action_text, outcome=outcome, scene=scene2,
+                target_ref=reactor_ref, resolved_targets=resolved_targets,
             )
 
         # Steps 14-16: validate deltas + commit state + events atomically.
@@ -166,8 +209,11 @@ class CommittedActionPipeline:
             await events.record(
                 campaign_id=ctx.campaign_id, session_id=ctx.session_id, scene_id=scene_id,
                 event_type=EventType.PLAYER_ACTION_COMMITTED, actor_entity=actor,
+                target_entities=[t.entity_ref for t in resolved_targets],
                 payload={"action_text": action_text, "goal": goal,
-                         "method": method, "summary": goal},
+                         "method": method, "summary": goal,
+                         "targets": [{"ref": t.entity_ref, "type": t.entity_type,
+                                      "name": t.canonical_name} for t in resolved_targets]},
                 visibility=Visibility.PARTY, narrative_significance=20,
             )
             if check_result is not None:
@@ -205,17 +251,28 @@ class CommittedActionPipeline:
                 session_row.active_play_state = ActivePlayState.TABLE_OPEN.value
                 session_row.version += 1
 
+            # Spotlight (NOT turn order): remember who just acted + tally, so quiet
+            # characters stay in the DM's awareness. Presence/participation/spotlight
+            # are distinct (docs/multiplayer-identity.md).
+            if scene_row is not None and ctx.character_id:
+                self._bump_spotlight(scene_row, entity_ref("character", ctx.character_id))
+
         if rejected:
             log.warning("dropped %d illegal consequence delta(s): %s",
                         len(rejected), [r[1] for r in rejected])
 
-        # Step 17: narration built from the committed result.
+        # Step 17: narration from the committed result — with typed actor/targets so
+        # it never swaps names or makes another player's character act.
         result_summary = self._result_summary(check_result, outcome, decision)
         async with self.db.session() as read:
             scene3 = await SceneService(read).get_active_scene(ctx.session_id) if ctx.session_id else None
+            directory3 = await SceneEntityDirectory(read).build(
+                scene3, actor_character_id=ctx.character_id, campaign_id=ctx.campaign_id
+            )
             narration = await self.narrator.run(
                 read, action_text=action_text, outcome=outcome,
                 result_summary=result_summary, scene=scene3, target_ref=target_ref,
+                directory=directory3, resolved_targets=resolved_targets,
             )
 
         # Step 18-19: cache response + mark SENT.
@@ -292,7 +349,7 @@ class CommittedActionPipeline:
 
     async def _enter_pending_check(
         self, ctx: ResolvedContext, *, action_text: str, interpretation, decision,
-        character: Character, target_ref: str | None,
+        character: Character, resolved_targets: list[EntityContext],
     ) -> BridgeResult:
         from app.core.ids import new_id
 
@@ -302,7 +359,8 @@ class CommittedActionPipeline:
             "action_text": action_text,
             "goal": interpretation.goal, "method": interpretation.method,
             "decision": decision.model_dump(mode="json"),
-            "target_ref": target_ref,
+            # Resolved identities survive the pause so the roll doesn't re-resolve.
+            "targets": [t.to_public() for t in resolved_targets],
         }
         async with self.db.unit_of_work() as s:
             scene = await SceneService(s).get_active_scene(ctx.session_id) if ctx.session_id else None
@@ -351,6 +409,7 @@ class CommittedActionPipeline:
         from app.schemas.llm_io import AdjudicationDecision
 
         decision = AdjudicationDecision.model_validate(pending["decision"])
+        resolved_targets = [EntityContext.from_public(t) for t in pending.get("targets", [])]
         async with self.db.session() as read:
             character = await read.get(Character, pending.get("character_id"))
         await self._clear_pending(ctx)
@@ -358,7 +417,7 @@ class CommittedActionPipeline:
             ctx, action_text=pending.get("action_text", ""),
             goal=pending.get("goal", ""), method=pending.get("method", ""),
             decision=decision, character=character,
-            target_ref=pending.get("target_ref"), ritual=True,
+            resolved_targets=resolved_targets, ritual=True,
         )
 
     def _check_label_and_mods(self, decision, character: Character) -> tuple[str, str]:
@@ -457,14 +516,66 @@ class CommittedActionPipeline:
             result = self.dice.resolve_ability_check(modifier=modifier, dc=15, ability="wis")
             return result, result.outcome
 
+    # --- PC agency + presence + spotlight -------------------------------------
+    async def _agency_safe_response(
+        self, ctx: ResolvedContext, actor: EntityContext | None,
+        pc_targets: list[EntityContext],
+    ) -> BridgeResult:
+        """The action tried to dictate another player character's voluntary choice.
+        Frame the ACTOR's attempt; hand the decision to the other player. No roll,
+        no state change — PC agency is inviolable and enforced here in the engine,
+        not merely requested of the narrator."""
+        actor_name = actor.canonical_name if actor else "ตัวละครของเจ้า"
+        names = " และ ".join(t.canonical_name for t in pc_targets)
+        controllers = [t.controller_member_id for t in pc_targets if t.controller_member_id]
+        body = (
+            f"{actor_name} หันไปหา {names} แล้วเอ่ยปากออกไป\n"
+            f"…แต่ {names} จะทำอย่างไรต่อ เป็นสิทธิ์ของผู้เล่นที่ควบคุม {names} เอง"
+        )
+        async with self.db.unit_of_work() as s:
+            pm = await s.get(ProcessedMessage, ctx.processed_message_id) if ctx.processed_message_id else None
+            if pm is not None:
+                pm.stage = ProcessingStage.SENT.value
+                pm.category = MessageCategory.COMMITTED_ACTION.value
+                pm.result = {"response": body, "agency": "deferred_to_target_player"}
+        return BridgeResult(
+            handled=True, category=MessageCategory.COMMITTED_ACTION, state_mutated=False,
+            responses=[OutboundMessage(
+                ctx.channel_id, body, kind=MessageKind.SCENE_FRAME,
+                data={"decision_prompt": f"{names} — จะตอบสนองอย่างไร?",
+                      "footer": "ตัวละครของผู้เล่นคนอื่นตัดสินใจเอง"},
+            )],
+            note=f"pc-agency: action over {names} deferred to their player",
+        )
+
     @staticmethod
-    def _primary_npc_target(scene) -> str | None:
+    def _immediate_threat_npc(scene) -> str | None:
+        """The pressing threat that reacts to an untargeted consequence (e.g. who
+        notices a failed sneak). Only immediate_threat_ids — a semantic 'the danger',
+        NOT generic visible-entity list order."""
         if scene is None:
             return None
-        for ref in list(scene.immediate_threat_ids or []) + list(scene.visible_entity_ids or []):
+        for ref in list(scene.immediate_threat_ids or []):
             if ref.startswith("npc:"):
                 return ref
         return None
+
+    def _table_note(self, ctx: ResolvedContext, text: str) -> BridgeResult:
+        return BridgeResult(
+            handled=True, category=MessageCategory.COMMITTED_ACTION, state_mutated=False,
+            responses=[OutboundMessage(ctx.channel_id, text, kind=MessageKind.TABLE_NOTICE)],
+            note="target not reachable in this scene",
+        )
+
+    @staticmethod
+    def _bump_spotlight(scene_row, actor_ref: str) -> None:
+        spot = dict(scene_row.spotlight or {})
+        counts = dict(spot.get("action_counts") or {})
+        counts[actor_ref] = int(counts.get(actor_ref, 0)) + 1
+        spot["last_actor"] = actor_ref
+        spot["action_counts"] = counts
+        scene_row.spotlight = spot
+        scene_row.version += 1
 
     @staticmethod
     def _phrase_missing(interpretation) -> str:
