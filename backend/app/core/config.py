@@ -42,6 +42,17 @@ class Settings(BaseSettings):
     # --- Discord ---
     discord_bot_token: str | None = Field(default=None, alias="DISCORD_BOT_TOKEN")
 
+    # --- Discord Activity (E6) ---
+    # Public application/client id — the ONLY Discord credential the frontend may see.
+    discord_client_id: str | None = Field(default=None, alias="DISCORD_CLIENT_ID")
+    # Server-side only. Used to exchange the Activity authorization code.
+    discord_client_secret: str | None = Field(default=None, alias="DISCORD_CLIENT_SECRET")
+    # HMAC key for short-lived Activity session tokens. If unset, a random
+    # process-lifetime secret is generated (dev convenience: tokens don't survive
+    # a restart). Set explicitly in production.
+    activity_session_secret: str | None = Field(default=None)
+    activity_session_ttl_minutes: int = Field(default=120)
+
     # --- Misc ---
     log_level: str = Field(default="INFO")
 
@@ -62,7 +73,9 @@ class Settings(BaseSettings):
     def _strip(cls, v: object) -> object:
         return v.strip() if isinstance(v, str) else v
 
-    @field_validator("anthropic_api_key", "openai_api_key", "discord_bot_token", mode="before")
+    @field_validator("anthropic_api_key", "openai_api_key", "discord_bot_token",
+                     "discord_client_id", "discord_client_secret",
+                     "activity_session_secret", mode="before")
     @classmethod
     def _blank_secret_is_none(cls, v: object) -> object:
         if isinstance(v, str) and v.strip() == "":
