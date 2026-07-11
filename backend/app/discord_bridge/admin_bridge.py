@@ -135,8 +135,11 @@ class AdminBridge:
 
     # --- campaign / setup / join ------------------------------------------------
     async def _campaign(self, ctx: _Ctx) -> BridgeResult:
-        if not ctx.args or ctx.args[0].lower() != "new":
-            return self._notice(ctx.inbound, "ใช้: `!rv campaign new <ชื่อ>`")
+        sub = ctx.args[0].lower() if ctx.args else ""
+        if sub == "import":
+            return await self._campaign_import(ctx)
+        if sub != "new":
+            return self._notice(ctx.inbound, "Use `!rv campaign new <name>` or attach a file to `!rv campaign import`.")
         name = " ".join(ctx.args[1:]).strip() or "แคมเปญไร้ชื่อ"
         async with self.db.unit_of_work() as s:
             svc = CampaignService(s)
@@ -158,6 +161,59 @@ class AdminBridge:
         return BridgeResult(handled=True, responses=[OutboundMessage(
             ctx.inbound.channel_id, body, kind=MessageKind.REVERIE_WELCOME,
             title=f"🕯️ {name}",
+        )])
+
+    async def _campaign_import(self, ctx: _Ctx) -> BridgeResult:
+        from app.services.campaigns.canon_import import CanonImportService
+
+        campaign, member = await self._resolve(ctx)
+        if campaign is None:
+            return self._notice(ctx.inbound, "Create the campaign before importing its world.")
+        if member is None or member.role != MemberRole.OWNER.value:
+            return self._notice(ctx.inbound, "Only the campaign owner can import or approve DM canon.")
+        from app.models.location import Location
+        from sqlalchemy import select
+
+        operation = ctx.args[1].lower() if len(ctx.args) > 1 else "upload"
+        if operation in {"approve", "reject"}:
+            if len(ctx.args) < 3:
+                return self._notice(ctx.inbound, f"Use `!rv campaign import {operation} <import-id>`")
+            async with self.db.unit_of_work() as s:
+                svc = CanonImportService(s)
+                if operation == "approve":
+                    review = await svc.approve(import_id=ctx.args[2], campaign_id=campaign.id)
+                    names = list((await s.execute(
+                        select(Location.name).where(Location.campaign_id == campaign.id))).scalars())
+                    body = ("โลกของแคมเปญถูกยืนยันเป็น canon แล้ว\n\n"
+                            + "สถานที่: " + ", ".join(names) + "\n"
+                            + " · ".join(f"{k}={v}" for k, v in review.counts.items() if v))
+                    return BridgeResult(handled=True, responses=[OutboundMessage(
+                        ctx.inbound.channel_id, body, kind=MessageKind.TABLE_NOTICE,
+                        title="Campaign imported ✓")])
+                await svc.reject(import_id=ctx.args[2], campaign_id=campaign.id)
+                return self._notice(ctx.inbound, "Import rejected; no world canon was created.")
+        if len(ctx.inbound.attachments) != 1:
+            return self._notice(ctx.inbound, "Attach exactly one UTF-8 `.json`, `.md`, or `.txt` file.")
+        attachment = ctx.inbound.attachments[0]
+        async with self.db.unit_of_work() as s:
+            row = await CanonImportService(s).create_draft(
+                campaign_id=campaign.id, uploader_member_id=member.id,
+                filename=attachment.filename, data=attachment.data,
+            )
+            review = row.proposal.get("_review", {})
+            locations = row.proposal.get("locations", [])
+        counts = review.get("counts", {})
+        warnings = review.get("warnings", [])
+        count_line = " · ".join(f"{k}: {v}" for k, v in counts.items() if v)
+        loc_preview = "\n".join(f"• {x['name']}" for x in locations[:12])
+        warn_block = ("\n\n⚠️ WARNINGS\n" + "\n".join(f"- {w}" for w in warnings[:12])) if warnings else ""
+        return BridgeResult(handled=True, responses=[OutboundMessage(
+            ctx.inbound.channel_id,
+            f"Parsed `{attachment.filename}`. Nothing is canon yet.\n\n{count_line}\n\n"
+            f"{loc_preview}{warn_block}\n\n"
+            f"Confirm: `!rv campaign import approve {row.id}`\n"
+            f"Cancel: `!rv campaign import reject {row.id}`",
+            kind=MessageKind.TABLE_NOTICE, title="Campaign import review",
         )])
 
     async def _setup(self, ctx: _Ctx) -> BridgeResult:

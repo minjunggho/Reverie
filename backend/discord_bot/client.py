@@ -10,7 +10,7 @@ from __future__ import annotations
 import discord
 
 from app.core.logging import get_logger
-from app.discord_bridge import AdminBridge, DiscordBridge, InboundMessage, is_admin_command
+from app.discord_bridge import AdminBridge, DiscordBridge, InboundAttachment, InboundMessage, is_admin_command
 from app.discord_bridge.dto import BridgeResult, OutboundMessage
 from discord_bot.render import ChoiceView, _chunks, build_embed
 
@@ -37,6 +37,15 @@ class ReverieClient(discord.Client):
     async def on_message(self, message: discord.Message) -> None:  # pragma: no cover
         if message.author.bot:
             return
+        attachments = []
+        for attachment in message.attachments:
+            if attachment.size > 1_000_000:
+                await message.channel.send("Campaign import files must be 1 MB or smaller.")
+                return
+            attachments.append(InboundAttachment(
+                filename=attachment.filename, content_type=attachment.content_type,
+                data=await attachment.read(),
+            ))
         inbound = InboundMessage(
             discord_message_id=str(message.id),
             guild_id=str(message.guild.id) if message.guild else "",
@@ -45,6 +54,7 @@ class ReverieClient(discord.Client):
             author_display_name=message.author.display_name,
             content=message.content,
             is_bot=message.author.bot,
+            attachments=tuple(attachments),
         )
         try:
             result = await self._route(inbound)
