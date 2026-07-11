@@ -52,6 +52,7 @@ class NPCSocialService:
             response: NPCResponse = await self.generator.run(
                 read, npc=npc, listener_ref=listener_ref, utterance=utterance
             )
+        display = _compose_display(npc, response)
 
         # 2. validate + commit proposed deltas (engine-owned).
         committed: list[str] = []
@@ -95,6 +96,28 @@ class NPCSocialService:
                 attitude_change = response.proposed_attitude
 
         return SocialResult(
-            npc_id=npc_id, utterance=response.utterance,
+            npc_id=npc_id, utterance=display,
             committed_belief_changes=committed, attitude_change=attitude_change,
         )
+
+
+_NONVERBAL_MODES = {"SLATE", "SIGN", "NONVERBAL", "TELEPATHY", "OTHER"}
+
+
+def _compose_display(npc, response: NPCResponse) -> str:
+    """The ENGINE decides final presentation from `npc.communication_mode` — never
+    just trusts the model's `utterance` to remember an NPC can't speak. A non-SPOKEN
+    NPC's line is always rendered as a written/nonverbal action, never as quoted
+    spoken dialogue, regardless of what the model returned."""
+    mode = (npc.communication_mode or "SPOKEN").upper()
+    if mode not in _NONVERBAL_MODES:
+        return response.spoken_text or response.utterance
+
+    text = response.written_text or response.nonverbal_action or response.utterance
+    if mode == "SLATE":
+        return f"{npc.name} หยิบกระดานชนวนขึ้นมาเขียน:\n“{text}”"
+    if mode == "SIGN":
+        return f"{npc.name} ใช้ภาษามือสื่อสาร: {text}"
+    if mode == "TELEPATHY":
+        return f"เสียงของ {npc.name} ดังขึ้นในหัวของเจ้าโดยตรง:\n“{text}”"
+    return f"{npc.name} {text}"

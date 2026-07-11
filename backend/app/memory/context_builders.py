@@ -108,13 +108,15 @@ def _targets_block(resolved_targets) -> str:
 # --- Phase 5: classification -------------------------------------------------
 async def build_classification_context(
     session: AsyncSession, *, message_text: str, scene: Scene | None,
-    speaker_name: str | None = None,
+    speaker_name: str | None = None, directory=None,
 ) -> list[LLMMessage]:
     brief = await scene_brief(session, scene)
     speaker = f"SPEAKER: {speaker_name}\n" if speaker_name else ""
+    dir_block = _directory_block(directory)
+    dir_line = dir_block + "\n" if dir_block else ""
     return [
         {"role": "system", "content": CLASSIFIER_SYSTEM},
-        {"role": "user", "content": f"SCENE: {brief.as_text()}\n{speaker}MESSAGE: {message_text}"},
+        {"role": "user", "content": f"SCENE: {brief.as_text()}\n{dir_line}{speaker}MESSAGE: {message_text}"},
     ]
 
 
@@ -216,15 +218,26 @@ async def build_narration_context(
 async def build_npc_response_context(
     session: AsyncSession, *, npc, listener_ref: str, utterance: str,
 ) -> list[LLMMessage]:
-    """Assemble an NPC prompt from ONLY that NPC's own epistemic records. It never
-    touches objective KnowledgeRecord/Secret, so unlearned truth cannot leak in."""
+    """Assemble an NPC prompt from ONLY that NPC's own epistemic records + the
+    campaign protocols it is authorized to know. It never touches objective
+    KnowledgeRecord/Secret, so unlearned truth cannot leak in."""
     from app.npcs.knowledge_service import NPCKnowledgeService
 
-    facts = await NPCKnowledgeService(session).facts_npc_may_use(npc.id)
+    knowledge = NPCKnowledgeService(session)
+    facts = await knowledge.facts_npc_may_use(npc.id)
     known = "\n".join(f"- [{f.status}] {f.subject}: {f.fact}" for f in facts) or "- (ไม่มีข้อมูลพิเศษ)"
+    protocols = await knowledge.protocols_known_by(campaign_id=npc.campaign_id, npc_name=npc.name)
+    proto_block = ""
+    if protocols:
+        lines = ["PROTOCOLS_KNOWN_TO_NPC (ห้ามเพิ่ม/ตัด/สลับลำดับ/เปลี่ยนความหมายเมื่อถูกถาม):"]
+        for p in protocols:
+            lines.append(f"- {p['title']}:")
+            lines.extend(f"  {i + 1}. {rule}" for i, rule in enumerate(p["rules"]))
+        proto_block = "\n".join(lines) + "\n"
     persona = (
         f"ชื่อ={npc.name}; บุคลิก={npc.personality or '-'}; "
-        f"น้ำเสียง={npc.voice_register or '-'}; อารมณ์={npc.emotional_state}"
+        f"น้ำเสียง={npc.voice_register or '-'}; อารมณ์={npc.emotional_state}; "
+        f"การสื่อสาร={npc.communication_mode}"
     )
     return [
         {"role": "system", "content": NPC_RESPONSE_SYSTEM},
@@ -233,6 +246,7 @@ async def build_npc_response_context(
             "content": (
                 f"NPC: {persona}\n"
                 f"KNOWN_TO_NPC:\n{known}\n"
+                f"{proto_block}"
                 f"LISTENER: {listener_ref}\n"
                 f"UTTERANCE: {utterance}"
             ),

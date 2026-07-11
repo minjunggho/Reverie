@@ -15,9 +15,9 @@ from app.ai.jobs.classifier import TableMessageClassifier
 from app.ai.llm.base import LLMProvider
 from app.core.ids import entity_ref, parse_entity_ref
 from app.discord_bridge.dto import BridgeResult, OutboundMessage
+from app.entities import NPC_TYPE, SceneEntityDirectory
 from app.models.character import Character
 from app.models.enums import MessageCategory, ProcessingStage
-from app.models.npc import NPC
 from app.models.processed_message import ProcessedMessage
 from app.orchestration.context import ResolvedContext
 from app.presentation import MessageKind
@@ -46,35 +46,46 @@ class MessageRouter:
             )
             speaker = await read.get(Character, ctx.character_id) if ctx.character_id else None
             speaker_name = speaker.name if speaker is not None else None
+            directory = (
+                await SceneEntityDirectory(read).build(
+                    scene, actor_character_id=ctx.character_id, campaign_id=ctx.campaign_id)
+                if scene is not None else None
+            )
             result = await self.classifier.run(
                 read, message_text=ctx.inbound.content, scene=scene,
-                speaker_name=speaker_name,
+                speaker_name=speaker_name, directory=directory,
             )
-            npc_target = self._visible_npc(scene) if scene is not None else None
-            if npc_target is not None:
-                npc_row = await read.get(NPC, npc_target[0])
-                npc_target = (npc_target[0], npc_row.name if npc_row else "ใครบางคน")
+            npc_targets, ambiguous_names = self._resolve_npc_targets(
+                directory, result.target_references)
 
         responses: list[OutboundMessage] = []
 
-        # 2. in-character dialogue at a visible NPC -> the NPC answers from its
-        #    OWN knowledge (epistemic-scoped; deltas engine-committed).
+        # 2. in-character dialogue at a visible NPC -> the NPC answers from its OWN
+        #    knowledge (epistemic-scoped; deltas engine-committed). The named NPC is
+        #    resolved through the scene directory — never "the first NPC listed."
         if (
             result.category == MessageCategory.CHARACTER_DIALOGUE
-            and npc_target is not None
             and ctx.character_id is not None
+            and ambiguous_names is None and npc_targets
         ):
             from app.npcs import NPCSocialService
 
-            social = await NPCSocialService(self.db, self.provider).respond(
-                campaign_id=ctx.campaign_id, npc_id=npc_target[0],
-                listener_ref=entity_ref("character", ctx.character_id),
-                utterance=ctx.inbound.content, session_id=ctx.session_id,
-            )
+            social_svc = NPCSocialService(self.db, self.provider)
+            for npc_ec in npc_targets[:4]:
+                _, npc_id = parse_entity_ref(npc_ec.entity_ref)
+                social = await social_svc.respond(
+                    campaign_id=ctx.campaign_id, npc_id=npc_id,
+                    listener_ref=entity_ref("character", ctx.character_id),
+                    utterance=ctx.inbound.content, session_id=ctx.session_id,
+                )
+                responses.append(OutboundMessage(
+                    ctx.channel_id, social.utterance, kind=MessageKind.NPC_DIALOGUE,
+                    title=npc_ec.canonical_name,
+                ))
+        elif result.category == MessageCategory.CHARACTER_DIALOGUE and ambiguous_names:
+            names = " หรือ ".join(ambiguous_names)
             responses.append(OutboundMessage(
-                ctx.channel_id, social.utterance, kind=MessageKind.NPC_DIALOGUE,
-                title=npc_target[1],
-            ))
+                ctx.channel_id, f"หมายถึง {names} คนไหน?", kind=MessageKind.TABLE_NOTICE))
         elif result.category in _ANSWERABLE:
             answer = result.suggested_response or _FALLBACK_ANSWER
             responses.append(OutboundMessage(ctx.channel_id, answer,
@@ -104,10 +115,25 @@ class MessageRouter:
         )
 
     @staticmethod
-    def _visible_npc(scene) -> tuple[str, str] | None:
-        """(npc_id, name placeholder) for the first visible NPC, if any."""
-        for ref in list(scene.visible_entity_ids or []):
-            kind, npc_id = parse_entity_ref(ref)
-            if kind == "npc" and npc_id:
-                return npc_id, "NPC"
-        return None
+    def _resolve_npc_targets(directory, mentions: list[str]):
+        """Named NPC target resolution for ordinary (non-`!`) dialogue.
+
+        Returns (targets, ambiguous_names). `ambiguous_names` is non-None only when
+        a mention matched more than one present NPC and must NOT be guessed — the
+        caller asks one focused clarification instead of picking one. No mention at
+        all + exactly one NPC present still infers that NPC (unchanged single-NPC
+        scenes keep working without forcing every line to name them)."""
+        if directory is None:
+            return [], None
+        if mentions:
+            resolution = directory.resolve_mentions(mentions)
+            npcs = [e for e in resolution.resolved if e.entity_type == NPC_TYPE]
+            if resolution.ambiguous:
+                names = [c.canonical_name for _, cands in resolution.ambiguous for c in cands]
+                return [], names
+            if npcs:
+                return npcs, None
+        present_npcs = directory.present_npcs
+        if len(present_npcs) == 1:
+            return present_npcs, None
+        return [], None

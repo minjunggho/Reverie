@@ -8,6 +8,8 @@ Presence is NOT party membership (see docs/multiplayer-identity.md): a party mem
 who split off is known-but-absent, not a reachable target.
 """
 from app.entities.directory import (
+    NPC_TYPE,
+    PLAYER_CHARACTER,
     EntityContext,
     SceneDirectory,
     SceneEntityDirectory,
@@ -16,6 +18,8 @@ from app.entities.directory import (
 
 __all__ = [
     "EntityContext",
+    "NPC_TYPE",
+    "PLAYER_CHARACTER",
     "SceneDirectory",
     "SceneEntityDirectory",
     "TargetResolution",

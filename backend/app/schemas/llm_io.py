@@ -6,7 +6,7 @@ The engine converts validated proposals into state changes.
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -24,6 +24,10 @@ class ClassificationResult(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     # Optional short DM reply for questions / dialogue. Never a state mutation.
     suggested_response: Optional[str] = None
+    # CHARACTER_DIALOGUE only: who the line is addressed to, as written (e.g. "Mother
+    # Veyra"). The ENGINE resolves this against the present cast; the model never
+    # picks an NPC id, and an empty list is NOT "the first NPC in the scene."
+    target_references: list[str] = Field(default_factory=list)
 
 
 # --- Action interpretation (`!` messages) -----------------------------------
@@ -45,6 +49,25 @@ class ActionInterpretation(BaseModel):
     # it against the world graph; the LLM never picks the destination.
     movement_intent: bool = False
     movement_reference: str = ""
+    # Finer movement category (kept alongside `movement_intent` for backward
+    # compatibility: scripts/callers that only set `movement_intent` and leave this
+    # at "NONE" get the pre-existing behavior). Only CANONICAL_TRAVEL/RETURN_OR_EXIT/
+    # SEARCH_FOR_PLACE reach the world graph; only SEARCH_FOR_PLACE (or the legacy
+    # unset default) may trigger WorldExpansionService. FOLLOW_SOURCE/LOCAL_MOVEMENT
+    # never leave the current Location or create one.
+    movement_kind: Literal[
+        "NONE", "CANONICAL_TRAVEL", "LOCAL_MOVEMENT", "FOLLOW_SOURCE",
+        "SEARCH_FOR_PLACE", "RETURN_OR_EXIT", "REST",
+    ] = "NONE"
+    # True when the action is fundamentally a voluntary NPC interaction (asking,
+    # greeting, thanking, threatening, bargaining, telling, requesting a decision)
+    # rather than a physical/mechanical action. Routes to NPCSocialService instead
+    # of the generic narrator, which must never invent NPC dialogue or facts.
+    social_intent: bool = False
+    # Resting/sleeping. `rest_kind` is only meaningful when `rest_intent` is True.
+    rest_intent: bool = False
+    rest_kind: Literal["short", "long", "ambiguous"] = "ambiguous"
+    rest_scope: Literal["actor", "party_request"] = "actor"
 
 
 # --- Adjudication ------------------------------------------------------------
@@ -113,7 +136,14 @@ class ProposedBeliefDelta(BaseModel):
 
 
 class NPCResponse(BaseModel):
+    # Legacy/general display text — kept for backward compatibility. When the NPC's
+    # communication_mode is not SPOKEN, the engine (NPCSocialService), not this
+    # field, decides the final presentation; it never trusts the model to remember
+    # a mute NPC can't talk.
     utterance: str
+    spoken_text: Optional[str] = None
+    written_text: Optional[str] = None
+    nonverbal_action: Optional[str] = None
     proposed_belief_deltas: list[ProposedBeliefDelta] = Field(default_factory=list)
     proposed_attitude: Optional[str] = None
 

@@ -156,17 +156,32 @@ class SceneEntityDirectory:
                 if ec.is_actor:
                     actor = ec
 
-            # NPCs / creatures visible or pressing in this scene.
+            # NPCs / creatures visible or pressing in this scene. Presence is a HARD
+            # invariant, not "was ever listed here": a ref only counts if the NPC's
+            # own canonical position still matches this scene's location. A stale
+            # ref (left over from a scene that has since moved on) is silently
+            # skipped — it must never surface as present, speak, or react.
             for ref in list(scene.visible_entity_ids or []) + list(scene.immediate_threat_ids or []):
                 kind, nid = parse_entity_ref(ref)
-                if kind == "npc" and nid and ref not in {e.entity_ref for e in entities}:
-                    npc = await self.session.get(NPC, nid)
-                    if npc is not None:
-                        entities.append(EntityContext(
-                            entity_ref=ref, entity_type=NPC_TYPE,
-                            canonical_name=npc.name, aliases=[],
-                            present_in_scene=True, player_controlled=False,
-                        ))
+                if kind != "npc" or not nid or ref in {e.entity_ref for e in entities}:
+                    continue
+                npc = await self.session.get(NPC, nid)
+                if npc is None:
+                    continue
+                if campaign_id is not None and npc.campaign_id != campaign_id:
+                    continue
+                # Only enforce when the NPC's position is actually tracked: a stale
+                # ref left over from a scene the NPC has since left is excluded, but
+                # an NPC with no canonical position yet (never explicitly placed)
+                # keeps the pre-position-tracking behavior rather than vanishing.
+                if (scene.location_id is not None and npc.current_location_id is not None
+                        and npc.current_location_id != scene.location_id):
+                    continue
+                entities.append(EntityContext(
+                    entity_ref=ref, entity_type=NPC_TYPE,
+                    canonical_name=npc.name, aliases=[],
+                    present_in_scene=True, player_controlled=False,
+                ))
 
         # If the actor wasn't in participants (edge case), still hydrate them.
         if actor is None and actor_character_id is not None:
