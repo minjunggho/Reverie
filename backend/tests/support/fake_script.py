@@ -23,6 +23,7 @@ from app.schemas.llm_io import (
     ClassificationResult,
     ConsequenceProposal,
     CreationGuidance,
+    LocationDraft,
     Narration,
     NPCResponse,
     OpeningScene,
@@ -216,6 +217,25 @@ def _creation_guide(messages, _model) -> CreationGuidance:
     )
 
 
+def _frame_scene(messages, _model) -> Narration:
+    """Frame the destination from the canonical OBVIOUS marker — never inventing."""
+    obvious = _marker(messages, "OBVIOUS")
+    location = _marker(messages, "LOCATION")
+    text = obvious or (f"เจ้ามาถึง{location}" if location else "ฉากใหม่เปิดขึ้น")
+    return Narration(text=text, decision_prompt="จะทำอะไรต่อ?")
+
+
+def _location_expansion(messages, _model) -> LocationDraft:
+    request = _marker(messages, "REQUEST") or "ร้านเล็กๆ"
+    name = request if "ร้าน" in request else f"ร้าน{request}"
+    return LocationDraft(
+        name=name, location_type="SHOP",
+        obvious=f"{name} — ร้านแคบๆ เบียดอยู่ระหว่างอาคารสองหลัง",
+        canon_justification="ร้านธรรมดาที่พบได้ทั่วไปในย่านนี้",
+        connection_label="ประตูร้าน", travel_minutes=0, npc_name="เจ้าของร้าน",
+    )
+
+
 def _session_opening(messages, _model) -> OpeningScene:
     """Fake opening that provably uses a character hook from the context."""
     blob = _joined(messages)
@@ -258,4 +278,6 @@ def install_default_script(fake: FakeLLMProvider) -> FakeLLMProvider:
     fake.on("generate_npc_response", _npc_response)
     fake.on("guide_character_creation", _creation_guide)
     fake.on("generate_session_opening", _session_opening)
+    fake.on("frame_scene", _frame_scene)
+    fake.on("generate_location_expansion", _location_expansion)
     return fake

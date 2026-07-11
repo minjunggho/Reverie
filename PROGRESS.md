@@ -1,7 +1,70 @@
 # PROGRESS — Reverie
 
-**Status:** MVP + experience overhaul + rules evolution (SRD 5.2.1) +
-**P0 multiplayer identity fix**.
+**Status:** MVP + experience overhaul + rules evolution (SRD 5.2.1) + P0 multiplayer
+identity fix + **E5 campaign canon & world navigation**. **133 passing tests.**
+
+## E5 — campaign canon & world navigation (2026-07-10)
+
+Fixes the observed failure where the DM asked players to author the world
+("เจ้าเห็นอะไรข้างนอก?"). Root cause + design: docs/world-canon.md.
+
+- **Geography & travel graph.** `Location` gains `location_type`/`parent_id`/
+  `provenance`/`weather`/`current_activity`; new `LocationConnection` is the
+  authoritative directed edge (label/direction/travel_minutes/obvious/one_way/
+  access_state). `WorldGraphService.resolve_exit` maps natural movement
+  ("ออกไปข้างนอก", "ขึ้นชั้นสอง", a destination name) to a canonical edge — never
+  by list order, never invented.
+- **Canonical position.** `Character.location_id`; `PositionService` (where/move/
+  co-located). Session start places every attendee at the opening location. Party
+  splits are representable.
+- **Campaign canon.** `Campaign.brief`/`central_question`/`session_prep`; new
+  `CampaignCanonRecord` (category/fact/visibility/provenance/importance/scope) for
+  world-bible facts + clues. Reuses (no duplicate truth): Secret=DM secrets,
+  NPC+epistemic=characters, Threat+ScheduledWorldEvent=factions/fronts+pressure,
+  Location=places, Event=history, KnowledgeRecord=provenance.
+- **Importer v2** (`canon_import.py`): full-section Markdown/JSON parser (identity,
+  brief, central question, world facts, locations+geo+exits, factions, NPCs,
+  secrets+clues, threats, Session 1 prep) → structured proposal with counts +
+  **warnings** (NPC without goal/location, secret with <2 clues, unknown refs).
+  Owner reviews (`!rv campaign import`), confirms, commits atomically. Nothing is
+  canon before confirmation; the old locations-only path still works.
+- **TravelService** (the fix): natural movement → resolve exit → advance world clock
+  (ticks threats/events) → move the party → transition the scene → **frame the
+  destination FROM CANON**. The narrator never invents the destination.
+- **WorldExpansionService**: an unauthored ordinary place is proposed from bounded
+  settlement context, committed (provenance AI_EXPANDED) with a connection + optional
+  proprietor NPC BEFORE narration, and **persists** — the same request returns the
+  same location, never a regenerated duplicate.
+- **SceneContextBuilder**: bounded, authorized canonical context (location obvious
+  desc, exits, parent geography, present cast, local canon, active threats, allowed
+  clues, recent events) — feeds narration so the DM already knows the world. DM
+  secrets never enter a player-facing block.
+- **Session 1 from prep**: imported `session_prep` sets the opening location, present
+  NPCs, current activity, and allowed clues; the opening generator is constrained by
+  it (presentation freedom, not freedom to discard the campaign).
+- **Anti-hallucination** (`narration_guard.py`): `screen_narration` /
+  `screen_decision_prompt` deterministically strip/rewrite world-authoring questions
+  ("เจ้าเห็นอะไร?", "เมืองนี้ชื่ออะไร?") from committed narration — a structural
+  guard, not a prompt plea. Fact-provenance policy documented.
+- **World pressure continues**: travel advances the clock, which ticks Threats/
+  ScheduledWorldEvents — the world doesn't freeze when players ignore the plot.
+
+**Tests** (`tests/test_world_canon.py`, 9 + the Last Funeral of God fixture):
+import review identifies all sections + warnings; atomic canon commit (geo/graph/
+NPCs/secrets/clues/factions/threats/prep); Session 1 opens at the imported location
+with prep; `! เดินออกไปข้างนอก` transitions to the canonical connected location and
+never asks the player to author scenery; travel advances time + ticks threats;
+AI-expanded location persists across a return; narration screen blocks bad DM
+questions; secrets don't leak into player scene context.
+
+**Limitations (documented):** party travels together by default (explicit "stay"
+splits deferred though position tracking supports them); world expansion covers
+ordinary places only (no plot generation); the deterministic Markdown parser is
+EXPLICITLY_AUTHORED — an AI gap-filling analyzer (AI_PROPOSED) is future; a fresh
+Alembic autorevision is needed for Postgres (tests use `create_all`; delete the
+local dev SQLite once — new columns/tables were added).
+
+---
 
 ## P0 multiplayer identity / party-context fix (2026-07-10)
 
