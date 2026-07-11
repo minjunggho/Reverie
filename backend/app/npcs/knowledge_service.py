@@ -87,6 +87,29 @@ class NPCKnowledgeService:
         await self.session.flush()
         return rel
 
+    async def protocols_known_by(self, *, campaign_id: str, npc_name: str) -> list[dict]:
+        """Ordered protocol records this NPC's name appears in `known_by` for.
+
+        Reads `CampaignCanonRecord(category="protocol")` — the retrieval boundary
+        for grounded factual answers ("repeat the five rules"): the ordered `rules`
+        list is returned VERBATIM, never summarized or reordered, so an NPC prompt
+        can quote it exactly instead of reconstructing it from memory."""
+        from app.models.world_graph import CampaignCanonRecord
+
+        rows = (await self.session.execute(
+            select(CampaignCanonRecord).where(
+                CampaignCanonRecord.campaign_id == campaign_id,
+                CampaignCanonRecord.category == "protocol",
+                CampaignCanonRecord.active.is_(True),
+            )
+        )).scalars().all()
+        out = []
+        for r in rows:
+            data = r.data or {}
+            if npc_name in (data.get("known_by") or []):
+                out.append({"title": r.fact, "rules": list(data.get("rules") or [])})
+        return out
+
     @staticmethod
     def validate_status(value: str) -> KnowledgeStatus:
         try:

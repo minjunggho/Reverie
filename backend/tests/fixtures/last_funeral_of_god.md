@@ -58,6 +58,24 @@ REGION
 ### Obvious
 นครหลวงเวย์ริ เมืองที่ระฆังไม่เคยหยุดตี
 
+## Location: Black Chapel
+### Type
+LOCATION
+### Parent
+cathedral-district
+### Obvious
+โบสถ์เล็กหินดำ เทียนไขจุดรอบโลงศพกลางห้อง โซ่เงินพันรอบฝาโลงไว้แน่นหนา
+### Exits
+- ประตูหน้า / outside / 5 -> chapel-road
+
+## Location: Chapel Road
+### Type
+DISTRICT
+### Parent
+cathedral-district
+### Obvious
+ถนนหินเรียบรอบมหาวิหาร ผู้แสวงบุญเดินเป็นแถวเงียบๆ ตามเสียงระฆัง
+
 ## Faction: The Last Church
 ### Goal
 รักษาตราผนึกและความลับเรื่องการตายของพระเจ้าไว้
@@ -85,6 +103,48 @@ grey-wolf-tavern
 อ่อนโยนแต่หนักแน่น
 ### Goal
 ค้นหาความจริงเรื่องระฆัง
+
+## NPC: Mother Veyra
+### Location
+black-chapel
+### Voice
+เย็นชา หนักแน่น ไม่ยอมเผยอารมณ์
+### Goal
+คุ้มกันขบวนโลงศพให้ถึงที่หมายโดยไม่มีใครฝ่าฝืนกฎห้าข้อ
+
+## NPC: Father Caldus
+### Location
+black-chapel
+### Voice
+ต่ำ ช้า พูดน้อย
+### Goal
+เฝ้าประตูโบสถ์และคอยเตือนกฎห้าข้อแก่ผู้มาใหม่
+
+## NPC: Sister Nara
+### Location
+black-chapel
+### Voice
+เงียบสนิท — สื่อสารผ่านกระดานชนวนเท่านั้น
+### Communication
+SLATE
+### Goal
+จดบันทึกทุกคำพูดที่เกิดขึ้นใกล้โลงศพ
+
+## Protocol: Coffin Escort Five Rules
+### Key
+coffin-escort-five-rules
+### Visibility
+PARTY
+### Known By
+- Mother Veyra
+- Father Caldus
+- Sister Nara
+### Rules
+- คุ้มกันโลงศพ
+- ห้ามเปิดโลง
+- ห้ามให้ใครแตะต้องโลง
+- หากนักบวชตาย ให้เดินทางต่อ
+- หากโลงพูด ห้ามตอบ
 
 ## Secret: God Is Alive
 ### Truth

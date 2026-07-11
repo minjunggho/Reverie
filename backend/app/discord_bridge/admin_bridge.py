@@ -175,7 +175,7 @@ class AdminBridge:
         from sqlalchemy import select
 
         operation = ctx.args[1].lower() if len(ctx.args) > 1 else "upload"
-        if operation in {"approve", "reject"}:
+        if operation in {"approve", "reject", "repair"}:
             if len(ctx.args) < 3:
                 return self._notice(ctx.inbound, f"Use `!rv campaign import {operation} <import-id>`")
             async with self.db.unit_of_work() as s:
@@ -190,6 +190,12 @@ class AdminBridge:
                     return BridgeResult(handled=True, responses=[OutboundMessage(
                         ctx.inbound.channel_id, body, kind=MessageKind.TABLE_NOTICE,
                         title="Campaign imported ✓")])
+                if operation == "repair":
+                    result = await svc.repair_protocols(import_id=ctx.args[2], campaign_id=campaign.id)
+                    return self._notice(
+                        ctx.inbound,
+                        f"Protocol backfill complete — {result['protocols_added']} added. "
+                        "Locations/NPCs/secrets/threats were not touched.")
                 await svc.reject(import_id=ctx.args[2], campaign_id=campaign.id)
                 return self._notice(ctx.inbound, "Import rejected; no world canon was created.")
         if len(ctx.inbound.attachments) != 1:

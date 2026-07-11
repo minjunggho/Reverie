@@ -61,6 +61,9 @@ class LocationProposal(BaseModel):
     exits: list[ExitProposal] = Field(default_factory=list, max_length=30)
 
 
+_LEGAL_COMMUNICATION_MODES = {"SPOKEN", "SLATE", "SIGN", "TELEPATHY", "NONVERBAL", "OTHER"}
+
+
 class NPCProposal(BaseModel):
     key: str = Field(min_length=1, max_length=80, pattern=KEY)
     name: str = Field(min_length=1, max_length=160)
@@ -68,6 +71,7 @@ class NPCProposal(BaseModel):
     voice: str = Field(default="", max_length=400)
     goal: str = Field(default="", max_length=2000)
     location: str | None = Field(default=None, max_length=80)   # location key
+    communication_mode: str = Field(default="SPOKEN", max_length=20)
 
 
 class FactionProposal(BaseModel):
@@ -99,6 +103,20 @@ class WorldFactProposal(BaseModel):
     visibility: str = Field(default="PUBLIC", max_length=16)
 
 
+_LEGAL_PROTOCOL_VISIBILITY = {"PUBLIC", "PARTY"}
+
+
+class ProtocolProposal(BaseModel):
+    """An ordered, authored set of rules NPCs/factions hold each other to (e.g. "the
+    five rules of the coffin escort"). Order is preserved — never stored as a set —
+    so a grounded NPC answer reproduces it verbatim."""
+    key: str = Field(min_length=1, max_length=80, pattern=KEY)
+    title: str = Field(min_length=1, max_length=200)
+    visibility: str = Field(default="PARTY", max_length=16)
+    known_by: list[str] = Field(default_factory=list, max_length=50)
+    rules: list[str] = Field(min_length=1, max_length=50)
+
+
 class CampaignProposal(BaseModel):
     version: int = 1
     identity_name: str = Field(default="", max_length=200)
@@ -110,6 +128,7 @@ class CampaignProposal(BaseModel):
     npcs: list[NPCProposal] = Field(default_factory=list, max_length=300)
     secrets: list[SecretProposal] = Field(default_factory=list, max_length=200)
     threats: list[ThreatProposal] = Field(default_factory=list, max_length=100)
+    protocols: list[ProtocolProposal] = Field(default_factory=list, max_length=100)
     session_prep: dict = Field(default_factory=dict)
     starting_location: str | None = Field(default=None, max_length=80)
 
@@ -176,7 +195,8 @@ def _parse_exits(body: str) -> list[dict]:
 
 def _parse_markdown(text: str) -> dict:
     prop: dict = {"version": 1, "locations": [], "world_facts": [], "factions": [],
-                  "npcs": [], "secrets": [], "threats": [], "session_prep": {}}
+                  "npcs": [], "secrets": [], "threats": [], "protocols": [],
+                  "session_prep": {}}
     m = re.search(r"(?m)^#\s+Campaign:\s*(.+)$", text)
     if m:
         prop["identity_name"] = m.group(1).strip()
@@ -201,7 +221,17 @@ def _parse_markdown(text: str) -> dict:
             prop["npcs"].append({"key": f.get("key") or _slug(name), "name": name,
                                  "personality": f.get("personality", ""), "voice": f.get("voice", ""),
                                  "goal": f.get("goal", ""),
-                                 "location": (f.get("location") or None)})
+                                 "location": (f.get("location") or None),
+                                 "communication_mode": (f.get("communication") or "SPOKEN").upper()})
+        elif low.startswith("protocol:"):
+            title = header.split(":", 1)[1].strip()
+            f = _subfields(body)
+            prop.setdefault("protocols", []).append({
+                "key": f.get("key") or _slug(title), "title": title,
+                "visibility": (f.get("visibility") or "PARTY").strip().upper(),
+                "known_by": _bullets(f.get("known by", "")),
+                "rules": _bullets(f.get("rules", "")),
+            })
         elif low.startswith("faction:"):
             name = header.split(":", 1)[1].strip()
             f = _subfields(body)
@@ -296,6 +326,9 @@ def _validate(p: CampaignProposal) -> ImportReview:
             warnings.append(f"NPC '{n.name}' references unknown location '{n.location}'.")
         elif not n.location:
             warnings.append(f"NPC '{n.name}' has no canonical current location.")
+        if n.communication_mode not in _LEGAL_COMMUNICATION_MODES:
+            warnings.append(f"NPC '{n.name}' has unknown communication mode "
+                            f"'{n.communication_mode}' — defaulting to SPOKEN.")
     for f in p.factions:
         if not f.goal:
             warnings.append(f"Faction '{f.name}' has no goal.")
@@ -304,6 +337,19 @@ def _validate(p: CampaignProposal) -> ImportReview:
             warnings.append(f"Secret '{sec.key}' has only {len(sec.clues)} revelation path(s).")
     if p.starting_location and p.starting_location not in known:
         warnings.append(f"Session prep opening_location '{p.starting_location}' is not a known location.")
+
+    proto_keys = [pr.key for pr in p.protocols]
+    if len(proto_keys) != len(set(proto_keys)):
+        raise ValidationError("protocol keys must be unique")
+    known_npc_names = {n.name for n in p.npcs}
+    for pr in p.protocols:
+        if pr.visibility not in _LEGAL_PROTOCOL_VISIBILITY:
+            raise ValidationError(
+                f"protocol '{pr.key}' has illegal visibility {pr.visibility!r} "
+                f"(must be one of {sorted(_LEGAL_PROTOCOL_VISIBILITY)})")
+        for name in pr.known_by:
+            if name not in known_npc_names:
+                warnings.append(f"Protocol '{pr.title}' names unknown NPC '{name}' in Known By.")
 
     counts = {
         "identity": 1 if p.identity_name else 0,
@@ -315,6 +361,7 @@ def _validate(p: CampaignProposal) -> ImportReview:
         "secrets": len(p.secrets),
         "clues": sum(len(s.clues) for s in p.secrets),
         "threats": len(p.threats),
+        "protocols": len(p.protocols),
         "session_prep": 1 if p.session_prep else 0,
     }
     return ImportReview(counts=counts, warnings=warnings)
@@ -415,10 +462,12 @@ class CanonImportService:
 
         # 4. NPCs at their canonical location.
         for n in proposal.npcs:
+            mode = n.communication_mode if n.communication_mode in _LEGAL_COMMUNICATION_MODES else "SPOKEN"
             self.session.add(NPC(
                 campaign_id=campaign_id, name=n.name, personality=n.personality,
                 voice_register=n.voice, goals=[n.goal] if n.goal else [],
-                current_location_id=by_key[n.location].id if n.location and n.location in by_key else None))
+                current_location_id=by_key[n.location].id if n.location and n.location in by_key else None,
+                communication_mode=mode))
 
         # 5. factions + threats → world-pressure fronts (Threat).
         for f in list(proposal.factions):
@@ -429,6 +478,13 @@ class CanonImportService:
             self.session.add(Threat(campaign_id=campaign_id, name=t.name, goal=t.goal,
                                     next_action=t.next_action, progress=t.progress,
                                     scheduled_game_time=t.scheduled_minutes, status="active"))
+
+        # 5b. ordered protocols (structured, never an unordered fact bag).
+        for pr in proposal.protocols:
+            self.session.add(CampaignCanonRecord(
+                campaign_id=campaign_id, category="protocol", fact=pr.title,
+                visibility=pr.visibility, provenance="IMPORTED_CANON", importance=25,
+                data={"key": pr.key, "rules": list(pr.rules), "known_by": list(pr.known_by)}))
 
         # 6. campaign-level canon + session prep + starting location.
         campaign = await self.session.get(Campaign, campaign_id)
@@ -445,6 +501,43 @@ class CanonImportService:
         row.status = "APPROVED"
         review = _validate(proposal)
         return review
+
+    async def repair_protocols(self, *, import_id: str, campaign_id: str) -> dict:
+        """Idempotent, protocol-only backfill for an already-approved campaign.
+
+        Re-parses THIS draft's stored source text for `## Protocol:` blocks only and
+        adds any record whose `data.key` isn't already canon — never touching
+        locations/NPCs/secrets/threats, so it can never hit the duplicate-location
+        conflict `approve()` would raise on a re-import of a revised file. The owner
+        workflow: re-upload the revised campaign file (a new draft, since the
+        content hash changed), then repair THAT draft instead of approving it."""
+        row = await self.get(import_id, campaign_id)
+        if row.status == "REJECTED":
+            raise ConflictError("cannot repair a rejected import")
+        _, proposal, _ = parse_campaign_file(row.filename, row.source_text.encode("utf-8"))
+        if not proposal.protocols:
+            return {"protocols_added": 0}
+
+        existing_keys = set()
+        rows = (await self.session.execute(select(CampaignCanonRecord).where(
+            CampaignCanonRecord.campaign_id == campaign_id,
+            CampaignCanonRecord.category == "protocol"))).scalars()
+        for r in rows:
+            key = (r.data or {}).get("key")
+            if key:
+                existing_keys.add(key)
+
+        added = 0
+        for pr in proposal.protocols:
+            if pr.key in existing_keys:
+                continue
+            self.session.add(CampaignCanonRecord(
+                campaign_id=campaign_id, category="protocol", fact=pr.title,
+                visibility=pr.visibility, provenance="IMPORTED_CANON", importance=25,
+                data={"key": pr.key, "rules": list(pr.rules), "known_by": list(pr.known_by)}))
+            existing_keys.add(pr.key)
+            added += 1
+        return {"protocols_added": added}
 
     async def reject(self, *, import_id: str, campaign_id: str) -> CanonImport:
         row = await self.get(import_id, campaign_id)

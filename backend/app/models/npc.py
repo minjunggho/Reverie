@@ -27,3 +27,6 @@ class NPC(Base, TimestampMixin):
     # attitude per entity ref, e.g. {"character:<id>": "neutral"}
     attitudes: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     emotional_state: Mapped[str] = mapped_column(String(60), default="calm")
+    # How this NPC communicates: SPOKEN|SLATE|SIGN|TELEPATHY|NONVERBAL|OTHER. Default
+    # preserves every existing NPC's behavior unchanged (spoken dialogue).
+    communication_mode: Mapped[str] = mapped_column(String(20), default="SPOKEN")
