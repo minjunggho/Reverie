@@ -40,6 +40,11 @@ class ActionInterpretation(BaseModel):
     # involving another PC who cannot choose (dragging an unconscious ally) is False.
     # The engine refuses to execute when this is True (PC agency is inviolable).
     commands_other_pc: bool = False
+    # Movement: the action is primarily going somewhere. `movement_reference` is the
+    # exit/destination phrase ("ข้างนอก", "มหาวิหาร", "ชั้นสอง"). The ENGINE resolves
+    # it against the world graph; the LLM never picks the destination.
+    movement_intent: bool = False
+    movement_reference: str = ""
 
 
 # --- Adjudication ------------------------------------------------------------
@@ -131,6 +136,21 @@ class CreationGuidance(BaseModel):
     next_question: Optional[str] = None      # Thai, ONE question, or None
     ready_to_reveal: bool = False
     reveal_summary: str = ""                 # Thai identity paragraph for the reveal
+
+
+# --- World expansion (canon-consistent AI location) ----------------------------
+class LocationDraft(BaseModel):
+    """A canon-consistent ordinary place proposed by WorldExpansionService. The
+    engine validates + commits it (provenance AI_EXPANDED) BEFORE any narration;
+    once committed it is canonical and must not be reimagined."""
+    name: str
+    location_type: str = "LOCATION"          # SHOP/HOUSE/ALLEY/ROOM/LOCATION...
+    obvious: str = ""                        # player-facing description
+    canon_justification: str = ""            # why this fits the settlement (DM-only)
+    connection_label: str = "ทางเข้า"        # how it links to the current location
+    travel_minutes: int = 0
+    npc_name: str = ""                        # optional proprietor
+    secret: str = ""                         # usually empty for ordinary places
 
 
 # --- Session opening (session 1 / hook-aware) ----------------------------------

@@ -19,6 +19,7 @@ from app.schemas.llm_io import (
     ClassificationResult,
     ConsequenceProposal,
     CreationGuidance,
+    LocationDraft,
     Narration,
     NPCResponse,
     OpeningScene,
@@ -121,4 +122,16 @@ class LLMProvider(ABC):
         return await self.structured_complete(
             response_model=OpeningScene, messages=messages,
             task="generate_session_opening", temperature=0.8,
+        )
+
+    async def generate_location_expansion(self, messages: list[LLMMessage]) -> LocationDraft:
+        return await self.structured_complete(
+            response_model=LocationDraft, messages=messages,
+            task="generate_location_expansion", temperature=0.7,
+        )
+
+    async def frame_scene(self, messages: list[LLMMessage]) -> Narration:
+        return await self.structured_complete(
+            response_model=Narration, messages=messages,
+            task="frame_scene", temperature=0.6,
         )

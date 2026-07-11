@@ -70,6 +70,9 @@ class CommittedActionPipeline:
         self.adjudicator = AdjudicationJudge(provider)
         self.consequence = ConsequencePlanner(provider)
         self.narrator = DMNarrator(provider)
+        from app.world.travel_service import TravelService
+
+        self.travel = TravelService(db, provider)
 
     # --- entry points --------------------------------------------------------
     async def handle(self, ctx: ResolvedContext, action: CommittedAction) -> BridgeResult:
@@ -120,6 +123,16 @@ class CommittedActionPipeline:
             )
             # Resolve linguistic mentions ONCE, at the engine boundary.
             resolution = directory.resolve_mentions(interpretation.target_references)
+
+        # Movement is its own domain flow: the engine resolves the destination from
+        # the world graph (never the narrator). No dice, no invented scenery.
+        if interpretation.movement_intent and ctx.session_id:
+            reference = interpretation.movement_reference or action_text
+            return await self.travel.travel(ctx, reference=reference)
+
+        async with self.db.session() as read:
+            scene = await SceneService(read).get_active_scene(ctx.session_id) if ctx.session_id else None
+            character = await read.get(Character, ctx.character_id) if ctx.character_id else None
             decision = await self.adjudicator.run(
                 read, action_text=action_text, interpretation=interpretation,
                 scene=scene, character=character, directory=directory,
@@ -269,11 +282,23 @@ class CommittedActionPipeline:
             directory3 = await SceneEntityDirectory(read).build(
                 scene3, actor_character_id=ctx.character_id, campaign_id=ctx.campaign_id
             )
+            from app.memory.scene_context import SceneContextBuilder
+
+            scene_ctx = await SceneContextBuilder(read).build(
+                campaign_id=ctx.campaign_id, scene=scene3, actor_character_id=ctx.character_id
+            )
             narration = await self.narrator.run(
                 read, action_text=action_text, outcome=outcome,
                 result_summary=result_summary, scene=scene3, target_ref=target_ref,
                 directory=directory3, resolved_targets=resolved_targets,
+                scene_context=scene_ctx,
             )
+        # Anti-hallucination: never let the DM ask the player to author the world.
+        from app.ai.narration_guard import screen_decision_prompt, screen_narration
+
+        actor_name = directory3.actor.canonical_name if directory3.actor else None
+        narration.text, _ = screen_narration(narration.text, actor_name)
+        narration.decision_prompt = screen_decision_prompt(narration.decision_prompt, actor_name)
 
         # Step 18-19: cache response + mark SENT.
         roll_line = self._roll_line(check_result, outcome)

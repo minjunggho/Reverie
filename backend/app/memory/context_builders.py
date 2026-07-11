@@ -188,10 +188,15 @@ async def build_consequence_context(
 async def build_narration_context(
     session: AsyncSession, *, action_text: str, outcome: str, result_summary: str,
     scene: Scene | None, target_ref: str | None = None, directory=None,
-    resolved_targets=None,
+    resolved_targets=None, scene_context=None,
 ) -> list[LLMMessage]:
-    brief = await scene_brief(session, scene)
-    lines = [f"SCENE: {brief.as_text()}"]
+    lines = []
+    if scene_context is not None:
+        # Canonical location the narrator frames FROM (so it never invents scenery).
+        lines.append(scene_context.location_block())
+    else:
+        brief = await scene_brief(session, scene)
+        lines.append(f"SCENE: {brief.as_text()}")
     dir_block = _directory_block(directory)
     if dir_block:
         lines.append(dir_block)
@@ -232,6 +237,23 @@ async def build_npc_response_context(
                 f"UTTERANCE: {utterance}"
             ),
         },
+    ]
+
+
+# --- E5: canonical scene framing (travel arrival / scene open) ---------------
+def build_scene_frame_context(scene_context, *, arrival_from: str | None = None) -> list[LLMMessage]:
+    """Frame a scene from CANONICAL context only. The location block is authored
+    truth; the framer reformats it, never invents. Anti-hallucination lives here by
+    construction — the model is given the world, not asked to make it up."""
+    from app.ai.prompts.system_prompts import SCENE_FRAMER_SYSTEM
+
+    lines = []
+    if arrival_from:
+        lines.append(f"ARRIVING_FROM: {arrival_from}")
+    lines.append(scene_context.location_block())
+    return [
+        {"role": "system", "content": THAI_DM_STYLE + "\n" + SCENE_FRAMER_SYSTEM},
+        {"role": "user", "content": "\n".join(lines)},
     ]
 
 

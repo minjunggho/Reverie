@@ -72,7 +72,22 @@ class SessionOpeningService:
         immediate_threat_ids: list[str] | None = None,
         mode: SceneMode = SceneMode.EXPLORATION,
     ) -> OpeningResult:
-        # 1. create + open the session.
+        # 1. create + open the session. Imported Session Prep, when present,
+        #    constrains WHERE we open and WHAT is happening (not the DM's freedom of
+        #    presentation, but its obligation not to discard the campaign).
+        async with self.db.session() as read:
+            from app.models.campaign import Campaign
+
+            campaign = await read.get(Campaign, campaign_id)
+            prep = dict((campaign.session_prep if campaign else None) or {})
+        prep_location = prep.get("opening_location_id")
+        if prep_location:
+            location_id = prep_location
+        prep_clues = list(prep.get("allowed_clues") or [])
+        prep_activity = prep.get("current_activity") or ""
+        prep_npc_names = list(prep.get("present_npcs") or [])
+        prep_npc_refs = await self._resolve_npc_refs(campaign_id, prep_npc_names)
+
         async with self.db.unit_of_work() as s:
             session_row = await SessionService(s).create_session(
                 campaign_id=campaign_id, attendance=attendance_member_ids
@@ -84,9 +99,11 @@ class SessionOpeningService:
         ctx = await self._gather(campaign_id, attendance_member_ids, location_id)
         reminders = ctx["reminders"]
 
-        # 3. build the opening (session 1: generated; later: continuity restore).
+        # 3. build the opening (session 1: generated FROM PREP when present; later:
+        #    continuity restore).
         if number == 1:
-            opening = await self._generate_first_opening(ctx, scene_purpose)
+            opening = await self._generate_first_opening(
+                ctx, prep.get("purpose") or scene_purpose, prep=prep)
             recap_text = ""
         else:
             async with self.db.session() as read:
@@ -101,10 +118,22 @@ class SessionOpeningService:
                 purpose=scene_purpose or opening.title,
                 dramatic_question=dramatic_question or opening.decision_prompt,
                 participants=participants or ctx["participant_refs"],
-                visible_entity_ids=visible_entity_ids or [],
+                visible_entity_ids=visible_entity_ids or prep_npc_refs,
                 immediate_threat_ids=immediate_threat_ids or [],
                 scene_start_game_time=ctx["game_time"],
             )
+            # Imported allowed clues seed the scene (failure-with-teeth material).
+            if prep_clues:
+                scene.allowed_clues = prep_clues
+            # Place every attending character at the opening location (canonical position).
+            if location_id:
+                from app.models.character import Character as _Char
+
+                for ref in ctx["participant_refs"]:
+                    _, cid = ref.split(":", 1)
+                    char = await s.get(_Char, cid)
+                    if char is not None:
+                        char.location_id = location_id
             await SessionService(s).begin_active_play(session_id)
             row = await s.get(Session, session_id)
             row.active_play_state = ActivePlayState.TABLE_OPEN.value
@@ -190,13 +219,42 @@ class SessionOpeningService:
             "reminders": reminders,
         }
 
-    async def _generate_first_opening(self, ctx: dict, scene_purpose: str) -> OpeningScene:
+    async def _resolve_npc_refs(self, campaign_id: str, names: list[str]) -> list[str]:
+        if not names:
+            return []
+        from sqlalchemy import select
+
+        from app.models.npc import NPC
+
+        refs = []
+        async with self.db.session() as read:
+            for name in names:
+                npc = (await read.execute(
+                    select(NPC).where(NPC.campaign_id == campaign_id, NPC.name == name)
+                )).scalars().first()
+                if npc is not None:
+                    refs.append(f"npc:{npc.id}")
+        return refs
+
+    async def _generate_first_opening(self, ctx: dict, scene_purpose: str,
+                                      *, prep: dict | None = None) -> OpeningScene:
         char_lines = []
         for c in ctx["characters"]:
             hooks = c.hooks or {}
             hook_str = "; ".join(f"{k}={v}" for k, v in hooks.items() if v) or "-"
             char_lines.append(f"- {c.name} ({c.char_class}): {hook_str}")
         profile = ctx["profile"]
+        prep = prep or {}
+        # Imported prep constrains the story facts the opening MUST honour.
+        prep_block = ""
+        if prep:
+            prep_block = (
+                f"\nSESSION_PREP (ต้องใช้ ห้ามทิ้ง):\n"
+                f"- current_activity: {prep.get('current_activity', '-')}\n"
+                f"- present_npcs: {', '.join(prep.get('present_npcs') or []) or '-'}\n"
+                f"- allowed_clues: {', '.join(prep.get('allowed_clues') or []) or '-'}\n"
+                f"- do_not_reveal: {', '.join(prep.get('do_not_reveal') or []) or '-'}"
+            )
         messages: list[LLMMessage] = [
             {"role": "system", "content": THAI_DM_STYLE + "\n" + OPENING_SYSTEM},
             {"role": "user", "content": (
@@ -204,7 +262,7 @@ class SessionOpeningService:
                 f"สไตล์={profile.get('balance', 'สมดุล')}\n"
                 f"CHARACTERS:\n" + "\n".join(char_lines) + "\n"
                 f"LOCATION: {ctx['location_name']} — {ctx['location_desc']}\n"
-                f"PURPOSE: {scene_purpose or '-'}"
+                f"PURPOSE: {scene_purpose or '-'}" + prep_block
             )},
         ]
         try:

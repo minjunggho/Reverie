@@ -25,12 +25,13 @@ class DMNarrator:
     async def run(
         self, session: AsyncSession, *, action_text: str, outcome: str,
         result_summary: str, scene: Scene | None, target_ref: str | None = None,
-        directory=None, resolved_targets=None,
+        directory=None, resolved_targets=None, scene_context=None,
     ) -> Narration:
         messages = await build_narration_context(
             session, action_text=action_text, outcome=outcome,
             result_summary=result_summary, scene=scene, target_ref=target_ref,
             directory=directory, resolved_targets=resolved_targets,
+            scene_context=scene_context,
         )
         try:
             return await self.provider.generate_dm_narration(messages)
