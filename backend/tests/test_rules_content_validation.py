@@ -117,6 +117,38 @@ def test_valid_rules_content_passes_and_exposes_only_backend_supported_classes()
     assert "lay_on_hands" not in registry.spells
 
 
+def test_every_class_declares_an_explicit_support_status():
+    """Selectable ⇔ FULLY_SUPPORTED; unfinished classes stay in the pack as
+    UNSUPPORTED (retained content, never offered as playable)."""
+    registry = RulesRegistry()
+    statuses = {name: cls.support_status for name, cls in registry.classes.items()}
+    assert set(statuses.values()) <= {
+        "FULLY_SUPPORTED", "PARTIALLY_SUPPORTED", "UNSUPPORTED"
+    }
+    fully = {n for n, s in statuses.items() if s == "FULLY_SUPPORTED"}
+    assert fully == set(registry.selectable_classes)
+    # Unfinished classes are retained, not deleted.
+    assert {"barbarian", "druid", "monk", "paladin", "sorcerer", "warlock"} <= set(statuses)
+    assert all(statuses[n] != "FULLY_SUPPORTED"
+               for n in ("barbarian", "druid", "monk", "paladin", "sorcerer", "warlock"))
+
+
+def test_fully_supported_flag_on_unselectable_class_fails(tmp_path: Path):
+    content = _copy_content(tmp_path)
+    classes = _read(content, "classes.json")
+    for cls in classes:
+        if cls["name"] == "warlock":
+            cls["support_status"] = "FULLY_SUPPORTED"
+    _write(content, "classes.json", classes)
+
+    with pytest.raises(RulesViolation) as exc_info:
+        RulesRegistry(content)
+
+    message = str(exc_info.value)
+    assert "pool=support_status" in message
+    assert "warlock" in message
+
+
 def test_selectable_class_without_rules_content_fails(tmp_path: Path):
     content = _copy_content(tmp_path)
     classes = _read(content, "classes.json")

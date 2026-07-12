@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import JSON, Integer, String, UniqueConstraint
+from sqlalchemy import JSON, Index, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, fk_id, pk_column
@@ -29,6 +29,7 @@ class CurrencyTransaction(Base, TimestampMixin):
     __tablename__ = "currency_transactions"
     __table_args__ = (
         UniqueConstraint("idempotency_key", name="uq_currency_tx_idempotency"),
+        Index("ix_currency_tx_campaign", "campaign_id"),
     )
 
     id: Mapped[str] = pk_column()

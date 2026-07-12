@@ -63,27 +63,50 @@ class Database:
             if self.url.startswith("sqlite"):
                 await conn.run_sync(self._ensure_sqlite_compat_columns)
 
+    # Columns added to EXISTING tables after developers had already created a
+    # local SQLite file. `create_all()` will not alter existing tables, so this
+    # dev-only compatibility step adds whatever is missing on startup.
+    # Production never runs this — it migrates with Alembic.
+    _SQLITE_COMPAT_COLUMNS: dict[str, list[tuple[str, str]]] = {
+        "campaigns": [
+            ("starting_location_id", "VARCHAR(32)"),
+            ("current_party_anchor_id", "VARCHAR(32)"),
+            ("default_session_opening", "TEXT NOT NULL DEFAULT ''"),
+            ("world_model_version", "INTEGER NOT NULL DEFAULT 2"),
+        ],
+        "characters": [
+            ("planned_subclass", "VARCHAR(80)"),
+            ("following_character_id", "VARCHAR(32)"),
+        ],
+        "character_drafts": [
+            ("version", "INTEGER NOT NULL DEFAULT 0"),
+        ],
+        "npc_relationships": [
+            ("familiarity", "INTEGER NOT NULL DEFAULT 0"),
+            ("affection", "INTEGER NOT NULL DEFAULT 0"),
+            ("respect", "INTEGER NOT NULL DEFAULT 0"),
+            ("fear", "INTEGER NOT NULL DEFAULT 0"),
+            ("anger", "INTEGER NOT NULL DEFAULT 0"),
+            ("suspicion", "INTEGER NOT NULL DEFAULT 0"),
+            ("obligation", "INTEGER NOT NULL DEFAULT 0"),
+            ("current_stance", "VARCHAR(40) NOT NULL DEFAULT 'neutral'"),
+            ("last_interaction_event_id", "VARCHAR(32)"),
+        ],
+    }
+
     def _ensure_sqlite_compat_columns(self, conn) -> None:
-        """Backfill missing columns for older local SQLite databases.
-
-        The app model added campaign anchor columns after some developers had
-        already created a local SQLite file. `create_all()` alone will not alter
-        an existing table, so this compatibility step adds the missing columns
-        lazily on startup.
-        """
+        """Backfill missing columns for older local SQLite databases."""
         inspector = inspect(conn)
-        if "campaigns" not in inspector.get_table_names():
-            return
-
-        existing_columns = {column["name"] for column in inspector.get_columns("campaigns")}
-        if "starting_location_id" not in existing_columns:
-            conn.execute(text("ALTER TABLE campaigns ADD COLUMN starting_location_id VARCHAR(32)"))
-        if "current_party_anchor_id" not in existing_columns:
-            conn.execute(text("ALTER TABLE campaigns ADD COLUMN current_party_anchor_id VARCHAR(32)"))
-        if "default_session_opening" not in existing_columns:
-            conn.execute(text("ALTER TABLE campaigns ADD COLUMN default_session_opening TEXT NOT NULL DEFAULT ''"))
-        if "world_model_version" not in existing_columns:
-            conn.execute(text("ALTER TABLE campaigns ADD COLUMN world_model_version INTEGER NOT NULL DEFAULT 2"))
+        table_names = set(inspector.get_table_names())
+        for table, columns in self._SQLITE_COMPAT_COLUMNS.items():
+            if table not in table_names:
+                continue
+            existing = {column["name"] for column in inspector.get_columns(table)}
+            for name, ddl_type in columns:
+                if name not in existing:
+                    conn.execute(text(
+                        f"ALTER TABLE {table} ADD COLUMN {name} {ddl_type}"
+                    ))
 
     async def drop_all(self) -> None:
         import app.models  # noqa: F401

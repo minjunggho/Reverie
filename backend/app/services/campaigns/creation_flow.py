@@ -27,6 +27,7 @@ from app.presentation import MessageKind
 from app.schemas.llm_io import CreationGuidance
 from app.services.campaigns.campaign_service import CampaignService
 from app.services.campaigns.character_service import CharacterService
+from app.services.campaigns.draft_store import DraftConflict, close_draft, save_draft
 from app.services.campaigns.inventory_service import InventoryService
 from app.services.campaigns.presets import CLASS_PRESETS, CLASS_TH, infer_class_from_concept
 from app.tabletop.rules import SUPPORTED_CLASSES
@@ -89,19 +90,26 @@ class CreationFlowService:
     async def _start_locked(
         self, *, campaign_id: str, member_id: str, channel_id: str
     ) -> BridgeResult:
+        from sqlalchemy.exc import IntegrityError
+
         had_existing = False
-        async with self.db.unit_of_work() as s:
-            existing = await self.active_draft(
-                s, campaign_id=campaign_id, member_id=member_id
-            )
-            if existing is None:
-                s.add(CharacterDraft(
-                    campaign_id=campaign_id,
-                    member_id=member_id,
-                    data={"_last_prompt": OPENING_QUESTION},
-                ))
-            else:
-                had_existing = True
+        try:
+            async with self.db.unit_of_work() as s:
+                existing = await self.active_draft(
+                    s, campaign_id=campaign_id, member_id=member_id
+                )
+                if existing is None:
+                    s.add(CharacterDraft(
+                        campaign_id=campaign_id,
+                        member_id=member_id,
+                        data={"_last_prompt": OPENING_QUESTION},
+                    ))
+                else:
+                    had_existing = True
+        except IntegrityError:
+            # A concurrent starter (another process) won the one-active-draft
+            # unique index; treat theirs as THE draft and resume it.
+            had_existing = True
         if had_existing:
             return await self._resume_locked(
                 campaign_id=campaign_id, member_id=member_id, channel_id=channel_id
@@ -137,8 +145,24 @@ class CreationFlowService:
         data = dict(draft.data or {})
         if data.get("_build"):
             if not data["_build"].get("component_token"):
+                # Older drafts predate component tokens — mint one (safe default).
                 data["_build"]["component_token"] = secrets.token_urlsafe(12)
-                await self._save(draft, data, step_inc=0)
+                try:
+                    await self._save(draft, data, step_inc=0)
+                except DraftConflict:
+                    # A concurrent writer already advanced the draft; render THEIR
+                    # persisted state rather than our stale copy.
+                    async with self.db.session() as s:
+                        fresh = await self.active_draft(
+                            s, campaign_id=campaign_id, member_id=member_id
+                        )
+                    if fresh is None:
+                        return BridgeResult(handled=True, responses=[OutboundMessage(
+                            channel_id,
+                            "เจ้ายังไม่มีตัวละครที่สร้างค้างไว้ — เริ่มใหม่ด้วย `!rv character`",
+                            kind=MessageKind.TABLE_NOTICE,
+                        )])
+                    data = dict(fresh.data or {})
             return self.build.render(data, channel_id)
         if data.get("_awaiting_confirm"):
             return self._reflection_card(channel_id, data)
@@ -148,12 +172,20 @@ class CreationFlowService:
         self, *, campaign_id: str, member_id: str, channel_id: str, text: str
     ) -> BridgeResult:
         async with self._member_lock(campaign_id, member_id):
-            return await self._handle_message_locked(
-                campaign_id=campaign_id,
-                member_id=member_id,
-                channel_id=channel_id,
-                text=text,
-            )
+            try:
+                return await self._handle_message_locked(
+                    campaign_id=campaign_id,
+                    member_id=member_id,
+                    channel_id=channel_id,
+                    text=text,
+                )
+            except DraftConflict:
+                # Another writer (a second process / duplicated interaction) won
+                # the compare-and-update. Nothing was overwritten — re-render the
+                # winning persisted state instead of applying this stale input.
+                return await self._resume_locked(
+                    campaign_id=campaign_id, member_id=member_id, channel_id=channel_id
+                )
 
     async def _handle_message_locked(
         self, *, campaign_id: str, member_id: str, channel_id: str, text: str
@@ -274,10 +306,8 @@ class CreationFlowService:
         return bool(data.get("concept")) and bool(data.get("name")) and identity >= 2
 
     async def _save(self, draft: CharacterDraft, data: dict, step_inc: int = 1) -> None:
-        async with self.db.unit_of_work() as s:
-            row = await s.get(CharacterDraft, draft.id)
-            row.data = data
-            row.step = row.step + step_inc
+        # Compare-and-update on draft.version — never a blind overwrite.
+        await save_draft(self.db, draft, data, step_inc=step_inc)
 
     def _ask(self, channel_id: str, question: str) -> BridgeResult:
         return BridgeResult(handled=True, responses=[OutboundMessage(
@@ -307,9 +337,7 @@ class CreationFlowService:
         )])
 
     async def _cancel(self, draft: CharacterDraft, channel_id: str) -> BridgeResult:
-        async with self.db.unit_of_work() as s:
-            row = await s.get(CharacterDraft, draft.id)
-            row.status = "CANCELLED"
+        await close_draft(self.db, draft.id, status="CANCELLED")
         return BridgeResult(handled=True, responses=[OutboundMessage(
             channel_id, "ไม่เป็นไร ไว้พร้อมเมื่อไรพิมพ์ `!rv character` มาใหม่ได้เลย",
             kind=MessageKind.TABLE_NOTICE,

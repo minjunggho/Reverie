@@ -24,7 +24,13 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
-DB_URL = get_settings().database_url
+# Resolution order: -x db_url=… (tests/tools) → alembic.ini sqlalchemy.url → app settings.
+_x_args = context.get_x_argument(as_dictionary=True)
+DB_URL = (
+    _x_args.get("db_url")
+    or config.get_main_option("sqlalchemy.url")
+    or get_settings().database_url
+)
 
 
 def run_migrations_offline() -> None:

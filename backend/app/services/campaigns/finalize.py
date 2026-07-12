@@ -33,6 +33,24 @@ async def finalize_character(db, *, draft: CharacterDraft, data: dict,
     name = data.get("name") or "นักผจญภัย"
 
     async with db.unit_of_work() as s:
+        # Claim the draft FIRST (ACTIVE -> DONE, guarded) inside this same
+        # transaction: a concurrent duplicate finalize (double-delivered click on
+        # another worker) gets rowcount 0 and stops — one draft, one character.
+        # If anything below fails, the claim rolls back with it.
+        from sqlalchemy import update as _update
+
+        claimed = await s.execute(
+            _update(CharacterDraft)
+            .where(CharacterDraft.id == draft.id, CharacterDraft.status == "ACTIVE")
+            .values(status="DONE")
+        )
+        if claimed.rowcount != 1:
+            return BridgeResult(handled=True, responses=[OutboundMessage(
+                channel_id,
+                "ตัวละครจากแบบร่างนี้ถูกสร้างเสร็จไปแล้ว — ดูได้ด้วย `!rv sheet`",
+                kind=MessageKind.TABLE_NOTICE,
+            )])
+
         char = await CharacterService(s).create_character(
             member_id=draft.member_id, name=name,
             species=sp.name, char_class=cls.name,
@@ -125,9 +143,6 @@ async def finalize_character(db, *, draft: CharacterDraft, data: dict,
         from app.services.economy.wallet_service import format_balances
 
         purse = await WalletService(s).grant_starting_funds(character=char)
-
-        row = await s.get(CharacterDraft, draft.id)
-        row.status = "DONE"
 
         # --- reveal card ------------------------------------------------------
         score_line = "  ".join(

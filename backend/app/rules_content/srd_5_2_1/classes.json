@@ -1,232 +1,795 @@
 [
   {
-    "definition_id": "class:barbarian", "definition_version": 1,
-    "name": "barbarian", "name_th": "บาร์บาเรียน",
+    "definition_id": "class:barbarian",
+    "definition_version": 1,
+    "name": "barbarian",
+    "support_status": "UNSUPPORTED",
+    "name_th": "บาร์บาเรียน",
     "pitch_th": "ผู้ทนทานและโหดเหี้ยมในสนามรบ — พลังคลั่งกัดกร่อนทุกขีดจำกัด",
     "hit_die": 12,
-    "saving_throws": ["str", "con"],
-    "skill_choices": {"count": 2, "options": ["animal_handling", "athletics", "intimidation", "nature", "perception", "survival"]},
+    "saving_throws": [
+      "str",
+      "con"
+    ],
+    "skill_choices": {
+      "count": 2,
+      "options": [
+        "animal_handling",
+        "athletics",
+        "intimidation",
+        "nature",
+        "perception",
+        "survival"
+      ]
+    },
     "armor_training_th": "เกราะเบา เกราะกลาง และโล่",
     "weapon_training_th": "อาวุธพื้นฐานและอาวุธสงคราม",
-    "base_ac": {"kind": "medium", "value": 12, "dex_cap": 2},
-    "primary_abilities": ["str", "con", "dex"],
+    "base_ac": {
+      "kind": "medium",
+      "value": 12,
+      "dex_cap": 2
+    },
+    "primary_abilities": [
+      "str",
+      "con",
+      "dex"
+    ],
     "features": [
-      {"key": "rage", "name_th": "ความคลั่ง", "summary_th": "ปลดปล่อยพลังคลั่งในสนามรบ"},
-      {"key": "unarmored_defense", "name_th": "ป้องกันแบบไม่สวมเกราะ", "summary_th": "ป้องกันด้วยพลังร่างกายและความอดทน"}
+      {
+        "key": "rage",
+        "name_th": "ความคลั่ง",
+        "summary_th": "ปลดปล่อยพลังคลั่งในสนามรบ"
+      },
+      {
+        "key": "unarmored_defense",
+        "name_th": "ป้องกันแบบไม่สวมเกราะ",
+        "summary_th": "ป้องกันด้วยพลังร่างกายและความอดทน"
+      }
     ],
     "spellcasting": null,
-    "concept_keywords": ["คลั่ง", "พลัง", "บาร์บาเรียน", "รบ", "เกรี้ยวกร้าน"],
-    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
+    "concept_keywords": [
+      "คลั่ง",
+      "พลัง",
+      "บาร์บาเรียน",
+      "รบ",
+      "เกรี้ยวกร้าน"
+    ],
+    "source_id": "srd521-chapter-3",
+    "source_kind": "srd",
+    "content_status": "official"
   },
   {
-    "definition_id": "class:bard", "definition_version": 1,
-    "name": "bard", "name_th": "กวี",
+    "definition_id": "class:bard",
+    "definition_version": 1,
+    "name": "bard",
+    "support_status": "FULLY_SUPPORTED",
+    "name_th": "กวี",
     "pitch_th": "เสียงเพลงและคำพูดที่ขยับโลกได้จริง — เสน่ห์คืออาวุธ",
     "hit_die": 8,
-    "saving_throws": ["dex", "cha"],
-    "skill_choices": {"count": 3, "options": "any"},
+    "saving_throws": [
+      "dex",
+      "cha"
+    ],
+    "skill_choices": {
+      "count": 3,
+      "options": "any"
+    },
     "armor_training_th": "เกราะเบา",
     "weapon_training_th": "อาวุธพื้นฐาน",
-    "base_ac": {"kind": "light", "value": 11},
-    "primary_abilities": ["cha", "dex", "con"],
-    "features": [
-      {"key": "spellcasting", "name_th": "เวทแห่งบทเพลง", "summary_th": "ร่ายคาถาผ่านศิลปะ"},
-      {"key": "bardic_inspiration", "name_th": "แรงบันดาลใจกวี", "summary_th": "มอบลูกเต๋ากำลังใจ d6 ให้เพื่อน", "resource_id": "resource:bardic_inspiration"}
+    "base_ac": {
+      "kind": "light",
+      "value": 11
+    },
+    "primary_abilities": [
+      "cha",
+      "dex",
+      "con"
     ],
-    "spellcasting": {"ability": "cha", "cantrips_known": 2, "spellbook_size": 0, "prepared_count": 4, "spell_list": "bard"},
-    "concept_keywords": ["เพลง", "ดนตรี", "พิณ", "เล่าเรื่อง", "เจรจา", "เสน่ห์", "การแสดง"],
-    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
+    "features": [
+      {
+        "key": "spellcasting",
+        "name_th": "เวทแห่งบทเพลง",
+        "summary_th": "ร่ายคาถาผ่านศิลปะ"
+      },
+      {
+        "key": "bardic_inspiration",
+        "name_th": "แรงบันดาลใจกวี",
+        "summary_th": "มอบลูกเต๋ากำลังใจ d6 ให้เพื่อน",
+        "resource_id": "resource:bardic_inspiration"
+      }
+    ],
+    "spellcasting": {
+      "ability": "cha",
+      "cantrips_known": 2,
+      "spellbook_size": 0,
+      "prepared_count": 4,
+      "spell_list": "bard"
+    },
+    "concept_keywords": [
+      "เพลง",
+      "ดนตรี",
+      "พิณ",
+      "เล่าเรื่อง",
+      "เจรจา",
+      "เสน่ห์",
+      "การแสดง"
+    ],
+    "source_id": "srd521-chapter-3",
+    "source_kind": "srd",
+    "content_status": "official"
   },
   {
-    "definition_id": "class:cleric", "definition_version": 1,
-    "name": "cleric", "name_th": "นักบวช",
+    "definition_id": "class:cleric",
+    "definition_version": 1,
+    "name": "cleric",
+    "support_status": "FULLY_SUPPORTED",
+    "name_th": "นักบวช",
     "pitch_th": "ศรัทธาที่กลายเป็นพลังจริง — ผู้เชื่อมโลกนี้กับสิ่งที่ยิ่งใหญ่กว่า",
     "hit_die": 8,
-    "saving_throws": ["wis", "cha"],
-    "skill_choices": {"count": 2, "options": ["history", "insight", "medicine", "persuasion", "religion"]},
+    "saving_throws": [
+      "wis",
+      "cha"
+    ],
+    "skill_choices": {
+      "count": 2,
+      "options": [
+        "history",
+        "insight",
+        "medicine",
+        "persuasion",
+        "religion"
+      ]
+    },
     "armor_training_th": "เกราะเบา เกราะกลาง และโล่",
     "weapon_training_th": "อาวุธพื้นฐาน",
-    "base_ac": {"kind": "medium", "value": 13, "dex_cap": 2, "shield": true},
-    "primary_abilities": ["wis", "con", "str"],
-    "features": [
-      {"key": "spellcasting", "name_th": "การร่ายเวทศักดิ์สิทธิ์", "summary_th": "ร่ายคาถาผ่านศรัทธา"},
-      {"key": "divine_order", "name_th": "วิถีศักดิ์สิทธิ์", "summary_th": "แนวทางการรับใช้ (เลือกภายหลัง)"}
+    "base_ac": {
+      "kind": "medium",
+      "value": 13,
+      "dex_cap": 2,
+      "shield": true
+    },
+    "primary_abilities": [
+      "wis",
+      "con",
+      "str"
     ],
-    "spellcasting": {"ability": "wis", "cantrips_known": 3, "spellbook_size": 0, "prepared_count": 4, "spell_list": "cleric"},
-    "concept_keywords": ["บวช", "ศรัทธา", "เทพ", "รักษา", "สวด", "พระ", "โบสถ์", "ศาสนา"],
-    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
+    "features": [
+      {
+        "key": "spellcasting",
+        "name_th": "การร่ายเวทศักดิ์สิทธิ์",
+        "summary_th": "ร่ายคาถาผ่านศรัทธา"
+      },
+      {
+        "key": "divine_order",
+        "name_th": "วิถีศักดิ์สิทธิ์",
+        "summary_th": "แนวทางการรับใช้ (เลือกภายหลัง)"
+      }
+    ],
+    "spellcasting": {
+      "ability": "wis",
+      "cantrips_known": 3,
+      "spellbook_size": 0,
+      "prepared_count": 4,
+      "spell_list": "cleric"
+    },
+    "concept_keywords": [
+      "บวช",
+      "ศรัทธา",
+      "เทพ",
+      "รักษา",
+      "สวด",
+      "พระ",
+      "โบสถ์",
+      "ศาสนา"
+    ],
+    "source_id": "srd521-chapter-3",
+    "source_kind": "srd",
+    "content_status": "official"
   },
   {
-    "definition_id": "class:druid", "definition_version": 1,
-    "name": "druid", "name_th": "ดรูอิด",
+    "definition_id": "class:druid",
+    "definition_version": 1,
+    "name": "druid",
+    "support_status": "UNSUPPORTED",
+    "name_th": "ดรูอิด",
     "pitch_th": "ผู้คุยกับธรรมชาติและรับเอาพลังจากพืชพรรณ และสัตว์ป่า",
     "hit_die": 8,
-    "saving_throws": ["int", "wis"],
-    "skill_choices": {"count": 2, "options": ["animal_handling", "insight", "medicine", "nature", "perception", "religion", "survival"]},
+    "saving_throws": [
+      "int",
+      "wis"
+    ],
+    "skill_choices": {
+      "count": 2,
+      "options": [
+        "animal_handling",
+        "insight",
+        "medicine",
+        "nature",
+        "perception",
+        "religion",
+        "survival"
+      ]
+    },
     "armor_training_th": "เกราะเบา เกราะกลาง และโล่ที่ไม่ได้ทำจากโลหะ",
     "weapon_training_th": "กระบอง มีด และอาวุธที่ใช้ด้วยธรรมชาติ",
-    "base_ac": {"kind": "medium", "value": 13, "dex_cap": 2},
-    "primary_abilities": ["wis", "con", "dex"],
-    "features": [
-      {"key": "spellcasting", "name_th": "เวทแห่งพงไพร", "summary_th": "ร่ายคาถาโดยการเชื่อมโยงกับธรรมชาติ"},
-      {"key": "druidic", "name_th": "ภาษาธรรมชาติ", "summary_th": "สื่อสารลับกับพืชและสัตว์"}
+    "base_ac": {
+      "kind": "medium",
+      "value": 13,
+      "dex_cap": 2
+    },
+    "primary_abilities": [
+      "wis",
+      "con",
+      "dex"
     ],
-    "spellcasting": {"ability": "wis", "cantrips_known": 2, "spellbook_size": 0, "prepared_count": 2, "spell_list": "druid"},
-    "concept_keywords": ["ธรรมชาติ", "พืช", "ป่า", "สัตว์", "ดรูอิด", "พลัง", "ชำระ"],
-    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
+    "features": [
+      {
+        "key": "spellcasting",
+        "name_th": "เวทแห่งพงไพร",
+        "summary_th": "ร่ายคาถาโดยการเชื่อมโยงกับธรรมชาติ"
+      },
+      {
+        "key": "druidic",
+        "name_th": "ภาษาธรรมชาติ",
+        "summary_th": "สื่อสารลับกับพืชและสัตว์"
+      }
+    ],
+    "spellcasting": {
+      "ability": "wis",
+      "cantrips_known": 2,
+      "spellbook_size": 0,
+      "prepared_count": 2,
+      "spell_list": "druid"
+    },
+    "concept_keywords": [
+      "ธรรมชาติ",
+      "พืช",
+      "ป่า",
+      "สัตว์",
+      "ดรูอิด",
+      "พลัง",
+      "ชำระ"
+    ],
+    "source_id": "srd521-chapter-3",
+    "source_kind": "srd",
+    "content_status": "official"
   },
   {
-    "definition_id": "class:fighter", "definition_version": 1,
-    "name": "fighter", "name_th": "นักรบ",
+    "definition_id": "class:fighter",
+    "definition_version": 1,
+    "name": "fighter",
+    "support_status": "FULLY_SUPPORTED",
+    "name_th": "นักรบ",
     "pitch_th": "ผู้เชี่ยวชาญการต่อสู้ทุกรูปแบบ อาวุธและเกราะคือภาษาแม่",
     "hit_die": 10,
-    "saving_throws": ["str", "con"],
-    "skill_choices": {"count": 2, "options": ["acrobatics", "animal_handling", "athletics", "history", "insight", "intimidation", "perception", "persuasion", "survival"]},
+    "saving_throws": [
+      "str",
+      "con"
+    ],
+    "skill_choices": {
+      "count": 2,
+      "options": [
+        "acrobatics",
+        "animal_handling",
+        "athletics",
+        "history",
+        "insight",
+        "intimidation",
+        "perception",
+        "persuasion",
+        "survival"
+      ]
+    },
     "armor_training_th": "เกราะทุกชนิดและโล่",
     "weapon_training_th": "อาวุธพื้นฐานและอาวุธสงคราม",
-    "base_ac": {"kind": "flat", "value": 16, "shield": true},
-    "primary_abilities": ["str", "con", "dex"],
+    "base_ac": {
+      "kind": "flat",
+      "value": 16,
+      "shield": true
+    },
+    "primary_abilities": [
+      "str",
+      "con",
+      "dex"
+    ],
     "features": [
-      {"key": "second_wind", "name_th": "ลมหายใจที่สอง", "summary_th": "ฮึดสู้ ฟื้นพลังชีวิตกลางศึก", "resource_id": "resource:second_wind"},
-      {"key": "fighting_style", "name_th": "สไตล์การต่อสู้", "summary_th": "ความถนัดเฉพาะทางในการรบ (เลือกภายหลัง)"}
+      {
+        "key": "second_wind",
+        "name_th": "ลมหายใจที่สอง",
+        "summary_th": "ฮึดสู้ ฟื้นพลังชีวิตกลางศึก",
+        "resource_id": "resource:second_wind"
+      },
+      {
+        "key": "fighting_style",
+        "name_th": "สไตล์การต่อสู้",
+        "summary_th": "ความถนัดเฉพาะทางในการรบ (เลือกภายหลัง)"
+      }
     ],
     "spellcasting": null,
-    "concept_keywords": ["ดาบ", "นักรบ", "ทหาร", "สู้", "โล่", "กองทัพ", "สงคราม", "อัศวิน"],
-    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
+    "concept_keywords": [
+      "ดาบ",
+      "นักรบ",
+      "ทหาร",
+      "สู้",
+      "โล่",
+      "กองทัพ",
+      "สงคราม",
+      "อัศวิน"
+    ],
+    "source_id": "srd521-chapter-3",
+    "source_kind": "srd",
+    "content_status": "official"
   },
   {
-    "definition_id": "class:monk", "definition_version": 1,
-    "name": "monk", "name_th": "นักพรต",
+    "definition_id": "class:monk",
+    "definition_version": 1,
+    "name": "monk",
+    "support_status": "UNSUPPORTED",
+    "name_th": "นักพรต",
     "pitch_th": "ผู้ใช้ร่างกายและใจเป็นอาวุธ — ความสงบกลายเป็นพลัง",
     "hit_die": 8,
-    "saving_throws": ["str", "dex"],
-    "skill_choices": {"count": 2, "options": ["acrobatics", "athletics", "history", "insight", "religion", "stealth"]},
+    "saving_throws": [
+      "str",
+      "dex"
+    ],
+    "skill_choices": {
+      "count": 2,
+      "options": [
+        "acrobatics",
+        "athletics",
+        "history",
+        "insight",
+        "religion",
+        "stealth"
+      ]
+    },
     "armor_training_th": "เกราะไม่มี",
     "weapon_training_th": "อาวุธพื้นฐานและอาวุธพก",
-    "base_ac": {"kind": "unarmored", "value": 10},
-    "primary_abilities": ["dex", "wis", "con"],
+    "base_ac": {
+      "kind": "unarmored",
+      "value": 10
+    },
+    "primary_abilities": [
+      "dex",
+      "wis",
+      "con"
+    ],
     "features": [
-      {"key": "martial_arts", "name_th": "ศิลปะการต่อสู้", "summary_th": "ใช้มือและเท้าอย่างมีประสิทธิภาพ"},
-      {"key": "ki", "name_th": "พลังจิต", "summary_th": "ใช้พลังจิตสะท้อนความสงบ"}
+      {
+        "key": "martial_arts",
+        "name_th": "ศิลปะการต่อสู้",
+        "summary_th": "ใช้มือและเท้าอย่างมีประสิทธิภาพ"
+      },
+      {
+        "key": "ki",
+        "name_th": "พลังจิต",
+        "summary_th": "ใช้พลังจิตสะท้อนความสงบ"
+      }
     ],
     "spellcasting": null,
-    "concept_keywords": ["พรต", "สงบ", "มือ", "เท้า", "นักพรต", "ลม"],
-    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
+    "concept_keywords": [
+      "พรต",
+      "สงบ",
+      "มือ",
+      "เท้า",
+      "นักพรต",
+      "ลม"
+    ],
+    "source_id": "srd521-chapter-3",
+    "source_kind": "srd",
+    "content_status": "official"
   },
   {
-    "definition_id": "class:paladin", "definition_version": 1,
-    "name": "paladin", "name_th": "อัศวินผู้ศักดิ์สิทธิ์",
+    "definition_id": "class:paladin",
+    "definition_version": 1,
+    "name": "paladin",
+    "support_status": "UNSUPPORTED",
+    "name_th": "อัศวินผู้ศักดิ์สิทธิ์",
     "pitch_th": "ผู้ผูกคำปฏิญาณไว้กับพลังศักดิ์สิทธิ์และความถูกต้อง",
     "hit_die": 10,
-    "saving_throws": ["wis", "cha"],
-    "skill_choices": {"count": 2, "options": ["athletics", "insight", "intimidation", "medicine", "persuasion", "religion"]},
+    "saving_throws": [
+      "wis",
+      "cha"
+    ],
+    "skill_choices": {
+      "count": 2,
+      "options": [
+        "athletics",
+        "insight",
+        "intimidation",
+        "medicine",
+        "persuasion",
+        "religion"
+      ]
+    },
     "armor_training_th": "เกราะทุกชนิดและโล่",
     "weapon_training_th": "อาวุธพื้นฐานและอาวุธสงคราม",
-    "base_ac": {"kind": "medium", "value": 14, "dex_cap": 2, "shield": true},
-    "primary_abilities": ["str", "cha", "con"],
-    "features": [
-      {"key": "divine_sense", "name_th": "สัญชาตญาณศักดิ์สิทธิ์", "summary_th": "รับรู้สิ่งชั่วร้ายและสิ่งศักดิ์สิทธิ์"},
-      {"key": "spellcasting", "name_th": "เวทแห่งคำปฏิญาณ", "summary_th": "ร่ายคาถาผ่านคำมั่นสัญญา"}
+    "base_ac": {
+      "kind": "medium",
+      "value": 14,
+      "dex_cap": 2,
+      "shield": true
+    },
+    "primary_abilities": [
+      "str",
+      "cha",
+      "con"
     ],
-    "spellcasting": {"ability": "cha", "cantrips_known": 0, "spellbook_size": 0, "prepared_count": 2, "spell_list": "paladin"},
-    "concept_keywords": ["อัศวิน", "คำปฏิญาณ", "ศักดิ์สิทธิ์", "ยุติธรรม", "ปกป้อง"],
-    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
+    "features": [
+      {
+        "key": "divine_sense",
+        "name_th": "สัญชาตญาณศักดิ์สิทธิ์",
+        "summary_th": "รับรู้สิ่งชั่วร้ายและสิ่งศักดิ์สิทธิ์"
+      },
+      {
+        "key": "spellcasting",
+        "name_th": "เวทแห่งคำปฏิญาณ",
+        "summary_th": "ร่ายคาถาผ่านคำมั่นสัญญา"
+      }
+    ],
+    "spellcasting": {
+      "ability": "cha",
+      "cantrips_known": 0,
+      "spellbook_size": 0,
+      "prepared_count": 2,
+      "spell_list": "paladin"
+    },
+    "concept_keywords": [
+      "อัศวิน",
+      "คำปฏิญาณ",
+      "ศักดิ์สิทธิ์",
+      "ยุติธรรม",
+      "ปกป้อง"
+    ],
+    "source_id": "srd521-chapter-3",
+    "source_kind": "srd",
+    "content_status": "official"
   },
   {
-    "definition_id": "class:ranger", "definition_version": 1,
-    "name": "ranger", "name_th": "นายพราน",
+    "definition_id": "class:ranger",
+    "definition_version": 1,
+    "name": "ranger",
+    "support_status": "FULLY_SUPPORTED",
+    "name_th": "นายพราน",
     "pitch_th": "ผู้อ่านป่า ตามรอย และยิงไม่พลาด — ธรรมชาติคือพันธมิตร",
     "hit_die": 10,
-    "saving_throws": ["str", "dex"],
-    "skill_choices": {"count": 3, "options": ["animal_handling", "athletics", "insight", "investigation", "nature", "perception", "stealth", "survival"]},
+    "saving_throws": [
+      "str",
+      "dex"
+    ],
+    "skill_choices": {
+      "count": 3,
+      "options": [
+        "animal_handling",
+        "athletics",
+        "insight",
+        "investigation",
+        "nature",
+        "perception",
+        "stealth",
+        "survival"
+      ]
+    },
     "armor_training_th": "เกราะเบา เกราะกลาง และโล่",
     "weapon_training_th": "อาวุธพื้นฐานและอาวุธสงคราม",
-    "base_ac": {"kind": "light", "value": 12},
-    "primary_abilities": ["dex", "wis", "con"],
-    "features": [
-      {"key": "spellcasting", "name_th": "เวทแห่งพงไพร", "summary_th": "คาถาจากสายใยธรรมชาติ"},
-      {"key": "favored_enemy", "name_th": "เหยื่อในสายตา", "summary_th": "ตราเป้าหมายด้วย Hunter's Mark"}
+    "base_ac": {
+      "kind": "light",
+      "value": 12
+    },
+    "primary_abilities": [
+      "dex",
+      "wis",
+      "con"
     ],
-    "spellcasting": {"ability": "wis", "cantrips_known": 0, "spellbook_size": 0, "prepared_count": 2, "spell_list": "ranger"},
-    "concept_keywords": ["ธนู", "ป่า", "ล่า", "สัตว์", "ตามรอย", "พราน", "เดินทาง"],
-    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
+    "features": [
+      {
+        "key": "spellcasting",
+        "name_th": "เวทแห่งพงไพร",
+        "summary_th": "คาถาจากสายใยธรรมชาติ"
+      },
+      {
+        "key": "favored_enemy",
+        "name_th": "เหยื่อในสายตา",
+        "summary_th": "ตราเป้าหมายด้วย Hunter's Mark"
+      }
+    ],
+    "spellcasting": {
+      "ability": "wis",
+      "cantrips_known": 0,
+      "spellbook_size": 0,
+      "prepared_count": 2,
+      "spell_list": "ranger"
+    },
+    "concept_keywords": [
+      "ธนู",
+      "ป่า",
+      "ล่า",
+      "สัตว์",
+      "ตามรอย",
+      "พราน",
+      "เดินทาง"
+    ],
+    "source_id": "srd521-chapter-3",
+    "source_kind": "srd",
+    "content_status": "official"
   },
   {
-    "definition_id": "class:rogue", "definition_version": 1,
-    "name": "rogue", "name_th": "นักย่องเบา",
+    "definition_id": "class:rogue",
+    "definition_version": 1,
+    "name": "rogue",
+    "support_status": "FULLY_SUPPORTED",
+    "name_th": "นักย่องเบา",
     "pitch_th": "เงา ความแม่นยำ และไหวพริบ — ชนะด้วยจังหวะที่คู่ต่อสู้ไม่ทันเห็น",
     "hit_die": 8,
-    "saving_throws": ["dex", "int"],
-    "skill_choices": {"count": 4, "options": ["acrobatics", "athletics", "deception", "insight", "intimidation", "investigation", "perception", "persuasion", "sleight_of_hand", "stealth"]},
+    "saving_throws": [
+      "dex",
+      "int"
+    ],
+    "skill_choices": {
+      "count": 4,
+      "options": [
+        "acrobatics",
+        "athletics",
+        "deception",
+        "insight",
+        "intimidation",
+        "investigation",
+        "perception",
+        "persuasion",
+        "sleight_of_hand",
+        "stealth"
+      ]
+    },
     "armor_training_th": "เกราะเบา",
     "weapon_training_th": "อาวุธพื้นฐานและอาวุธสงครามที่มีคุณสมบัติ Finesse/Light",
-    "base_ac": {"kind": "light", "value": 11},
-    "primary_abilities": ["dex", "int", "con"],
+    "base_ac": {
+      "kind": "light",
+      "value": 11
+    },
+    "primary_abilities": [
+      "dex",
+      "int",
+      "con"
+    ],
     "features": [
-      {"key": "expertise", "name_th": "ความเชี่ยวชาญ", "summary_th": "เก่งเป็นพิเศษในทักษะที่เลือก (โบนัสความถนัดคูณสอง)", "expertise_choice": {"count": 2, "from": "proficient"}},
-      {"key": "sneak_attack", "name_th": "จู่โจมลอบกัด", "summary_th": "ดาเมจพิเศษ 1d6 เมื่อได้เปรียบ"},
-      {"key": "thieves_cant", "name_th": "ภาษาลับโจร", "summary_th": "สื่อสารลับกับคนในวงการ"}
+      {
+        "key": "expertise",
+        "name_th": "ความเชี่ยวชาญ",
+        "summary_th": "เก่งเป็นพิเศษในทักษะที่เลือก (โบนัสความถนัดคูณสอง)",
+        "expertise_choice": {
+          "count": 2,
+          "from": "proficient"
+        }
+      },
+      {
+        "key": "sneak_attack",
+        "name_th": "จู่โจมลอบกัด",
+        "summary_th": "ดาเมจพิเศษ 1d6 เมื่อได้เปรียบ"
+      },
+      {
+        "key": "thieves_cant",
+        "name_th": "ภาษาลับโจร",
+        "summary_th": "สื่อสารลับกับคนในวงการ"
+      }
     ],
     "spellcasting": null,
-    "concept_keywords": ["มีด", "ลอบ", "ขโมย", "โจร", "เงียบ", "ย่อง", "โกหก", "นักล้วง", "เงา"],
-    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
+    "concept_keywords": [
+      "มีด",
+      "ลอบ",
+      "ขโมย",
+      "โจร",
+      "เงียบ",
+      "ย่อง",
+      "โกหก",
+      "นักล้วง",
+      "เงา"
+    ],
+    "source_id": "srd521-chapter-3",
+    "source_kind": "srd",
+    "content_status": "official"
   },
   {
-    "definition_id": "class:sorcerer", "definition_version": 1,
-    "name": "sorcerer", "name_th": "เวทจริต",
+    "definition_id": "class:sorcerer",
+    "definition_version": 1,
+    "name": "sorcerer",
+    "support_status": "UNSUPPORTED",
+    "name_th": "เวทจริต",
     "pitch_th": "ผู้มีพลังเวทใต้จิตใจที่ลุกโชนโดยธรรมชาติ",
     "hit_die": 6,
-    "saving_throws": ["con", "cha"],
-    "skill_choices": {"count": 2, "options": ["arcana", "deception", "insight", "intimidation", "persuasion", "religion"]},
+    "saving_throws": [
+      "con",
+      "cha"
+    ],
+    "skill_choices": {
+      "count": 2,
+      "options": [
+        "arcana",
+        "deception",
+        "insight",
+        "intimidation",
+        "persuasion",
+        "religion"
+      ]
+    },
     "armor_training_th": "เกราะเบา",
     "weapon_training_th": "อาวุธพื้นฐาน",
-    "base_ac": {"kind": "light", "value": 11},
-    "primary_abilities": ["cha", "con", "dex"],
-    "features": [
-      {"key": "spellcasting", "name_th": "พลังเวทจากจิต", "summary_th": "ร่ายคาถาโดยใช้ความสามารถจากสายเลือด"},
-      {"key": "sorcerous_origin", "name_th": "ต้นกำเนิดเวท", "summary_th": "ความแปลกประหลาดของพลังเวท (เลือกภายหลัง)"}
+    "base_ac": {
+      "kind": "light",
+      "value": 11
+    },
+    "primary_abilities": [
+      "cha",
+      "con",
+      "dex"
     ],
-    "spellcasting": {"ability": "cha", "cantrips_known": 2, "spellbook_size": 0, "prepared_count": 2, "spell_list": "sorcerer"},
-    "concept_keywords": ["เวท", "พลัง", "สายเลือด", "แปลก", "จิต"],
-    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
+    "features": [
+      {
+        "key": "spellcasting",
+        "name_th": "พลังเวทจากจิต",
+        "summary_th": "ร่ายคาถาโดยใช้ความสามารถจากสายเลือด"
+      },
+      {
+        "key": "sorcerous_origin",
+        "name_th": "ต้นกำเนิดเวท",
+        "summary_th": "ความแปลกประหลาดของพลังเวท (เลือกภายหลัง)"
+      }
+    ],
+    "spellcasting": {
+      "ability": "cha",
+      "cantrips_known": 2,
+      "spellbook_size": 0,
+      "prepared_count": 2,
+      "spell_list": "sorcerer"
+    },
+    "concept_keywords": [
+      "เวท",
+      "พลัง",
+      "สายเลือด",
+      "แปลก",
+      "จิต"
+    ],
+    "source_id": "srd521-chapter-3",
+    "source_kind": "srd",
+    "content_status": "official"
   },
   {
-    "definition_id": "class:warlock", "definition_version": 1,
-    "name": "warlock", "name_th": "วาร์ล็อก",
+    "definition_id": "class:warlock",
+    "definition_version": 1,
+    "name": "warlock",
+    "support_status": "UNSUPPORTED",
+    "name_th": "วาร์ล็อก",
     "pitch_th": "ผู้พึ่งพาสัญญากับสิ่งเหนือธรรมชาติและแลกพลังด้วยราคาที่ไม่ใช่แค่เงิน",
     "hit_die": 8,
-    "saving_throws": ["wis", "cha"],
-    "skill_choices": {"count": 2, "options": ["arcana", "deception", "history", "intimidation", "investigation", "nature", "religion"]},
+    "saving_throws": [
+      "wis",
+      "cha"
+    ],
+    "skill_choices": {
+      "count": 2,
+      "options": [
+        "arcana",
+        "deception",
+        "history",
+        "intimidation",
+        "investigation",
+        "nature",
+        "religion"
+      ]
+    },
     "armor_training_th": "เกราะเบา",
     "weapon_training_th": "อาวุธพื้นฐาน",
-    "base_ac": {"kind": "light", "value": 13},
-    "primary_abilities": ["cha", "con", "dex"],
-    "features": [
-      {"key": "spellcasting", "name_th": "พลังสัญญา", "summary_th": "ร่ายคาถาจากสัญญากับปาฏิหาริย์"},
-      {"key": "pact_magic", "name_th": "เวทสัญญา", "summary_th": "พลังสัญญาแผ่ขยายผ่านผู้คุ้มครอง"}
+    "base_ac": {
+      "kind": "light",
+      "value": 13
+    },
+    "primary_abilities": [
+      "cha",
+      "con",
+      "dex"
     ],
-    "spellcasting": {"ability": "cha", "cantrips_known": 2, "spellbook_size": 0, "prepared_count": 2, "spell_list": "warlock"},
-    "concept_keywords": ["สัญญา", "ปริศนา", "ปีศาจ", "ลึกลับ", "พลัง"],
-    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
+    "features": [
+      {
+        "key": "spellcasting",
+        "name_th": "พลังสัญญา",
+        "summary_th": "ร่ายคาถาจากสัญญากับปาฏิหาริย์"
+      },
+      {
+        "key": "pact_magic",
+        "name_th": "เวทสัญญา",
+        "summary_th": "พลังสัญญาแผ่ขยายผ่านผู้คุ้มครอง"
+      }
+    ],
+    "spellcasting": {
+      "ability": "cha",
+      "cantrips_known": 2,
+      "spellbook_size": 0,
+      "prepared_count": 2,
+      "spell_list": "warlock"
+    },
+    "concept_keywords": [
+      "สัญญา",
+      "ปริศนา",
+      "ปีศาจ",
+      "ลึกลับ",
+      "พลัง"
+    ],
+    "source_id": "srd521-chapter-3",
+    "source_kind": "srd",
+    "content_status": "official"
   },
   {
-    "definition_id": "class:wizard", "definition_version": 1,
-    "name": "wizard", "name_th": "จอมเวท",
+    "definition_id": "class:wizard",
+    "definition_version": 1,
+    "name": "wizard",
+    "support_status": "FULLY_SUPPORTED",
+    "name_th": "จอมเวท",
     "pitch_th": "เวทมนตร์ที่มาจากการเรียน การจดจำ และการฝึกฝน — ความรู้คือพลัง",
     "hit_die": 6,
-    "saving_throws": ["int", "wis"],
-    "skill_choices": {"count": 2, "options": ["arcana", "history", "insight", "investigation", "medicine", "nature", "religion"]},
+    "saving_throws": [
+      "int",
+      "wis"
+    ],
+    "skill_choices": {
+      "count": 2,
+      "options": [
+        "arcana",
+        "history",
+        "insight",
+        "investigation",
+        "medicine",
+        "nature",
+        "religion"
+      ]
+    },
     "armor_training_th": "ไม่สวมเกราะ",
     "weapon_training_th": "อาวุธพื้นฐาน",
-    "base_ac": {"kind": "unarmored", "value": 10},
-    "primary_abilities": ["int", "dex", "con"],
-    "features": [
-      {"key": "spellcasting", "name_th": "การร่ายเวท", "summary_th": "ร่ายคาถาจากตำราด้วยสติปัญญา"},
-      {"key": "ritual_adept", "name_th": "ผู้ชำนาญพิธี", "summary_th": "ร่ายคาถาพิธีกรรมจากตำราได้โดยไม่ใช้ช่องเวท"},
-      {"key": "arcane_recovery", "name_th": "ฟื้นพลังเวท", "summary_th": "ฟื้นช่องเวทบางส่วนหลังพักสั้น วันละครั้ง", "resource_id": "resource:arcane_recovery"}
+    "base_ac": {
+      "kind": "unarmored",
+      "value": 10
+    },
+    "primary_abilities": [
+      "int",
+      "dex",
+      "con"
     ],
-    "spellcasting": {"ability": "int", "cantrips_known": 3, "spellbook_size": 6, "prepared_count": 4, "spell_list": "wizard"},
-    "concept_keywords": ["เวท", "คาถา", "ตำรา", "เรียน", "ความรู้", "จอมเวท", "เมจ", "ห้องสมุด", "ศึกษา"],
-    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
+    "features": [
+      {
+        "key": "spellcasting",
+        "name_th": "การร่ายเวท",
+        "summary_th": "ร่ายคาถาจากตำราด้วยสติปัญญา"
+      },
+      {
+        "key": "ritual_adept",
+        "name_th": "ผู้ชำนาญพิธี",
+        "summary_th": "ร่ายคาถาพิธีกรรมจากตำราได้โดยไม่ใช้ช่องเวท"
+      },
+      {
+        "key": "arcane_recovery",
+        "name_th": "ฟื้นพลังเวท",
+        "summary_th": "ฟื้นช่องเวทบางส่วนหลังพักสั้น วันละครั้ง",
+        "resource_id": "resource:arcane_recovery"
+      }
+    ],
+    "spellcasting": {
+      "ability": "int",
+      "cantrips_known": 3,
+      "spellbook_size": 6,
+      "prepared_count": 4,
+      "spell_list": "wizard"
+    },
+    "concept_keywords": [
+      "เวท",
+      "คาถา",
+      "ตำรา",
+      "เรียน",
+      "ความรู้",
+      "จอมเวท",
+      "เมจ",
+      "ห้องสมุด",
+      "ศึกษา"
+    ],
+    "source_id": "srd521-chapter-3",
+    "source_kind": "srd",
+    "content_status": "official"
   }
 ]

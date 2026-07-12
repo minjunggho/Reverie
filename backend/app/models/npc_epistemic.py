@@ -12,7 +12,7 @@ and persistent across sessions.
 """
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Float, Integer, String, Text
+from sqlalchemy import Boolean, Float, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, fk_id, pk_column
@@ -62,11 +62,15 @@ class NPCRelationship(Base, TimestampMixin):
 
 class NPCMemory(Base, TimestampMixin):
     __tablename__ = "npc_memories"
+    __table_args__ = (
+        # Recall is always "this NPC's memories of this subject".
+        Index("ix_npc_memories_npc_subject", "npc_id", "subject_ref"),
+    )
 
     id: Mapped[str] = pk_column()
     npc_id: Mapped[str] = fk_id("npcs.id")
     # The character/entity this memory is ABOUT (whose action it records).
-    subject_ref: Mapped[str] = mapped_column(String(80), index=True)
+    subject_ref: Mapped[str] = mapped_column(String(80))
     event_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     memory_type: Mapped[str] = mapped_column(String(24), default="INTERACTION")
     summary: Mapped[str] = mapped_column(Text, default="")

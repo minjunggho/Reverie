@@ -904,10 +904,9 @@ class BuildFlow:
         return self._spell_selection_step(data, channel_id, key=target)
 
     async def _cancel_draft(self, draft: CharacterDraft, channel_id: str) -> BridgeResult:
-        async with self.db.unit_of_work() as s:
-            row = await s.get(CharacterDraft, draft.id)
-            if row is not None and row.status == "ACTIVE":
-                row.status = "CANCELLED"
+        from app.services.campaigns.draft_store import close_draft
+
+        await close_draft(self.db, draft.id, status="CANCELLED")
         return BridgeResult(handled=True, responses=[OutboundMessage(
             channel_id,
             "ยกเลิกการสร้างตัวละครนี้แล้ว ข้อมูลของผู้เล่นคนอื่นไม่ถูกเปลี่ยนแปลง",
@@ -1018,9 +1017,10 @@ class BuildFlow:
         return uniq
 
     async def _save(self, draft: CharacterDraft, data: dict) -> None:
-        async with self.db.unit_of_work() as s:
-            row = await s.get(CharacterDraft, draft.id)
-            row.data = data
+        from app.services.campaigns.draft_store import save_draft
+
+        # Compare-and-update on draft.version — never a blind overwrite.
+        await save_draft(self.db, draft, data)
 
 
 # ---------- module helpers ------------------------------------------------------------

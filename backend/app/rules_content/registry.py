@@ -158,6 +158,12 @@ class ClassDef(_Def):
     name: str
     name_th: str
     pitch_th: str
+    # Honest engine-support declaration. Only FULLY_SUPPORTED classes are
+    # selectable in character creation; unfinished content stays in the pack
+    # (never deleted) but is never offered as playable.
+    support_status: Literal[
+        "FULLY_SUPPORTED", "PARTIALLY_SUPPORTED", "UNSUPPORTED"
+    ] = "UNSUPPORTED"
     hit_die: int
     saving_throws: list[str]
     skill_choices: dict[str, Any]          # {"count": n, "options": [...]|"any"}
@@ -329,6 +335,16 @@ class RulesRegistry:
                     class_name, "class", f"missing key {class_name!r}",
                     "every selectable class to have a ClassDef",
                 )
+        # The explicit per-class declaration, the manifest, and the engine must
+        # all agree: selectable ⇔ FULLY_SUPPORTED.
+        fully = {name for name, cls in self.classes.items()
+                 if cls.support_status == "FULLY_SUPPORTED"}
+        if fully != selectable:
+            add_issue(
+                "*", "support_status",
+                f"FULLY_SUPPORTED classes {sorted(fully)!r}",
+                f"exactly the selectable classes {sorted(selectable)!r}",
+            )
 
         alias_index: dict[str, set[str]] = {}
         feature_names = {normalize_choice_name(name) for name in _KNOWN_CLASS_FEATURE_NAMES}
