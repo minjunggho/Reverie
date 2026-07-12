@@ -42,12 +42,32 @@ class LocationService:
             raise NotFoundError(f"location {location_id} not found")
         return loc
 
-    async def latest_location(self, campaign_id: str) -> Location | None:
-        """Most recently created location — the continuity default for reopening."""
-        return (
+    async def only_location(self, campaign_id: str) -> Location | None:
+        """The campaign's single location, or None when there are zero or several.
+        (Unambiguous by count — never 'most recently created'; creation order is
+        not campaign intent.)"""
+        rows = (
             await self.session.execute(
-                select(Location)
-                .where(Location.campaign_id == campaign_id)
-                .order_by(Location.created_at.desc())
+                select(Location).where(Location.campaign_id == campaign_id).limit(2)
             )
-        ).scalars().first()
+        ).scalars().all()
+        return rows[0] if len(rows) == 1 else None
+
+    async def find_by_name(self, campaign_id: str, name: str) -> Location | None:
+        """Owner-facing lookup by exact name (case-insensitive fallback)."""
+        wanted = (name or "").strip()
+        if not wanted:
+            return None
+        rows = (
+            await self.session.execute(
+                select(Location).where(Location.campaign_id == campaign_id)
+            )
+        ).scalars().all()
+        for loc in rows:
+            if loc.name == wanted:
+                return loc
+        low = wanted.lower()
+        for loc in rows:
+            if loc.name.lower() == low:
+                return loc
+        return None

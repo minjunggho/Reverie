@@ -134,6 +134,9 @@ async def walk_nara_creation(table, author="owner-1", name="DM"):
     assert "Class" in (r.responses[0].title or "")
     assert "แนะนำ" in r.responses[0].content                # a ⭐ recommendation exists
     r = await table.send("นักย่องเบา (rogue)", author=author, name=name)
+    # Subclass preview (planned, honest about not being mechanical at level 1).
+    assert "Subclass" in (r.responses[0].title or "")
+    r = await table.send("ขโมย (thief)", author=author, name=name)
     assert "Species" in (r.responses[0].title or "")
     r = await table.send("มนุษย์ (human)", author=author, name=name)
     assert "Background" in (r.responses[0].title or "")
@@ -177,6 +180,7 @@ async def test_guided_creation_conversation_produces_hooks(db, provider):
         assert len(nara.proficiencies) == 7
         assert "stealth" in nara.proficiencies              # from criminal background
         assert nara.expertise == ["deception", "sleight_of_hand"]
+        assert nara.planned_subclass == "thief"             # planned, not yet mechanical
         assert nara.save_proficiencies == ["dex", "int"]
         assert nara.max_hp == 8 + 1                         # d8 + CON(+1)
         hooks = nara.hooks or {}

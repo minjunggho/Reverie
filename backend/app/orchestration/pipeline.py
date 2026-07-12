@@ -404,6 +404,21 @@ class CommittedActionPipeline:
         force here (Fix 3)."""
         from app.npcs import NPCSocialService
 
+        # Record the committed social action FIRST so each NPC's episodic memory can
+        # link to its canonical source event (the memory loop, §10).
+        async with self.db.unit_of_work() as s:
+            scene_row0 = await SceneService(s).get_active_scene(ctx.session_id) if ctx.session_id else None
+            scene_id0 = scene_row0.id if scene_row0 else None
+            actor = entity_ref("character", ctx.character_id)
+            source_event = await EventService(s).record(
+                campaign_id=ctx.campaign_id, session_id=ctx.session_id, scene_id=scene_id0,
+                event_type=EventType.PLAYER_ACTION_COMMITTED, actor_entity=actor,
+                target_entities=[e.entity_ref for e in npc_targets],
+                payload={"action_text": action_text, "summary": action_text, "social": True},
+                visibility=Visibility.PARTY, narrative_significance=15,
+            )
+            source_event_id = source_event.id
+
         social_svc = NPCSocialService(self.db, self.provider)
         responses: list[OutboundMessage] = []
         for npc_ec in npc_targets[:4]:
@@ -412,6 +427,7 @@ class CommittedActionPipeline:
                 campaign_id=ctx.campaign_id, npc_id=npc_id,
                 listener_ref=entity_ref("character", ctx.character_id),
                 utterance=action_text, session_id=ctx.session_id,
+                source_event_id=source_event_id,
             )
             responses.append(OutboundMessage(
                 ctx.channel_id, social.utterance, kind=MessageKind.NPC_DIALOGUE,
@@ -422,13 +438,6 @@ class CommittedActionPipeline:
             scene_row = await SceneService(s).get_active_scene(ctx.session_id) if ctx.session_id else None
             scene_id = scene_row.id if scene_row else None
             actor = entity_ref("character", ctx.character_id)
-            await EventService(s).record(
-                campaign_id=ctx.campaign_id, session_id=ctx.session_id, scene_id=scene_id,
-                event_type=EventType.PLAYER_ACTION_COMMITTED, actor_entity=actor,
-                target_entities=[e.entity_ref for e in npc_targets],
-                payload={"action_text": action_text, "summary": action_text, "social": True},
-                visibility=Visibility.PARTY, narrative_significance=15,
-            )
             pm = await s.get(ProcessedMessage, ctx.processed_message_id) if ctx.processed_message_id else None
             if pm is not None:
                 pm.stage = ProcessingStage.SENT.value

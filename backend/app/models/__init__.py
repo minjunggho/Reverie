@@ -16,12 +16,13 @@ from app.models.canon_import import CanonImport
 from app.models.character import Character
 from app.models.character_draft import CharacterDraft
 from app.models.combat import Combatant, CombatEncounter
+from app.models.economy import CurrencyTransaction, Wallet
 from app.models.event import Event
 from app.models.items import InventoryEntry, ItemDefinition
 from app.models.knowledge import KnowledgeRecord, Secret
 from app.models.location import Location
 from app.models.npc import NPC
-from app.models.npc_epistemic import NPCFact, NPCRelationship
+from app.models.npc_epistemic import NPCFact, NPCMemory, NPCRelationship
 from app.models.processed_message import ProcessedMessage
 from app.models.progression import (
     ActiveEffect,
@@ -48,6 +49,7 @@ __all__ = [
     "NPC",
     "NPCFact",
     "NPCRelationship",
+    "NPCMemory",
     "ProcessedMessage",
     "KnowledgeRecord",
     "Secret",
@@ -64,4 +66,6 @@ __all__ = [
     "ActiveEffect",
     "LocationConnection",
     "CampaignCanonRecord",
+    "Wallet",
+    "CurrencyTransaction",
 ]

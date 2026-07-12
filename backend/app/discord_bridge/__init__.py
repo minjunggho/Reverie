@@ -5,7 +5,15 @@ to the bot. DTOs are imported eagerly (many engine services build OutboundMessag
 the bridge classes are exposed lazily to avoid import cycles with the services they
 orchestrate.
 """
-from app.discord_bridge.dto import BridgeResult, InboundAttachment, InboundMessage, OutboundMessage
+from app.discord_bridge.dto import (
+    ActionButton,
+    BridgeResult,
+    InboundAttachment,
+    InboundMessage,
+    OutboundMessage,
+    SelectMenu,
+    SelectOption,
+)
 
 __all__ = [
     "DiscordBridge",
@@ -15,6 +23,9 @@ __all__ = [
     "InboundAttachment",
     "OutboundMessage",
     "BridgeResult",
+    "SelectOption",
+    "SelectMenu",
+    "ActionButton",
 ]
 
 

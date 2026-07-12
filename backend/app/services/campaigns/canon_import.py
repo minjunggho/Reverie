@@ -394,6 +394,28 @@ class CanonImportService:
         await self.session.flush()
         return row
 
+    async def create_ai_draft(self, *, campaign_id: str, uploader_member_id: str,
+                              premise: str, proposal: CampaignProposal) -> CanonImport:
+        """Store an AI-generated world proposal for owner review. Identical review/
+        approve lifecycle as a file import; provenance is AI_PROPOSED so committed
+        canon stays marked as machine-proposed (owner-approved), never as authored."""
+        review = _validate(proposal)
+        payload = proposal.model_dump(mode="json")
+        digest = hashlib.sha256(
+            (premise + json.dumps(payload, sort_keys=True)).encode("utf-8")).hexdigest()
+        row = CanonImport(
+            campaign_id=campaign_id, uploader_member_id=uploader_member_id,
+            filename="ai-campaign-proposal.json", content_sha256=digest,
+            source_text=premise,
+            proposal={**payload, "_review": {"counts": review.counts,
+                                             "warnings": review.warnings},
+                      "_source": "AI_PROPOSED"},
+            status="PENDING_REVIEW",
+        )
+        self.session.add(row)
+        await self.session.flush()
+        return row
+
     async def get(self, import_id: str, campaign_id: str) -> CanonImport:
         row = await self.session.get(CanonImport, import_id)
         if row is None or row.campaign_id != campaign_id:
@@ -405,7 +427,13 @@ class CanonImportService:
         if row.status != "PENDING_REVIEW":
             raise ConflictError(f"import is already {row.status.lower()}")
         proposal = CampaignProposal.model_validate(
-            {k: v for k, v in row.proposal.items() if k != "_review"})
+            {k: v for k, v in row.proposal.items() if k not in ("_review", "_source")})
+        # Explicit imported canon outranks AI-generated content — committed rows carry
+        # which one they are so later contradictions are decidable.
+        loc_provenance = ("AI_PROPOSED_CANON" if row.proposal.get("_source") == "AI_PROPOSED"
+                          else "IMPORTED")
+        record_provenance = ("AI_PROPOSED_CANON" if loc_provenance == "AI_PROPOSED_CANON"
+                             else "IMPORTED_CANON")
 
         existing = set((await self.session.execute(
             select(Location.name).where(Location.campaign_id == campaign_id))).scalars())
@@ -421,7 +449,7 @@ class CanonImportService:
                 description_obvious=item.obvious, description_focused=item.focused,
                 description_hidden=item.hidden, location_type=item.location_type,
                 weather=item.weather, current_activity=item.current_activity,
-                provenance="IMPORTED", connections=[],
+                provenance=loc_provenance, connections=[],
                 state={"canon_import_id": row.id, "source_key": item.key})
             self.session.add(loc)
             await self.session.flush()
@@ -445,7 +473,7 @@ class CanonImportService:
         for wf in proposal.world_facts:
             self.session.add(CampaignCanonRecord(
                 campaign_id=campaign_id, category=wf.category, fact=wf.fact,
-                visibility=wf.visibility, provenance="IMPORTED_CANON", importance=20))
+                visibility=wf.visibility, provenance=record_provenance, importance=20))
 
         # 3. secrets (DM) + their clues (DM-scoped canon records).
         secret_by_key: dict[str, Secret] = {}
@@ -457,7 +485,7 @@ class CanonImportService:
             for clue in sec.clues:
                 self.session.add(CampaignCanonRecord(
                     campaign_id=campaign_id, category="clue", fact=clue,
-                    visibility=Visibility.DM_ONLY.value, provenance="IMPORTED_CANON",
+                    visibility=Visibility.DM_ONLY.value, provenance=record_provenance,
                     scope_type="secret", scope_id=s.id, importance=30))
 
         # 4. NPCs at their canonical location.
@@ -483,7 +511,7 @@ class CanonImportService:
         for pr in proposal.protocols:
             self.session.add(CampaignCanonRecord(
                 campaign_id=campaign_id, category="protocol", fact=pr.title,
-                visibility=pr.visibility, provenance="IMPORTED_CANON", importance=25,
+                visibility=pr.visibility, provenance=record_provenance, importance=25,
                 data={"key": pr.key, "rules": list(pr.rules), "known_by": list(pr.known_by)}))
 
         # 6. campaign-level canon + session prep + starting location.
@@ -496,6 +524,8 @@ class CanonImportService:
             prep = dict(proposal.session_prep or {})
             if proposal.starting_location and proposal.starting_location in by_key:
                 prep["opening_location_id"] = by_key[proposal.starting_location].id
+                # Canonical anchor: explicit imported starting location (E7).
+                campaign.starting_location_id = by_key[proposal.starting_location].id
             campaign.session_prep = prep
 
         row.status = "APPROVED"

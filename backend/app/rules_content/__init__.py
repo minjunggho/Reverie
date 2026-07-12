@@ -23,6 +23,12 @@ from app.rules_content.registry import (
     SpellDef,
     get_registry,
 )
+from app.rules_content.choice_names import (
+    ChoiceOption,
+    ChoiceResolution,
+    normalize_choice_name,
+    resolve_choice_name,
+)
 
 __all__ = [
     "RULESET_ID",
@@ -35,4 +41,8 @@ __all__ = [
     "SpellDef",
     "ResourceDef",
     "SkillDef",
+    "ChoiceOption",
+    "ChoiceResolution",
+    "normalize_choice_name",
+    "resolve_choice_name",
 ]

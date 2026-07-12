@@ -67,11 +67,30 @@ async def test_full_onboarding_then_play(db, provider):
     r = await table.send("!rv session start", author="u-p1", name="กี้")
     assert "เจ้าของโต๊ะ" in r.responses[0].content
 
+    # No world yet → a clear setup-incomplete notice (NEVER an invented tavern),
+    # pointing at the three ways to establish canon.
+    r = await table.send("!rv session start", author="u-owner", name="DM")
+    assert r.responses[0].kind == MessageKind.TABLE_NOTICE
+    assert "campaign create" in r.responses[0].content
+    from app.models.location import Location as _Loc
+    from app.models.session import Session as _Sess
+    async with db.session() as s:
+        assert (await s.execute(select(_Loc))).scalars().first() is None   # no tavern
+        assert (await s.execute(select(_Sess))).scalars().first() is None  # no session
+
+    # The owner creates the world from one idea and approves it.
+    r = await table.send("!rv campaign create เมืองท่าที่เรือมาถึงแต่ไม่มีลำไหนออก",
+                         author="u-owner", name="DM")
+    import re as _re
+    approve_id = _re.search(r"approve (\w+)", r.responses[0].content).group(1)
+    await table.send(f"!rv campaign import approve {approve_id}", author="u-owner", name="DM")
+
     r = await table.send("!rv session start", author="u-owner", name="DM")
     kinds = [m.kind for m in r.responses]
     assert kinds[0] == MessageKind.SESSION_TITLE
     assert MessageKind.SCENE_FRAME in kinds
     assert "เซสชันที่ 1" in (r.responses[0].title or "")
+    assert "ลานเวรยามเก่า" in r.responses[0].data["footer"]  # the approved start
 
     # A committed Thai action now pauses at the dice ritual (PLAYER_CLICK default):
     r = await table.send("! ผมค่อยๆ ย่องไปดูหน้าต่าง ไม่ให้ยามเห็น", author="u-p1", name="กี้")

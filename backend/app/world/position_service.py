@@ -35,6 +35,36 @@ class PositionService:
                 Character.location_id == location_id)
         )).scalars())
 
+    async def set_follow(self, *, follower_id: str, leader_id: str) -> None:
+        """Record explicit travel consent: `follower` agrees to travel with `leader`.
+        A character never follows itself. This is the ONLY way a character other than
+        the actor moves during travel (besides an involuntary physical effect)."""
+        if follower_id == leader_id:
+            return
+        follower = await self.session.get(Character, follower_id)
+        if follower is not None:
+            follower.following_character_id = leader_id
+
+    async def stop_follow(self, *, follower_id: str) -> None:
+        follower = await self.session.get(Character, follower_id)
+        if follower is not None:
+            follower.following_character_id = None
+
+    async def consenting_followers(
+        self, *, campaign_id: str, leader_id: str, at_location_id: str
+    ) -> list[str]:
+        """Character ids that have explicitly agreed to travel with `leader` AND are
+        co-located with them right now. Someone who wandered off (different location)
+        is not dragged along; someone who never consented is never moved."""
+        rows = (await self.session.execute(
+            select(Character).where(
+                Character.campaign_id == campaign_id,
+                Character.following_character_id == leader_id,
+                Character.location_id == at_location_id,
+            )
+        )).scalars()
+        return [c.id for c in rows if c.id != leader_id]
+
     async def move(
         self, *, character_id: str, to_location_id: str, campaign_id: str,
         session_id: str | None = None, from_location_id: str | None = None,

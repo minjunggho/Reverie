@@ -71,6 +71,18 @@ async def test_two_player_full_journey(db, provider):
     r = await table.send("ไม่มี ข้ามได้", OWNER, "นิค")
     assert "พร้อมแล้ว" in r.responses[0].content
 
+    # ---- 1b. the owner turns ONE idea into a reviewable world (AI proposes,
+    #          the owner approves, only then does it become canon) ----------------
+    r = await table.send(
+        "!rv campaign create หมู่บ้านชายแดนที่ชื่อผู้คนค่อยๆ หายไปจากทะเบียน", OWNER, "นิค")
+    assert "ยังไม่มีอะไรเป็น canon" in r.responses[0].content
+    assert "ลานเวรยามเก่า" in r.responses[0].content         # reviewable proposal
+    import re as _re
+
+    approve_id = _re.search(r"approve (\w+)", r.responses[0].content).group(1)
+    r = await table.send(f"!rv campaign import approve {approve_id}", OWNER, "นิค")
+    assert "canon" in r.responses[0].content
+
     # ---- 2. both players join; P1 creates via the immersive two-stage flow ------
     await table.send("!rv join", OWNER, "นิค")   # owner also plays
     await table.send("!rv join", P2, "ไหม")
@@ -98,10 +110,13 @@ async def test_two_player_full_journey(db, provider):
         await s.flush()
         secret_id = secret.id
 
-    # ---- 4. Session 1 opening tied to an established character hook -------------
+    # ---- 4. Session 1 opening tied to an established character hook, at the
+    #          APPROVED world's starting location (never an invented tavern) ------
     r = await table.send("!rv session start", OWNER, "นิค")
     kinds = [m.kind for m in r.responses]
     assert kinds[0] == MessageKind.SESSION_TITLE
+    assert "ลานเวรยามเก่า" in r.responses[0].data["footer"]  # canonical start
+    assert "วันที่ 1" in r.responses[0].data["footer"]       # authoritative time
     frame = next(m for m in r.responses if m.kind == MessageKind.SCENE_FRAME)
     assert frame.data.get("decision_prompt")                # one open decision point
     async with db.session() as s:

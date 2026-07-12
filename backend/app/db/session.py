@@ -10,7 +10,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
-from sqlalchemy import event
+from sqlalchemy import event, inspect, text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -60,6 +60,30 @@ class Database:
 
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            if self.url.startswith("sqlite"):
+                await conn.run_sync(self._ensure_sqlite_compat_columns)
+
+    def _ensure_sqlite_compat_columns(self, conn) -> None:
+        """Backfill missing columns for older local SQLite databases.
+
+        The app model added campaign anchor columns after some developers had
+        already created a local SQLite file. `create_all()` alone will not alter
+        an existing table, so this compatibility step adds the missing columns
+        lazily on startup.
+        """
+        inspector = inspect(conn)
+        if "campaigns" not in inspector.get_table_names():
+            return
+
+        existing_columns = {column["name"] for column in inspector.get_columns("campaigns")}
+        if "starting_location_id" not in existing_columns:
+            conn.execute(text("ALTER TABLE campaigns ADD COLUMN starting_location_id VARCHAR(32)"))
+        if "current_party_anchor_id" not in existing_columns:
+            conn.execute(text("ALTER TABLE campaigns ADD COLUMN current_party_anchor_id VARCHAR(32)"))
+        if "default_session_opening" not in existing_columns:
+            conn.execute(text("ALTER TABLE campaigns ADD COLUMN default_session_opening TEXT NOT NULL DEFAULT ''"))
+        if "world_model_version" not in existing_columns:
+            conn.execute(text("ALTER TABLE campaigns ADD COLUMN world_model_version INTEGER NOT NULL DEFAULT 2"))
 
     async def drop_all(self) -> None:
         import app.models  # noqa: F401

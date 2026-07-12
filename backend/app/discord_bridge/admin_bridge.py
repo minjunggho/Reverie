@@ -14,8 +14,13 @@ from __future__ import annotations
 import shlex
 from dataclasses import dataclass
 
+from sqlalchemy import select
+
 from app.core.errors import ReverieError
 from app.discord_bridge.dto import BridgeResult, InboundMessage, OutboundMessage
+from app.entities.directory import normalize_name
+from app.models.campaign import CampaignMember
+from app.models.character import Character
 from app.models.enums import MemberRole, SceneMode
 from app.presentation import MessageKind
 from app.services.campaigns import CampaignService, CharacterService
@@ -33,17 +38,22 @@ from app.services.views import (
     build_skill_explain,
     build_spells_view,
 )
-from app.world import LocationService
+from app.world import LocationService, PositionService
 
 ADMIN_PREFIX = "!rv"
 
 HELP_LINES = (
     "`!rv campaign new <ชื่อ>` — เปิดโต๊ะใหม่ในห้องนี้",
+    "`!rv campaign create <ไอเดีย>` — (เจ้าของโต๊ะ) ให้ AI เสนอโลกทั้งใบจากไอเดียสั้นๆ",
+    "`!rv campaign import` — (เจ้าของโต๊ะ) นำเข้าโลกจากไฟล์ .md/.json ของเจ้าเอง",
     "`!rv setup` — (เจ้าของโต๊ะ) ตั้งโทนและสไตล์ของโต๊ะ (Session Zero)",
     "`!rv join` — นั่งร่วมโต๊ะ",
     "`!rv character` — สร้างตัวละครแบบคุยกัน (แนะนำ) · หรือ `!rv character <ชื่อ> <คลาส>`",
+    "`!rv resume` — เปิดแบบร่างตัวละครที่สร้างค้างไว้จากขั้นตอนเดิม",
     "`!rv session start` / `!rv session end` — เริ่ม/จบเซสชัน (เจ้าของโต๊ะ)",
     "`!rv sheet` · `!rv spells` · `!rv inventory` · `!rv journal` · `!rv party` — ดูตัวละคร/คาถา/ของ/บันทึก/ปาร์ตี้",
+    "`!rv wallet` — ถุงเงินของตัวละคร · `!rv time` — เวลาในโลก",
+    "`!rv follow <ชื่อตัวละคร>` / `!rv unfollow` — ตามเดินทางหรือหยุดตามตัวละครนั้น",
     "`!rv skill <ชื่อ>` — ทำไมทักษะนี้ถึงได้เท่านี้",
 )
 
@@ -82,6 +92,7 @@ class AdminBridge:
                 "setup": self._setup,
                 "join": self._join,
                 "character": self._character,
+                "resume": self._resume,
                 "session": self._session,
                 "sheet": self._sheet,
                 "spells": self._spells,
@@ -90,6 +101,11 @@ class AdminBridge:
                 "journal": self._journal,
                 "party": self._party,
                 "status": self._party,  # old alias
+                "wallet": self._wallet,
+                "time": self._time,
+                "follow": self._follow,
+                "unfollow": self._unfollow,
+                "diagnostics": self._diagnostics,
             }.get(cmd)
             if handler is None:
                 return self._notice(inbound, f"ไม่รู้จักคำสั่ง `{cmd}` — พิมพ์ `!rv` เพื่อดูว่าทำอะไรได้บ้าง")
@@ -138,8 +154,13 @@ class AdminBridge:
         sub = ctx.args[0].lower() if ctx.args else ""
         if sub == "import":
             return await self._campaign_import(ctx)
+        if sub == "create":
+            return await self._campaign_create(ctx)
         if sub != "new":
-            return self._notice(ctx.inbound, "Use `!rv campaign new <name>` or attach a file to `!rv campaign import`.")
+            return self._notice(ctx.inbound, (
+                "ใช้ `!rv campaign new <ชื่อ>` เปิดโต๊ะ · "
+                "`!rv campaign create <ไอเดีย>` ให้ AI เสนอโลก · "
+                "หรือแนบไฟล์กับ `!rv campaign import`"))
         name = " ".join(ctx.args[1:]).strip() or "แคมเปญไร้ชื่อ"
         async with self.db.unit_of_work() as s:
             svc = CampaignService(s)
@@ -222,6 +243,62 @@ class AdminBridge:
             kind=MessageKind.TABLE_NOTICE, title="Campaign import review",
         )])
 
+    async def _campaign_create(self, ctx: _Ctx) -> BridgeResult:
+        """AI-assisted campaign creation (§2): one short premise → a reviewable world
+        proposal. Same review/approve lifecycle as `!rv campaign import` — nothing
+        becomes canon until the owner approves."""
+        from app.ai.jobs.campaign_creator import propose_campaign_world
+        from app.services.campaigns.canon_import import CanonImportService
+
+        campaign, member = await self._resolve(ctx)
+        if campaign is None:
+            return self._notice(ctx.inbound, "เปิดโต๊ะก่อน: `!rv campaign new <ชื่อ>`")
+        if member is None or member.role != MemberRole.OWNER.value:
+            return self._notice(ctx.inbound, "เฉพาะเจ้าของโต๊ะเท่านั้นที่สร้างโลกแคมเปญได้")
+        premise = " ".join(ctx.args[1:]).strip()
+        if len(premise) < 10:
+            return self._notice(ctx.inbound, (
+                "เล่าไอเดียแคมเปญมาหน่อย เช่น\n"
+                "`!rv campaign create แคมเปญดาร์กแฟนตาซี ที่ขุนนางผูกขาดเวทมนตร์ "
+                "และสามัญชนถูกห้ามเรียน ผู้เล่นเริ่มจากจน ไร้ชื่อเสียง และหมดทางเลือก`"))
+
+        proposal, review = await propose_campaign_world(
+            self.provider, premise=premise, campaign_name=campaign.name,
+            table_profile=(campaign.config or {}).get("profile", {}),
+        )
+        async with self.db.unit_of_work() as s:
+            row = await CanonImportService(s).create_ai_draft(
+                campaign_id=campaign.id, uploader_member_id=member.id,
+                premise=premise, proposal=proposal,
+            )
+            row_id = row.id
+
+        start_key = proposal.starting_location or "-"
+        loc_lines = []
+        for x in proposal.locations[:12]:
+            mark = " ⭐ จุดเริ่มต้น" if x.key == start_key else ""
+            loc_lines.append(f"• {x.name}{mark}")
+        npc_line = ", ".join(n.name for n in proposal.npcs[:8]) or "-"
+        threat_line = ", ".join(t.name for t in proposal.threats[:6]) or "-"
+        warn_block = ("\n\n⚠️ ข้อควรรู้\n" + "\n".join(f"- {w}" for w in review.warnings[:8])
+                      ) if review.warnings else ""
+        count_line = " · ".join(f"{k}: {v}" for k, v in review.counts.items() if v)
+        body = (
+            f"ข้าเสนอโลกจากไอเดียของเจ้า — **ยังไม่มีอะไรเป็น canon จนกว่าเจ้าจะยืนยัน**\n\n"
+            f"**{proposal.identity_name or campaign.name}**\n{proposal.brief}\n\n"
+            f"**คำถามใหญ่ของเรื่อง:** {proposal.central_question or '-'}\n\n"
+            f"**สถานที่:**\n" + "\n".join(loc_lines) + "\n\n"
+            f"**ตัวละครสำคัญ:** {npc_line}\n"
+            f"**ภัยที่ขยับอยู่:** {threat_line}\n"
+            f"{count_line}{warn_block}\n\n"
+            f"ยืนยัน: `!rv campaign import approve {row_id}`\n"
+            f"ไม่เอา (แล้วลอง create ใหม่ได้): `!rv campaign import reject {row_id}`"
+        )
+        return BridgeResult(handled=True, responses=[OutboundMessage(
+            ctx.inbound.channel_id, body, kind=MessageKind.TABLE_NOTICE,
+            title="✨ ข้อเสนอโลกแคมเปญ — รอเจ้าของโต๊ะรีวิว",
+        )])
+
     async def _setup(self, ctx: _Ctx) -> BridgeResult:
         campaign, member = await self._resolve(ctx)
         if campaign is None:
@@ -276,16 +353,21 @@ class AdminBridge:
         name = " ".join(name_tokens).strip() or "นักผจญภัย"
         preset = CLASS_PRESETS[char_class]
         async with self.db.unit_of_work() as s:
+            from app.services.economy import WalletService
+            from app.services.economy.wallet_service import format_balances
+
             char = await CharacterService(s).create_character(
                 member_id=member.id, name=name, char_class=char_class,
                 abilities=preset["abilities"], proficiencies=preset["proficiencies"],
                 max_hp=preset["max_hp"], ac=preset["ac"], set_active=True,
             )
             gear = await InventoryService(s).grant_starting_gear(character=char)
+            purse = await WalletService(s).grant_starting_funds(character=char)
         fields = [
             {"name": "สาย", "value": CLASS_TH.get(char_class, char_class), "inline": True},
             {"name": "HP / AC", "value": f"{preset['max_hp']} / {preset['ac']}", "inline": True},
             {"name": "🎒 สัมภาระ", "value": "\n".join(f"• {g}" for g in gear), "inline": False},
+            {"name": "💰 ถุงเงิน", "value": format_balances(purse), "inline": False},
         ]
         return BridgeResult(handled=True, responses=[OutboundMessage(
             ctx.inbound.channel_id,
@@ -293,6 +375,22 @@ class AdminBridge:
             kind=MessageKind.CHARACTER_REVEAL, title=f"🎭 {char.name}",
             data={"fields": fields},
         )])
+
+    async def _resume(self, ctx: _Ctx) -> BridgeResult:
+        campaign, member = await self._resolve(ctx)
+        if campaign is None:
+            return self._notice(ctx.inbound, "ยังไม่มีโต๊ะในห้องนี้")
+        if member is None:
+            return self._notice(ctx.inbound, "นั่งร่วมโต๊ะก่อนด้วย `!rv join`")
+        if self.creation_flow is None:
+            return self._notice(
+                ctx.inbound, "ระบบสร้างตัวละครแบบคุยกันยังไม่พร้อมในขณะนี้"
+            )
+        return await self.creation_flow.resume(
+            campaign_id=campaign.id,
+            member_id=member.id,
+            channel_id=ctx.inbound.channel_id,
+        )
 
     # --- views ---------------------------------------------------------------------
     async def _sheet(self, ctx: _Ctx) -> BridgeResult:
@@ -368,6 +466,238 @@ class AdminBridge:
             )
         return BridgeResult(handled=True, responses=[msg])
 
+    async def _wallet(self, ctx: _Ctx) -> BridgeResult:
+        from app.services.economy import WalletService
+        from app.services.economy.wallet_service import format_balances
+
+        campaign, member = await self._resolve(ctx)
+        if member is None:
+            return self._notice(ctx.inbound, "ยังไม่ได้ร่วมโต๊ะ — `!rv join`")
+        async with self.db.unit_of_work() as s:
+            char = await CharacterService(s).get_active_character(member)
+            if char is None:
+                return self._notice(ctx.inbound, "ยังไม่มีตัวละคร — `!rv character`")
+            wallets = WalletService(s)
+            balances = await wallets.balance(char.id)
+            recent = await wallets.recent_transactions(char.id, limit=5)
+            lines = []
+            for tx in recent:
+                sign = {k: v for k, v in (tx.amounts or {}).items()}
+                amt = " ".join(f"{'+' if v > 0 else ''}{v} {k}" for k, v in sign.items())
+                lines.append(f"• {amt} — {tx.reason or tx.transaction_type}")
+            char_name = char.name
+        body = f"**{format_balances(balances)}**"
+        if lines:
+            body += "\n\nรายการล่าสุด:\n" + "\n".join(lines)
+        return BridgeResult(handled=True, responses=[OutboundMessage(
+            ctx.inbound.channel_id, body, kind=MessageKind.TABLE_NOTICE,
+            title=f"💰 ถุงเงินของ {char_name}",
+        )])
+
+    async def _time(self, ctx: _Ctx) -> BridgeResult:
+        from app.core.clock import format_game_time_th
+        from app.models.location import Location
+
+        campaign, member = await self._resolve(ctx)
+        if campaign is None:
+            return self._notice(ctx.inbound, "ยังไม่มีโต๊ะในห้องนี้")
+        async with self.db.session() as s:
+            anchor_name = "-"
+            if campaign.current_party_anchor_id:
+                loc = await s.get(Location, campaign.current_party_anchor_id)
+                if loc is not None:
+                    anchor_name = loc.name
+            active = await SessionService(s).get_active_session(campaign.id)
+        lines = [
+            f"🕰️ {format_game_time_th(campaign.current_game_time)}",
+            f"📍 ปาร์ตี้อยู่แถว: {anchor_name}",
+            f"🎲 เซสชัน: {'กำลังเล่นอยู่' if active else 'ยังไม่เริ่ม'}",
+        ]
+        return BridgeResult(handled=True, responses=[OutboundMessage(
+            ctx.inbound.channel_id, "\n".join(lines), kind=MessageKind.TABLE_NOTICE,
+            title="เวลาในโลก",
+        )])
+
+    async def _follow(self, ctx: _Ctx) -> BridgeResult:
+        """Let the requester's active character explicitly consent to follow a PC."""
+        wanted = " ".join(ctx.args).strip()
+        if not wanted:
+            return self._notice(ctx.inbound, "ใช้: `!rv follow <ชื่อตัวละคร>`")
+
+        async with self.db.unit_of_work() as s:
+            campaigns = CampaignService(s)
+            campaign = await campaigns.resolve_campaign_by_channel(ctx.inbound.channel_id)
+            if campaign is None:
+                return self._notice(ctx.inbound, "ยังไม่มีโต๊ะในห้องนี้")
+            member = await campaigns.resolve_member(
+                campaign.id, ctx.inbound.author_discord_id)
+            if member is None:
+                return self._notice(ctx.inbound, "ยังไม่ได้ร่วมโต๊ะ — `!rv join`")
+
+            follower = await CharacterService(s).get_active_character(member)
+            if (
+                follower is None
+                or follower.campaign_id != campaign.id
+                or follower.owner_member_id != member.id
+            ):
+                return self._notice(ctx.inbound, "ยังไม่มีตัวละคร — `!rv character`")
+
+            # Only active player characters in this campaign are eligible. Resolve
+            # names with the same Unicode-safe exact matcher used by scene entities;
+            # never accept a substring or a client-supplied character id.
+            characters = list((await s.execute(
+                select(Character)
+                .join(CampaignMember, CampaignMember.active_character_id == Character.id)
+                .where(
+                    CampaignMember.campaign_id == campaign.id,
+                    Character.campaign_id == campaign.id,
+                )
+            )).scalars().unique())
+            normalized = normalize_name(wanted)
+            matches = [c for c in characters if normalize_name(c.name) == normalized]
+            if not matches:
+                matches = [
+                    c for c in characters
+                    if normalized in {normalize_name(alias) for alias in (c.aliases or [])}
+                ]
+
+            if not matches:
+                nearby = sorted({
+                    c.name for c in characters
+                    if c.id != follower.id
+                    and follower.location_id is not None
+                    and c.location_id == follower.location_id
+                })
+                hint = (
+                    " ตัวละครที่อยู่ด้วยกันตอนนี้: " + ", ".join(nearby)
+                    if nearby else " ตอนนี้ไม่มีตัวละครอื่นอยู่ที่เดียวกัน"
+                )
+                return self._notice(
+                    ctx.inbound,
+                    f"ไม่พบตัวละครชื่อ **{wanted}** ในแคมเปญนี้.{hint}",
+                )
+            if len(matches) > 1:
+                names = sorted({c.name for c in matches})
+                detail = ", ".join(names) if len(names) > 1 else names[0]
+                return self._notice(
+                    ctx.inbound,
+                    f"ชื่อ **{wanted}** ตรงกับตัวละครมากกว่าหนึ่งคน ({detail}) — "
+                    "โปรดใช้ชื่อเต็มหรือนามแฝงที่ไม่ซ้ำกัน",
+                )
+
+            leader = matches[0]
+            if leader.id == follower.id:
+                return self._notice(ctx.inbound, f"**{follower.name}** ไม่สามารถตามตัวเองได้")
+            if (
+                follower.location_id is None
+                or leader.location_id != follower.location_id
+            ):
+                return self._notice(
+                    ctx.inbound,
+                    f"**{follower.name}** ต้องอยู่ที่เดียวกับ **{leader.name}** ก่อนจึงจะเริ่มตามได้",
+                )
+
+            await PositionService(s).set_follow(
+                follower_id=follower.id, leader_id=leader.id)
+            follower_name, leader_name = follower.name, leader.name
+
+        return self._notice(
+            ctx.inbound,
+            f"**{follower_name}** จะเดินทางตาม **{leader_name}** ตราบใดที่ทั้งคู่ยังอยู่ด้วยกัน",
+        )
+
+    async def _unfollow(self, ctx: _Ctx) -> BridgeResult:
+        """Clear only the requester's active character follow consent."""
+        if ctx.args:
+            return self._notice(
+                ctx.inbound,
+                "ใช้: `!rv unfollow` — คำสั่งนี้หยุดตามให้เฉพาะตัวละครของเจ้า",
+            )
+        async with self.db.unit_of_work() as s:
+            campaigns = CampaignService(s)
+            campaign = await campaigns.resolve_campaign_by_channel(ctx.inbound.channel_id)
+            if campaign is None:
+                return self._notice(ctx.inbound, "ยังไม่มีโต๊ะในห้องนี้")
+            member = await campaigns.resolve_member(
+                campaign.id, ctx.inbound.author_discord_id)
+            if member is None:
+                return self._notice(ctx.inbound, "ยังไม่ได้ร่วมโต๊ะ — `!rv join`")
+
+            follower = await CharacterService(s).get_active_character(member)
+            if (
+                follower is None
+                or follower.campaign_id != campaign.id
+                or follower.owner_member_id != member.id
+            ):
+                return self._notice(ctx.inbound, "ยังไม่มีตัวละคร — `!rv character`")
+
+            leader = None
+            if follower.following_character_id:
+                candidate = await s.get(Character, follower.following_character_id)
+                if candidate is not None and candidate.campaign_id == campaign.id:
+                    leader = candidate
+            if follower.following_character_id is None:
+                return self._notice(
+                    ctx.inbound, f"**{follower.name}** ไม่ได้กำลังตามใครอยู่")
+
+            await PositionService(s).stop_follow(follower_id=follower.id)
+            follower_name = follower.name
+            leader_name = leader.name if leader is not None else None
+
+        if leader_name is not None:
+            text = f"**{follower_name}** ไม่ได้ตาม **{leader_name}** แล้ว"
+        else:
+            text = f"**{follower_name}** หยุดตามแล้ว"
+        return self._notice(ctx.inbound, text)
+
+    async def _diagnostics(self, ctx: _Ctx) -> BridgeResult:
+        """Owner-only deploy verification (E7 §23). Never exposes secrets."""
+        from sqlalchemy import text as _sql_text
+
+        from app.core.config import get_settings
+        from app.core.versions import (
+            IMPORTER_VERSION,
+            MEMORY_SYSTEM_VERSION,
+            PROCESS_STARTED_AT,
+            PROMPT_VERSION,
+            WORLD_MODEL_VERSION,
+            git_sha,
+            rules_content_hash,
+        )
+        from app.rules_content import get_registry
+        from app.rules_content.registry import RULESET_ID
+
+        campaign, member = await self._resolve(ctx)
+        if campaign is None:
+            return self._notice(ctx.inbound, "ยังไม่มีโต๊ะในห้องนี้")
+        if member is None or member.role != MemberRole.OWNER.value:
+            return self._notice(ctx.inbound, "เฉพาะเจ้าของโต๊ะเท่านั้น")
+
+        settings = get_settings()
+        migration_head = "-"
+        async with self.db.session() as s:
+            try:
+                migration_head = (await s.execute(
+                    _sql_text("SELECT version_num FROM alembic_version"))).scalar() or "-"
+            except Exception:  # noqa: BLE001 - table absent under create_all()
+                migration_head = "(schema via create_all)"
+        reg = get_registry()
+        lines = [
+            f"git: `{git_sha()}` · started: {PROCESS_STARTED_AT}",
+            f"db migration head: `{migration_head}`",
+            f"llm: {settings.llm_provider} / {settings.llm_model}",
+            f"prompts: v{PROMPT_VERSION} · importer: v{IMPORTER_VERSION} · memory: v{MEMORY_SYSTEM_VERSION}",
+            f"world model: engine v{WORLD_MODEL_VERSION} · campaign v{campaign.world_model_version}",
+            f"rules: {RULESET_ID} v{reg.rules_content_version} · content `{rules_content_hash()}` · "
+            f"classes={len(reg.classes)} subclasses={len(reg.subclasses)} "
+            f"species={len(reg.species)} backgrounds={len(reg.backgrounds)} "
+            f"spells={len(reg.spells)}",
+        ]
+        return BridgeResult(handled=True, responses=[OutboundMessage(
+            ctx.inbound.channel_id, "\n".join(lines), kind=MessageKind.TABLE_NOTICE,
+            title="🔎 Reverie diagnostics",
+        )])
+
     # --- session lifecycle ------------------------------------------------------------
     async def _session(self, ctx: _Ctx) -> BridgeResult:
         sub = (ctx.args[0].lower() if ctx.args else "")
@@ -399,16 +729,32 @@ class AdminBridge:
             if not attending:
                 return self._notice(ctx.inbound, "ยังไม่มีใครมีตัวละครเลย — `!rv character` ก่อนนะ")
 
-            # Reuse the campaign's latest location; only invent one when none exists.
-            location = await LocationService(s).latest_location(campaign.id)
-            if location is None:
-                location = await LocationService(s).create_location(
-                    campaign_id=campaign.id, name="โรงเตี๊ยมหมาป่าเทา",
-                    description_obvious="โรงเตี๊ยมไม้เก่า ไฟในเตาผิงกำลังลุก มีคนนั่งกระจายอยู่ไม่กี่โต๊ะ",
-                )
-            campaign_id, location_id = campaign.id, location.id
+            # `!rv session start at <ชื่อสถานที่>` — the owner picks the opening
+            # location explicitly (and it becomes the campaign's canonical start).
+            if len(ctx.args) >= 2 and ctx.args[1].lower() in ("at", "ที่"):
+                wanted = " ".join(ctx.args[2:]).strip()
+                named = await LocationService(s).find_by_name(campaign.id, wanted)
+                if named is None:
+                    return self._notice(
+                        ctx.inbound, f"ไม่รู้จักสถานที่ชื่อ '{wanted}' ในแคมเปญนี้")
+                if campaign.starting_location_id is None:
+                    campaign.starting_location_id = named.id
+                campaign.current_party_anchor_id = named.id
+
+            campaign_id = campaign.id
 
         opener = SessionOpeningService(self.db, self.provider)
+        location_id = await opener.resolve_opening_location(
+            campaign_id=campaign_id, attendance_member_ids=attending)
+        if location_id is None:
+            # SETUP INCOMPLETE — never invent a universal tavern. The world is
+            # the owner's: import it, create it with AI, or name the start.
+            return self._notice(ctx.inbound, (
+                "โต๊ะพร้อมแล้ว แต่แคมเปญยังไม่มี 'จุดเริ่มต้นของโลก'\n\n"
+                "เลือกหนึ่งอย่างก่อนเริ่มเซสชัน:\n"
+                "• `!rv campaign create <เล่าไอเดียแคมเปญสั้นๆ>` — ให้ข้าเสนอโลกให้รีวิว\n"
+                "• `!rv campaign import` (แนบไฟล์ .md/.json) — นำเข้าโลกที่เจ้าเขียนเอง\n"
+                "• `!rv session start at <ชื่อสถานที่>` — เมื่อแคมเปญมีสถานที่อยู่แล้ว"))
         opening = await opener.open_new_session(
             campaign_id=campaign_id, attendance_member_ids=attending,
             location_id=location_id, channel_id=ctx.inbound.channel_id,

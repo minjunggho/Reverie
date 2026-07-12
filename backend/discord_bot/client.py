@@ -88,7 +88,7 @@ class ReverieClient(discord.Client):
                 raise
 
     def _view_for(self, out: OutboundMessage):  # pragma: no cover
-        if not out.choices:
+        if not out.choices and not out.select_menus and not out.action_buttons:
             return None
 
         async def on_choice(interaction: discord.Interaction, label: str) -> None:
@@ -108,4 +108,9 @@ class ReverieClient(discord.Client):
                 return
             await self._deliver(interaction.channel, result)
 
-        return ChoiceView(out.choices, on_choice)
+        return ChoiceView(
+            out.choices,
+            on_choice,
+            select_menus=out.select_menus,
+            action_buttons=out.action_buttons,
+        )

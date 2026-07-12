@@ -119,7 +119,9 @@ class DiscordBridge:
             # that conversation, not to the classifier or the action pipeline.
             in_creation = False
             if self.creation_flow is not None:
-                draft = await self.creation_flow.active_draft(session, member.id)
+                draft = await self.creation_flow.active_draft(
+                    session, campaign_id=campaign.id, member_id=member.id
+                )
                 in_creation = draft is not None
 
             # Is there a pending clarification owned by THIS member? If so, this
@@ -168,7 +170,8 @@ class DiscordBridge:
             )
         if in_creation:
             return await self.creation_flow.handle_message(
-                member_id=ctx.member_id, channel_id=ctx.channel_id,
+                campaign_id=ctx.campaign_id, member_id=ctx.member_id,
+                channel_id=ctx.channel_id,
                 text=inbound.content,
             )
         if ctx.pending_action is not None:

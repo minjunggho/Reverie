@@ -1,23 +1,36 @@
 [
   {
-    "definition_id": "background:sage", "definition_version": 1,
-    "name": "sage", "name_th": "ปราชญ์",
-    "pitch_th": "ชีวิตที่เติบโตมากับหนังสือและครู — เหมาะกับคนที่ความรู้คือทางรอด",
-    "ability_options": ["con", "int", "wis"],
-    "skill_proficiencies": ["arcana", "history"],
+    "definition_id": "background:acolyte", "definition_version": 1,
+    "name": "acolyte", "name_th": "ศิษย์วัด",
+    "pitch_th": "โตมาในร่มเงาของศรัทธา — รู้บทสวดก่อนรู้จักโลก",
+    "ability_options": ["int", "wis", "cha"],
+    "skill_proficiencies": ["insight", "religion"],
     "tool_proficiency": "อุปกรณ์อาลักษณ์",
-    "origin_feat": "Magic Initiate (Wizard)",
-    "equipment_th": ["ตำราเก่าหนึ่งเล่ม", "ชุดอาลักษณ์", "เสื้อคลุมนักศึกษา"]
+    "origin_feat": "Magic Initiate (Cleric)",
+    "equipment_th": ["สายประคำ", "หนังสือสวด", "ธูปหอม"],
+    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
   },
   {
-    "definition_id": "background:soldier", "definition_version": 1,
-    "name": "soldier", "name_th": "ทหารเก่า",
-    "pitch_th": "วินัย บาดแผล และคำสั่งที่ยังก้องอยู่ — สงครามไม่เคยปล่อยใครกลับมาทั้งตัว",
-    "ability_options": ["str", "dex", "con"],
-    "skill_proficiencies": ["athletics", "intimidation"],
-    "tool_proficiency": "ชุดเกมพนัน",
-    "origin_feat": "Savage Attacker",
-    "equipment_th": ["เหรียญตราหน่วยเก่า", "ชุดเกมพนัน", "มีดพก"]
+    "definition_id": "background:artisan", "definition_version": 1,
+    "name": "artisan", "name_th": "ช่างฝีมือ",
+    "pitch_th": "เติบโตจากมือและเครื่องมือ — เข้าใจว่าโลกสร้างได้จากความละเอียดและแรงงาน",
+    "ability_options": ["dex", "int", "con"],
+    "skill_proficiencies": ["investigation", "persuasion"],
+    "tool_proficiency": "เครื่องมือช่าง",
+    "origin_feat": "Skilled Craftsman",
+    "equipment_th": ["เครื่องมือช่าง", "ผ้าคลุมทำงาน", "ตัวอย่างชิ้นงาน"],
+    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
+  },
+  {
+    "definition_id": "background:charlatan", "definition_version": 1,
+    "name": "charlatan", "name_th": "พ่อค้าเกลือกกลิ้ง",
+    "pitch_th": "โตมาจากการพูดให้คนอื่นเชื่อ — ตัวตนคือเครื่องมือที่ค่อยๆ สร้างขึ้น",
+    "ability_options": ["dex", "cha", "int"],
+    "skill_proficiencies": ["deception", "sleight_of_hand"],
+    "tool_proficiency": "ชุดเครื่องมือปลอมแปลง",
+    "origin_feat": "Convincing Lie",
+    "equipment_th": ["กล่องเครื่องมือปลอมแปลง", "ชุดเสื้อผ้าเรียบๆ", "เหรียญสั้นๆ"],
+    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
   },
   {
     "definition_id": "background:criminal", "definition_version": 1,
@@ -27,16 +40,139 @@
     "skill_proficiencies": ["sleight_of_hand", "stealth"],
     "tool_proficiency": "ชุดเครื่องมือโจร",
     "origin_feat": "Alert",
-    "equipment_th": ["ชะแลงเล็ก", "เสื้อคลุมสีหม่น", "ถุงเงินที่ไม่ใช่ของตัวเอง"]
+    "equipment_th": ["ชะแลงเล็ก", "เสื้อคลุมสีหม่น", "ถุงเงินที่ไม่ใช่ของตัวเอง"],
+    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
   },
   {
-    "definition_id": "background:acolyte", "definition_version": 1,
-    "name": "acolyte", "name_th": "ศิษย์วัด",
-    "pitch_th": "โตมาในร่มเงาของศรัทธา — รู้บทสวดก่อนรู้จักโลก",
-    "ability_options": ["int", "wis", "cha"],
-    "skill_proficiencies": ["insight", "religion"],
+    "definition_id": "background:entertainer", "definition_version": 1,
+    "name": "entertainer", "name_th": "นักแสดง",
+    "pitch_th": "โตมาจากการยืนหน้าสาธารณะ — ความสนใจและอารมณ์เป็นอาวุธของพวกเขา",
+    "ability_options": ["dex", "cha", "con"],
+    "skill_proficiencies": ["acrobatics", "performance"],
+    "tool_proficiency": "เครื่องดนตรี",
+    "origin_feat": "Fascinating Performance",
+    "equipment_th": ["เครื่องดนตรีเล็ก", "ชุดแต่งกายแสดง", "อุปกรณ์แต่งหน้า"],
+    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
+  },
+  {
+    "definition_id": "background:farmer", "definition_version": 1,
+    "name": "farmer", "name_th": "ชาวนากลางทุ่ง",
+    "pitch_th": "รู้ว่าโลกเติบโตช้าแต่มั่นคง — ขยันและรู้จักรอเวลา",
+    "ability_options": ["con", "wis", "str"],
+    "skill_proficiencies": ["animal_handling", "survival"],
+    "tool_proficiency": "เครื่องมือเกษตร",
+    "origin_feat": "Toughened by Labor",
+    "equipment_th": ["มีดเก็บเกี่ยว", "เสื้อผ้าทำงาน", "พวงหญ้าแห้ง"],
+    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
+  },
+  {
+    "definition_id": "background:guard", "definition_version": 1,
+    "name": "guard", "name_th": "ยามรักษา",
+    "pitch_th": "มีสายตาไม่ลืมคำสั่ง — ผู้คอยป้องกันและเฝ้าดูทุกความเคลื่อนไหว",
+    "ability_options": ["str", "con", "wis"],
+    "skill_proficiencies": ["athletics", "perception"],
+    "tool_proficiency": "ชุดประดับยาม",
+    "origin_feat": "Watchful Eye",
+    "equipment_th": ["คบเพลิง", "เครื่องแบบยาม", "เข็มกลัดตรา"],
+    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
+  },
+  {
+    "definition_id": "background:guide", "definition_version": 1,
+    "name": "guide", "name_th": "มัคคุเทศก์",
+    "pitch_th": "รู้ทางและรู้คน — คนที่เชื่อว่าทุกเส้นทางต้องมีคนแนะนำ",
+    "ability_options": ["wis", "cha", "con"],
+    "skill_proficiencies": ["nature", "survival"],
+    "tool_proficiency": "แผนที่และเข็มทิศ",
+    "origin_feat": "Pathfinder",
+    "equipment_th": ["แผนที่เก่า", "เข็มทิศ", "เสื้อคลุมเดินป่า"],
+    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
+  },
+  {
+    "definition_id": "background:hermit", "definition_version": 1,
+    "name": "hermit", "name_th": "ฤาษี",
+    "pitch_th": "อยู่คนเดียวกับความเงียบและคำถาม — เห็นร่องรอยของโลกจากด้านลึก",
+    "ability_options": ["wis", "con", "int"],
+    "skill_proficiencies": ["medicine", "religion"],
+    "tool_proficiency": "เครื่องมือบำบัด",
+    "origin_feat": "Quiet Reflection",
+    "equipment_th": ["กระเป๋าเล็ก", "หนังสือเล่มเก่า", "ภาชนะน้ำ"],
+    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
+  },
+  {
+    "definition_id": "background:merchant", "definition_version": 1,
+    "name": "merchant", "name_th": "พ่อค้าตลาด",
+    "pitch_th": "รู้ว่าทุกสิ่งมีราคา — และบางครั้งการคบคนก็สำคัญกว่าเงิน",
+    "ability_options": ["cha", "int", "con"],
+    "skill_proficiencies": ["insight", "persuasion"],
+    "tool_proficiency": "เครื่องมือชั่งตวง",
+    "origin_feat": "Good Bargain",
+    "equipment_th": ["กล่องเครื่องชั่ง", "เสื้อผ้าทำการค้า", "กระเป๋าเงิน"],
+    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
+  },
+  {
+    "definition_id": "background:noble", "definition_version": 1,
+    "name": "noble", "name_th": "ขุนนาง",
+    "pitch_th": "เติบโตท่ามกลางคำสั่งและชื่อเสียง — แห่งที่พวกเขาเดินไปมีประวัติศาสตร์อยู่เบื้องหลัง",
+    "ability_options": ["cha", "int", "wis"],
+    "skill_proficiencies": ["history", "persuasion"],
+    "tool_proficiency": "เครื่องมือสังคม",
+    "origin_feat": "Noble Bearing",
+    "equipment_th": ["แหวนเก่า", "เสื้อคลุมหรูหรา", "จดหมายพิธีการ"],
+    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
+  },
+  {
+    "definition_id": "background:sage", "definition_version": 1,
+    "name": "sage", "name_th": "ปราชญ์",
+    "pitch_th": "ชีวิตที่เติบโตมากับหนังสือและครู — เหมาะกับคนที่ความรู้คือทางรอด",
+    "ability_options": ["con", "int", "wis"],
+    "skill_proficiencies": ["arcana", "history"],
     "tool_proficiency": "อุปกรณ์อาลักษณ์",
-    "origin_feat": "Magic Initiate (Cleric)",
-    "equipment_th": ["สายประคำ", "หนังสือสวด", "ธูปหอม"]
+    "origin_feat": "Magic Initiate (Wizard)",
+    "equipment_th": ["ตำราเก่าหนึ่งเล่ม", "ชุดอาลักษณ์", "เสื้อคลุมนักศึกษา"],
+    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
+  },
+  {
+    "definition_id": "background:sailor", "definition_version": 1,
+    "name": "sailor", "name_th": "กะลาสี",
+    "pitch_th": "รู้ความผันผวนของคลื่นและน้ำ — เหมือนชื่นชอบเสรีภาพบนโลกที่กว้าง",
+    "ability_options": ["dex", "con", "wis"],
+    "skill_proficiencies": ["athletics", "perception"],
+    "tool_proficiency": "เรือและไผ่พาย",
+    "origin_feat": "Seafarer",
+    "equipment_th": ["เชือกเล็ก", "เสื้อคลุมกันฝน", "แผนที่ท่าเรือ"],
+    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
+  },
+  {
+    "definition_id": "background:scribe", "definition_version": 1,
+    "name": "scribe", "name_th": "นักบันทึก",
+    "pitch_th": "ชีวิตที่ค่อยๆ ถูกเขียนลงเป็นคำ — รักข้อมูล และรู้ว่าความจริงมักอยู่ในรายละเอียด",
+    "ability_options": ["int", "wis", "dex"],
+    "skill_proficiencies": ["history", "investigation"],
+    "tool_proficiency": "เครื่องมือจดบันทึก",
+    "origin_feat": "Careful Note-Taker",
+    "equipment_th": ["ปากกาขนนก", "สมุดบันทึก", "หนังสือพิมพ์เก่า"],
+    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
+  },
+  {
+    "definition_id": "background:soldier", "definition_version": 1,
+    "name": "soldier", "name_th": "ทหารเก่า",
+    "pitch_th": "วินัย บาดแผล และคำสั่งที่ยังก้องอยู่ — สงครามไม่เคยปล่อยใครกลับมาทั้งตัว",
+    "ability_options": ["str", "dex", "con"],
+    "skill_proficiencies": ["athletics", "intimidation"],
+    "tool_proficiency": "ชุดเกมพนัน",
+    "origin_feat": "Savage Attacker",
+    "equipment_th": ["เหรียญตราหน่วยเก่า", "ชุดเกมพนัน", "มีดพก"],
+    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
+  },
+  {
+    "definition_id": "background:wayfarer", "definition_version": 1,
+    "name": "wayfarer", "name_th": "นักเดินทาง",
+    "pitch_th": "เลี้ยงตัวเองด้วยท้องถนนและความนับถือตนเอง — ที่ไหนมีทางก็น่าจะมีคนเดินมัน",
+    "ability_options": ["dex", "wis", "cha"],
+    "skill_proficiencies": ["perception", "survival"],
+    "tool_proficiency": "อุปกรณ์เดินป่า",
+    "origin_feat": "Traveler's Resilience",
+    "equipment_th": ["กระเป๋าเดินทาง", "เสื้อคลุมกันหนาว", "ลูกบอลเล็ก"],
+    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
   }
 ]

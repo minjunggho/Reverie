@@ -11,9 +11,18 @@ State lives in draft.data["_build"]; the flow is resumable and cancellable.
 from __future__ import annotations
 
 import re
+import secrets
+from math import ceil
 
+from app.core.errors import RulesViolation
 from app.core.logging import get_logger
-from app.discord_bridge.dto import BridgeResult, OutboundMessage
+from app.discord_bridge.dto import (
+    ActionButton,
+    BridgeResult,
+    OutboundMessage,
+    SelectMenu,
+    SelectOption,
+)
 from app.models.character_draft import CharacterDraft
 from app.presentation import MessageKind
 from app.rules_content import STANDARD_ARRAY, get_registry
@@ -26,6 +35,17 @@ CONFIRM_BUILD = "✅ สร้างเลย"
 RESTART_BUILD = "✏️ เริ่มส่วนกฎใหม่"
 USE_RECOMMENDED = "ใช้แบบแนะนำ"
 ARRANGE_MYSELF = "จัดเอง"
+CONTINUE_TO_SPELLS = "กลับไปเลือกคาถาต่อ"
+
+# Keep well below Discord's 25-option menu ceiling and leave embed room for
+# summaries, selected state, and recovery guidance.
+SPELL_PAGE_SIZE = 15
+SPELL_PREVIOUS = "◀ ก่อนหน้า"
+SPELL_NEXT = "ถัดไป ▶"
+SPELL_CONFIRM = "✅ ยืนยันตัวเลือก"
+SPELL_BACK = "↩ ย้อนกลับ"
+SPELL_CANCEL = "✖ ยกเลิกการสร้าง"
+_SPELL_COMPONENT_PREFIX = "rvspell"
 
 _AB_TH = {"str": "STR พลัง", "dex": "DEX คล่องแคล่ว", "con": "CON อึด",
           "int": "INT ปัญญา", "wis": "WIS สังเกตการณ์", "cha": "CHA เสน่ห์"}
@@ -40,7 +60,10 @@ class BuildFlow:
 
     # ---------- entry -----------------------------------------------------------
     async def start(self, draft: CharacterDraft, data: dict, channel_id: str) -> BridgeResult:
-        data["_build"] = {"step": "class"}
+        data["_build"] = {
+            "step": "class",
+            "component_token": secrets.token_urlsafe(12),
+        }
         await self._save(draft, data)
         intro = ("ต่อไปเป็นส่วนกฎเกม — ข้าจะอธิบายตัวเลือกที่เข้ากับตัวละคร "
                  "แต่เจ้าจะเป็นคนเลือกทั้งหมด\n\n")
@@ -48,18 +71,69 @@ class BuildFlow:
 
     async def handle(self, draft: CharacterDraft, data: dict, text: str,
                      channel_id: str) -> BridgeResult:
+        data.setdefault("_build", {})
         build = data.get("_build") or {}
         step = build.get("step", "class")
         handler = getattr(self, f"_on_{step}", None)
-        if handler is None:  # unknown state — restart the build safely
-            return await self.start(draft, data, channel_id)
+        if handler is None:
+            return self._diagnostic(
+                channel_id, f"ไม่รู้จักขั้นตอนที่บันทึกไว้: {step!r}"
+            )
         return await handler(draft, data, text.strip(), channel_id)
+
+    def render(self, data: dict, channel_id: str) -> BridgeResult:
+        """Render the exact persisted Stage-B step without mutating the draft."""
+        build = data.get("_build") or {}
+        step = build.get("step")
+        try:
+            if step == "class":
+                return self._class_step(
+                    data,
+                    channel_id,
+                    show_all=bool(build.get("class_show_all")),
+                )
+            if step == "subclass":
+                return self._subclass_step(data, channel_id)
+            if step == "species":
+                return self._species_step(data, channel_id)
+            if step == "background":
+                return self._background_step(data, channel_id)
+            if step == "abilities":
+                if build.get("ability_mode") == "manual":
+                    return self._manual_abilities_step(channel_id)
+                return self._abilities_step(data, channel_id)
+            if step == "asi":
+                return self._asi_step(data, channel_id)
+            if step == "skills":
+                return self._skills_step(data, channel_id)
+            if step == "species_skill":
+                trait_key = build.get("species_skill_trait", "")
+                species = self.reg.get_species(build["species"])
+                trait = next((t for t in species.traits if t.key == trait_key), None)
+                if trait is None:
+                    return self._diagnostic(
+                        channel_id,
+                        f"ไม่พบตัวเลือกทักษะเผ่าที่บันทึกไว้: {trait_key!r}",
+                    )
+                return self._species_skill_step(data, channel_id, trait)
+            if step == "expertise":
+                return self._expertise_step(data, channel_id)
+            if step in {"cantrips", "book", "prepared"}:
+                return self._spell_selection_step(data, channel_id, key=step)
+            if step == "review":
+                return self._review_step(data, channel_id)
+        except (KeyError, RulesViolation, TypeError, ValueError) as exc:
+            return self._diagnostic(channel_id, str(exc))
+        return self._diagnostic(
+            channel_id, f"ไม่รู้จักขั้นตอนที่บันทึกไว้: {step!r}"
+        )
 
     # ---------- step: class -----------------------------------------------------
     def _rank_classes(self, data: dict) -> list[str]:
         blob = " ".join(str(data.get(k, "")) for k in ("concept", "origin", "desire", "flaw"))
         scored = []
-        for name, cls in self.reg.classes.items():
+        for cls in self.reg.selectable_class_defs():
+            name = cls.name
             hits = sum(1 for kw in cls.concept_keywords if kw in blob)
             scored.append((-hits, name))
         scored.sort()
@@ -82,12 +156,45 @@ class BuildFlow:
 
     async def _on_class(self, draft, data, text, channel_id) -> BridgeResult:
         if SHOW_ALL in text:
+            data["_build"]["class_show_all"] = True
+            await self._save(draft, data)
             return self._class_step(data, channel_id, show_all=True)
-        picked = _match(text, self.reg.classes)
+        picked = _match(text, {name: self.reg.classes[name]
+                               for name in self.reg.selectable_classes})
         if picked is None:
             return self._class_step(data, channel_id,
-                                    intro="เลือกจากปุ่ม หรือพิมพ์ชื่อ Class ได้เลย\n\n")
+                                    intro="เลือกจากปุ่ม หรือพิมพ์ชื่อ Class ได้เลย\n\n",
+                                    show_all=bool(data["_build"].get("class_show_all")))
+        data.setdefault("_build", {})
+        if self.reg.subclasses_for_class(picked):
+            data["_build"].update({"step": "subclass", "class": picked})
+            await self._save(draft, data)
+            return self._subclass_step(data, channel_id)
         data["_build"].update({"step": "species", "class": picked})
+        await self._save(draft, data)
+        return self._species_step(data, channel_id)
+
+    # ---------- step: subclass ---------------------------------------------------
+    def _subclass_step(self, data: dict, channel_id: str) -> BridgeResult:
+        cls = self.reg.get_class(data["_build"]["class"])
+        subclasses = self.reg.subclasses_for_class(cls.name)
+        lines = [f"**{sub.name_th} ({sub.name})**\n{sub.pitch_th}" for sub in subclasses]
+        choices = [f"{sub.name_th} ({sub.name})" for sub in subclasses]
+        choices.append("ยังไม่เลือก (later)")
+        return _card(channel_id, "เลือก Subclass (แผนไว้)",
+                     f"สำหรับ {cls.name_th} มีตัวเลือก Subclass ที่ยังไม่เปิดใช้งานทางกลไกในเลเวล 1 — "
+                     "เจ้าสามารถเลือกแผนไว้ตอนนี้หรือปล่อยไว้ก่อน\n\n" + "\n\n".join(lines),
+                     choices)
+
+    async def _on_subclass(self, draft, data, text, channel_id) -> BridgeResult:
+        if any(word in text.lower() for word in ("ยังไม่เลือก", "later", "ไม่เลือก", "skip")):
+            data["_build"].update({"step": "species", "planned_subclass": None})
+            await self._save(draft, data)
+            return self._species_step(data, channel_id)
+        picked = _match(text, {s.name: s for s in self.reg.subclasses_for_class(data["_build"]["class"])})
+        if picked is None:
+            return self._subclass_step(data, channel_id)
+        data["_build"].update({"step": "species", "planned_subclass": picked})
         await self._save(draft, data)
         return self._species_step(data, channel_id)
 
@@ -166,19 +273,30 @@ class BuildFlow:
         )
         return _card(channel_id, "ค่าความสามารถ", body, [USE_RECOMMENDED, ARRANGE_MYSELF])
 
+    @staticmethod
+    def _manual_abilities_step(channel_id: str) -> BridgeResult:
+        return _card(
+            channel_id,
+            "จัดค่าเอง",
+            "พิมพ์การจัดของเจ้า เช่น `STR 8 DEX 12 CON 13 INT 15 WIS 14 CHA 10`\n"
+            f"ต้องใช้ตัวเลขชุดนี้ครบทุกตัว: {', '.join(map(str, STANDARD_ARRAY))}",
+            [],
+        )
+
     async def _on_abilities(self, draft, data, text, channel_id) -> BridgeResult:
         if USE_RECOMMENDED in text:
             scores = self._recommended_scores(data)
         elif ARRANGE_MYSELF in text:
-            return _card(channel_id, "จัดค่าเอง",
-                         "พิมพ์การจัดของเจ้า เช่น `STR 8 DEX 12 CON 13 INT 15 WIS 14 CHA 10`\n"
-                         f"ต้องใช้ตัวเลขชุดนี้ครบทุกตัว: {', '.join(map(str, STANDARD_ARRAY))}", [])
+            data["_build"]["ability_mode"] = "manual"
+            await self._save(draft, data)
+            return self._manual_abilities_step(channel_id)
         else:
             scores = _parse_scores(text)
             if scores is None:
                 return _card(channel_id, "ยังอ่านไม่ออก",
                              "รูปแบบ: `STR 8 DEX 12 CON 13 INT 15 WIS 14 CHA 10` "
                              f"และต้องเป็นชุด {STANDARD_ARRAY} พอดี", [USE_RECOMMENDED])
+        data["_build"].pop("ability_mode", None)
         data["_build"].update({"step": "asi", "scores": scores})
         await self._save(draft, data)
         return self._asi_step(data, channel_id)
@@ -237,11 +355,18 @@ class BuildFlow:
                 f"{', '.join(self.reg.skills[s].name_th for s in bg.skill_proficiencies)}\n"
                 f"เลือกทักษะจาก Class — **เลือกแล้ว {len(chosen)} / {count}**\n\n"
                 + "\n".join(lines))
-        return _card(channel_id, "เลือกทักษะถนัด", body,
-                     [f"{self.reg.skills[s].name_th} ({s})" for s in options])
+        choices = [f"{self.reg.skills[s].name_th} ({s})" for s in options]
+        if len(chosen) >= count and data["_build"].get("_return_spell_step"):
+            choices = [CONTINUE_TO_SPELLS]
+        return _card(channel_id, "เลือกทักษะถนัด", body, choices)
 
     async def _on_skills(self, draft, data, text, channel_id) -> BridgeResult:
         options, count = self._skill_options(data)
+        chosen = data["_build"].get("skills", [])
+        if text == CONTINUE_TO_SPELLS and len(chosen) >= count:
+            return await self._resume_spell_after_back(draft, data, channel_id)
+        if len(chosen) >= count:
+            return self._skills_step(data, channel_id)
         picked = _match(text, {s: None for s in options})
         if picked is not None:
             data["_build"]["skills"].append(picked)
@@ -275,12 +400,18 @@ class BuildFlow:
                 else list(trait.skill_choice["options"]))
         taken = set(self._all_skills_so_far(data))
         opts = [s for s in opts if s not in taken]
+        choices = [f"{self.reg.skills[s].name_th} ({s})" for s in opts]
+        if (data["_build"].get(f"species_skill:{trait.key}")
+                and data["_build"].get("_return_spell_step")):
+            choices = [CONTINUE_TO_SPELLS]
         return _card(channel_id, f"{trait.name_th} — เลือกทักษะเพิ่ม",
-                     trait.summary_th,
-                     [f"{self.reg.skills[s].name_th} ({s})" for s in opts])
+                     trait.summary_th, choices)
 
     async def _on_species_skill(self, draft, data, text, channel_id) -> BridgeResult:
         trait_key = data["_build"].get("species_skill_trait", "")
+        if (text == CONTINUE_TO_SPELLS
+                and data["_build"].get(f"species_skill:{trait_key}")):
+            return await self._resume_spell_after_back(draft, data, channel_id)
         picked = _match(text, self.reg.skills)
         if picked is None:
             sp = self.reg.get_species(data["_build"]["species"])
@@ -288,18 +419,29 @@ class BuildFlow:
             return self._species_skill_step(data, channel_id, trait)
         data["_build"][f"species_skill:{trait_key}"] = picked
         await self._save(draft, data)
+        if data["_build"].get("_return_spell_step"):
+            return await self._resume_spell_after_back(draft, data, channel_id)
         return await self._after_skills(draft, data, channel_id)
 
     def _expertise_step(self, data, channel_id) -> BridgeResult:
         chosen = data["_build"].get("expertise", [])
         opts = [s for s in self._all_skills_so_far(data) if s not in chosen]
+        choices = [f"{self.reg.skills[s].name_th} ({s})" for s in opts]
+        if len(chosen) >= 2 and data["_build"].get("_return_spell_step"):
+            choices = [CONTINUE_TO_SPELLS]
         return _card(channel_id, "ความเชี่ยวชาญ (Expertise)",
                      f"เลือกทักษะที่ถนัดเป็นพิเศษ — โบนัสความถนัดคูณสอง\n"
                      f"**เลือกแล้ว {len(chosen)} / 2**",
-                     [f"{self.reg.skills[s].name_th} ({s})" for s in opts])
+                     choices)
 
     async def _on_expertise(self, draft, data, text, channel_id) -> BridgeResult:
         opts = self._all_skills_so_far(data)
+        chosen = data["_build"].get("expertise", [])
+        if (text == CONTINUE_TO_SPELLS
+                and len(chosen) >= 2):
+            return await self._resume_spell_after_back(draft, data, channel_id)
+        if len(chosen) >= 2:
+            return self._expertise_step(data, channel_id)
         picked = _match(text, {s: None for s in opts})
         if picked and picked not in data["_build"]["expertise"]:
             data["_build"]["expertise"].append(picked)
@@ -313,94 +455,500 @@ class BuildFlow:
         cls = self.reg.get_class(data["_build"]["class"])
         sc = cls.spellcasting
         if sc and sc.cantrips_known > 0 and "cantrips" not in data["_build"]:
-            data["_build"].update({"step": "cantrips", "cantrips": []})
-            await self._save(draft, data)
-            return self._spell_pick_step(data, channel_id, level=0,
-                                         key="cantrips", count=sc.cantrips_known,
-                                         title="เลือกคาถาประจำตัว (Cantrips)")
+            return await self._begin_spell_step(draft, data, channel_id, "cantrips")
         if sc and sc.spellbook_size > 0 and "book" not in data["_build"]:
-            data["_build"].update({"step": "book", "book": []})
-            await self._save(draft, data)
-            return self._spell_pick_step(data, channel_id, level=1,
-                                         key="book", count=sc.spellbook_size,
-                                         title="คัดคาถาลงตำรา (Spellbook)")
+            return await self._begin_spell_step(draft, data, channel_id, "book")
         if sc and sc.prepared_count > 0 and "prepared" not in data["_build"]:
-            data["_build"].update({"step": "prepared", "prepared": []})
-            await self._save(draft, data)
-            return self._prepared_step(data, channel_id)
+            return await self._begin_spell_step(draft, data, channel_id, "prepared")
         data["_build"]["step"] = "review"
         await self._save(draft, data)
         return self._review_step(data, channel_id)
 
-    def _spell_pick_step(self, data, channel_id, *, level, key, count, title) -> BridgeResult:
-        cls = self.reg.get_class(data["_build"]["class"])
-        chosen = data["_build"].get(key, [])
-        pool = [s for s in self.reg.spells_for_class(cls.spellcasting.spell_list, level)
-                if s.name not in chosen]
-        by_cat: dict[str, list] = {}
-        for s in pool:
-            by_cat.setdefault(s.ux_category, []).append(s)
-        lines = []
-        for cat, spells in by_cat.items():
-            lines.append(f"__{cat}__")
-            for s in spells:
-                conc = " · ต้องเพ่งสมาธิ" if s.concentration else ""
-                lines.append(f"**{s.name_th_hint}** ({s.name}) — {s.mech_summary_th}{conc}")
-        body = f"**เลือกแล้ว {len(chosen)} / {count}**\n\n" + "\n".join(lines)
-        return _card(channel_id, title, body,
-                     [f"{s.name_th_hint} ({s.name})" for s in pool])
+    async def _begin_spell_step(
+        self, draft, data: dict, channel_id: str, key: str
+    ) -> BridgeResult:
+        build = data["_build"]
+        build.setdefault(key, [])
+        pages = dict(build.get("spell_pages") or {})
+        pages.setdefault(key, 0)
+        build["spell_pages"] = pages
+        build["step"] = key
+        await self._save(draft, data)
+        return self._spell_selection_step(data, channel_id, key=key)
+
+    def _spell_state(self, data: dict, key: str) -> tuple[str, str, list[str], int]:
+        build = data["_build"]
+        cls = self.reg.get_class(build["class"])
+        sc = cls.spellcasting
+        if sc is None:
+            raise RulesViolation(f"class={cls.name}; pool={key}; คลาสนี้ไม่มีรายการคาถา")
+
+        if key == "cantrips":
+            title = "เลือกคาถาประจำตัว (Cantrips)"
+            intro = "เลือก Cantrip ที่ตัวละครใช้ได้โดยไม่เสียช่องเวท"
+            source = [s.name for s in self.reg.spells_for_class(sc.spell_list, 0)]
+            required = sc.cantrips_known
+        elif key == "book":
+            title = "คัดคาถาลงตำรา (Spellbook)"
+            intro = "เลือกคาถาเลเวล 1 ที่จดไว้ในตำราตั้งแต่เริ่มต้น"
+            source = [s.name for s in self.reg.spells_for_class(sc.spell_list, 1)]
+            required = sc.spellbook_size
+        elif key == "prepared":
+            title = "เตรียมคาถา (Prepared / Known)"
+            intro = "เลือกคาถาเลเวล 1 ที่พร้อมใช้เมื่อการผจญภัยเริ่มขึ้น"
+            if sc.spellbook_size > 0:
+                source = list(build.get("book") or [])
+                legal_for_class = {
+                    spell.name
+                    for spell in self.reg.spells_for_class(sc.spell_list, 1)
+                }
+                illegal_book = [spell for spell in source if spell not in legal_for_class]
+                if len(source) != len(set(source)) or illegal_book:
+                    raise RulesViolation(
+                        f"class={cls.name}; pool=book; invalid choices={illegal_book or source!r}; "
+                        "expected unique class-legal spellbook choices"
+                    )
+                if len(source) != sc.spellbook_size:
+                    raise RulesViolation(
+                        f"class={cls.name}; pool=book; selected_count={len(source)}; "
+                        f"required_count={sc.spellbook_size}; expected an exact completed spellbook"
+                    )
+            else:
+                source = [s.name for s in self.reg.spells_for_class(sc.spell_list, 1)]
+            required = sc.prepared_count
+        else:
+            raise RulesViolation(f"unknown spell pool: {key!r}")
+
+        if required <= 0:
+            raise RulesViolation(
+                f"class={cls.name}; pool={key}; required_count={required}; expected > 0"
+            )
+        if not source:
+            raise RulesViolation(
+                f"class={cls.name}; pool={key}; legal_count=0; "
+                f"expected at least {required} legal choices; "
+                f"rules_content_version={self.reg.rules_content_version}"
+            )
+        if len(source) < required:
+            raise RulesViolation(
+                f"class={cls.name}; pool={key}; legal_count={len(source)}; "
+                f"required_count={required}; expected legal_count >= required_count; "
+                f"rules_content_version={self.reg.rules_content_version}"
+            )
+        return title, intro, source, required
+
+    def _spell_selection_step(
+        self, data: dict, channel_id: str, *, key: str, notice: str = ""
+    ) -> BridgeResult:
+        try:
+            title, intro, pool, required = self._spell_state(data, key)
+        except (KeyError, RulesViolation, TypeError, ValueError) as exc:
+            return self._diagnostic(channel_id, str(exc))
+
+        build = data["_build"]
+        chosen = list(build.get(key) or [])
+        if len(chosen) != len(set(chosen)):
+            return self._diagnostic(
+                channel_id, f"pool={key}; ตัวเลือกที่บันทึกไว้ซ้ำกัน: {chosen!r}"
+            )
+        illegal = [spell_key for spell_key in chosen if spell_key not in pool]
+        if illegal:
+            return self._diagnostic(
+                channel_id, f"pool={key}; พบคาถาที่คลาสนี้เลือกไม่ได้: {illegal!r}"
+            )
+        if len(chosen) > required:
+            return self._diagnostic(
+                channel_id,
+                f"pool={key}; selected_count={len(chosen)}; required_count={required}",
+            )
+
+        page_count = max(1, ceil(len(pool) / SPELL_PAGE_SIZE))
+        try:
+            raw_page = int((build.get("spell_pages") or {}).get(key, 0))
+        except (TypeError, ValueError):
+            raw_page = 0
+            notice = notice or "เลขหน้าที่บันทึกไว้ไม่ถูกต้อง จึงกลับมาหน้าแรก"
+        page = min(max(raw_page, 0), page_count - 1)
+        if page != raw_page:
+            notice = notice or "จำนวนหน้าของตัวเลือกเปลี่ยนไป จึงเลื่อนไปหน้าที่ใกล้ที่สุด"
+        page_pool = pool[page * SPELL_PAGE_SIZE:(page + 1) * SPELL_PAGE_SIZE]
+
+        selected_text = ", ".join(
+            self.reg.get_spell(spell_key).name_th_hint for spell_key in chosen
+        ) or "ยังไม่ได้เลือก"
+        lines: list[str] = []
+        options: list[SelectOption] = []
+        for spell_key in page_pool:
+            spell = self.reg.get_spell(spell_key)
+            selected = spell_key in chosen
+            mark = "✅" if selected else "▫️"
+            conc = " · ต้องเพ่งสมาธิ" if spell.concentration else ""
+            lines.append(
+                f"{mark} **{spell.name_th_hint}** ({spell.display_name_en}) — "
+                f"{spell.mech_summary_th[:140]}{conc}"
+            )
+            options.append(SelectOption(
+                label=f"{'✅ ' if selected else ''}{spell.name_th_hint} ({spell.display_name_en})",
+                value=self._spell_component(data, key, "pick", spell_key),
+                description=spell.mech_summary_th,
+            ))
+
+        prefix = f"⚠️ {notice}\n\n" if notice else ""
+        body = (
+            f"{prefix}{intro}\n"
+            f"**เลือกแล้ว {len(chosen)} / {required}**\n"
+            f"ที่เลือก: {selected_text}\n"
+            f"หน้า **{page + 1} / {page_count}**\n\n"
+            + "\n".join(lines)
+            + "\n\nพิมพ์ชื่ออังกฤษหรือชื่อไทยได้เช่นกัน"
+        )
+
+        menus = [SelectMenu(
+            custom_id=f"rv-spell-pick-{key}",
+            placeholder=f"เลือกจากหน้า {page + 1}…",
+            options=options,
+        )]
+        if chosen:
+            menus.append(SelectMenu(
+                custom_id=f"rv-spell-remove-{key}",
+                placeholder="เอาคาถาที่เลือกไว้ออก…",
+                options=[SelectOption(
+                    label=f"เอา {self.reg.get_spell(spell_key).name_th_hint} ออก",
+                    value=self._spell_component(data, key, "remove", spell_key),
+                ) for spell_key in chosen[:25]],
+            ))
+
+        buttons = [
+            ActionButton(
+                label=SPELL_PREVIOUS,
+                value=self._spell_component(data, key, "previous"),
+                disabled=page == 0,
+            ),
+            ActionButton(
+                label=f"หน้า {page + 1}/{page_count}",
+                value=self._spell_component(data, key, "page"),
+                disabled=True,
+            ),
+            ActionButton(
+                label=SPELL_NEXT,
+                value=self._spell_component(data, key, "next"),
+                disabled=page >= page_count - 1,
+            ),
+            ActionButton(
+                label=f"เลือก {len(chosen)}/{required}",
+                value=self._spell_component(data, key, "count"),
+                disabled=True,
+            ),
+            ActionButton(
+                label=SPELL_CONFIRM,
+                value=self._spell_component(data, key, "confirm"),
+                style="success",
+                disabled=len(chosen) != required,
+            ),
+            ActionButton(
+                label=SPELL_BACK,
+                value=self._spell_component(data, key, "back"),
+            ),
+            ActionButton(
+                label=SPELL_CANCEL,
+                value=self._spell_component(data, key, "cancel"),
+                style="danger",
+            ),
+        ]
+        return BridgeResult(handled=True, responses=[OutboundMessage(
+            channel_id,
+            body,
+            kind=MessageKind.CHARACTER_CREATION,
+            title=title,
+            data={"footer": "ปุ่มหมดอายุเมื่อไร ใช้ !rv resume ได้เสมอ"},
+            select_menus=menus,
+            action_buttons=buttons,
+        )])
 
     async def _on_cantrips(self, draft, data, text, channel_id) -> BridgeResult:
-        return await self._on_spell_pick(draft, data, text, channel_id, key="cantrips",
-                                         level=0)
+        return await self._on_spell_selection(
+            draft, data, text, channel_id, key="cantrips"
+        )
 
     async def _on_book(self, draft, data, text, channel_id) -> BridgeResult:
-        return await self._on_spell_pick(draft, data, text, channel_id, key="book",
-                                         level=1)
-
-    async def _on_spell_pick(self, draft, data, text, channel_id, *, key, level) -> BridgeResult:
-        cls = self.reg.get_class(data["_build"]["class"])
-        sc = cls.spellcasting
-        count = sc.cantrips_known if key == "cantrips" else sc.spellbook_size
-        pool = {s.name: s for s in self.reg.spells_for_class(sc.spell_list, level)}
-        picked = _match(text, pool)
-        if picked and picked not in data["_build"][key]:
-            data["_build"][key].append(picked)
-        if len(data["_build"][key]) < count:
-            await self._save(draft, data)
-            title = "เลือกคาถาประจำตัว (Cantrips)" if key == "cantrips" else "คัดคาถาลงตำรา (Spellbook)"
-            return self._spell_pick_step(data, channel_id, level=level, key=key,
-                                         count=count, title=title)
-        return await self._to_spells_or_review(draft, data, channel_id)
-
-    def _prepared_step(self, data, channel_id) -> BridgeResult:
-        cls = self.reg.get_class(data["_build"]["class"])
-        sc = cls.spellcasting
-        chosen = data["_build"].get("prepared", [])
-        source = (data["_build"].get("book")
-                  or [s.name for s in self.reg.spells_for_class(sc.spell_list, 1)])
-        pool = [s for s in source if s not in chosen]
-        lines = [f"**{self.reg.get_spell(s).name_th_hint}** — {self.reg.get_spell(s).mech_summary_th}"
-                 for s in pool]
-        body = (f"คาถาที่ 'เตรียมไว้' คือชุดที่พร้อมร่ายในแต่ละวัน (เปลี่ยนได้หลังพักยาว)\n"
-                f"**เลือกแล้ว {len(chosen)} / {sc.prepared_count}**\n\n" + "\n".join(lines))
-        return _card(channel_id, "เตรียมคาถา (Prepared)", body,
-                     [f"{self.reg.get_spell(s).name_th_hint} ({s})" for s in pool])
+        return await self._on_spell_selection(draft, data, text, channel_id, key="book")
 
     async def _on_prepared(self, draft, data, text, channel_id) -> BridgeResult:
-        cls = self.reg.get_class(data["_build"]["class"])
-        sc = cls.spellcasting
-        source = (data["_build"].get("book")
-                  or [s.name for s in self.reg.spells_for_class(sc.spell_list, 1)])
-        picked = _match(text, {s: None for s in source})
-        if picked and picked not in data["_build"]["prepared"]:
-            data["_build"]["prepared"].append(picked)
-        if len(data["_build"]["prepared"]) < sc.prepared_count:
+        return await self._on_spell_selection(
+            draft, data, text, channel_id, key="prepared"
+        )
+
+    async def _on_spell_selection(
+        self, draft, data: dict, text: str, channel_id: str, *, key: str
+    ) -> BridgeResult:
+        try:
+            _, _, pool, required = self._spell_state(data, key)
+        except (KeyError, RulesViolation, TypeError, ValueError) as exc:
+            return self._diagnostic(channel_id, str(exc))
+
+        build = data["_build"]
+        chosen = list(build.get(key) or [])
+        invalid_state = self._invalid_spell_selection(chosen, pool, required)
+        if invalid_state:
+            return self._diagnostic(channel_id, f"pool={key}; {invalid_state}")
+        component = self._parse_spell_component(text)
+        action = "pick"
+        payload = text.strip()
+        if component is not None:
+            expected_token, expected_step, action, payload = component
+            current_token = str(build.get("component_token") or "")
+            if expected_token != current_token or expected_step != key:
+                return self._spell_selection_step(
+                    data,
+                    channel_id,
+                    key=key,
+                    notice="ปุ่มนี้มาจากแบบร่างหรือหน้าก่อนและใช้กับขั้นตอนปัจจุบันไม่ได้",
+                )
+        elif text.strip() == SPELL_CONFIRM:
+            action = "confirm"
+        elif text.strip() == SPELL_BACK:
+            action = "back"
+        elif text.strip() == SPELL_CANCEL:
+            action = "cancel"
+        elif text.casefold().startswith("remove "):
+            action, payload = "remove", text[7:].strip()
+
+        if action in {"previous", "next"}:
+            pages = dict(build.get("spell_pages") or {})
+            page_count = max(1, ceil(len(pool) / SPELL_PAGE_SIZE))
+            try:
+                raw_current = int(pages.get(key, 0))
+            except (TypeError, ValueError):
+                raw_current = 0
+            current = min(max(raw_current, 0), page_count - 1)
+            wanted = current - 1 if action == "previous" else current + 1
+            if wanted < 0 or wanted >= page_count:
+                boundary = "หน้าแรก" if wanted < 0 else "หน้าสุดท้าย"
+                return self._spell_selection_step(
+                    data, channel_id, key=key, notice=f"ตอนนี้อยู่{boundary}แล้ว"
+                )
+            pages[key] = wanted
+            build["spell_pages"] = pages
             await self._save(draft, data)
-            return self._prepared_step(data, channel_id)
-        data["_build"]["step"] = "review"
+            return self._spell_selection_step(data, channel_id, key=key)
+
+        if action == "confirm":
+            if len(chosen) != required:
+                return self._spell_selection_step(
+                    data,
+                    channel_id,
+                    key=key,
+                    notice=f"ต้องเลือกให้ครบ {required} รายการก่อนยืนยัน (ตอนนี้ {len(chosen)})",
+                )
+            return await self._advance_after_spell(draft, data, channel_id, key)
+        if action == "back":
+            return await self._back_from_spell(draft, data, channel_id, key)
+        if action == "cancel":
+            return await self._cancel_draft(draft, channel_id)
+        if action in {"page", "count"}:
+            return self._spell_selection_step(data, channel_id, key=key)
+        if action not in {"pick", "remove"}:
+            return self._spell_selection_step(
+                data, channel_id, key=key, notice="ปุ่มนี้ไม่ใช่คำสั่งที่ใช้ได้ในหน้านี้"
+            )
+
+        global_resolution = self.reg.resolve_spell_name(payload)
+        if global_resolution.ambiguous:
+            names = self._spell_names(global_resolution.ambiguous_keys)
+            return self._spell_selection_step(
+                data,
+                channel_id,
+                key=key,
+                notice=f"ชื่อนี้ตรงกับหลายคาถา: {names} — โปรดระบุชื่อเต็ม",
+            )
+        if global_resolution.key is not None and global_resolution.key not in pool:
+            spell = self.reg.get_spell(global_resolution.key)
+            return self._spell_selection_step(
+                data,
+                channel_id,
+                key=key,
+                notice=f"{spell.name_th_hint} ไม่ใช่ตัวเลือกที่ถูกกฎสำหรับคลาสนี้",
+            )
+
+        resolution = self.reg.resolve_spell_name(payload, allowed_keys=pool)
+        if resolution.ambiguous:
+            return self._spell_selection_step(
+                data,
+                channel_id,
+                key=key,
+                notice=("ชื่อนี้ยังไม่ชัดเจน: "
+                        f"{self._spell_names(resolution.ambiguous_keys)}"),
+            )
+        spell_key = resolution.key
+        if spell_key is None:
+            suggestions = self._spell_names(resolution.suggestion_keys)
+            hint = f" ใกล้เคียง: {suggestions}" if suggestions else ""
+            return self._spell_selection_step(
+                data,
+                channel_id,
+                key=key,
+                notice=f"ไม่พบคาถาชื่อ “{payload}”.{hint}",
+            )
+
+        if action == "remove":
+            if spell_key not in chosen:
+                return self._spell_selection_step(
+                    data, channel_id, key=key, notice="คาถานี้ยังไม่ได้ถูกเลือก จึงเอาออกไม่ได้"
+                )
+            chosen.remove(spell_key)
+            build[key] = chosen
+            await self._save(draft, data)
+            return self._spell_selection_step(
+                data,
+                channel_id,
+                key=key,
+                notice=f"เอา {self.reg.get_spell(spell_key).name_th_hint} ออกแล้ว",
+            )
+
+        if spell_key in chosen:
+            return self._spell_selection_step(
+                data, channel_id, key=key, notice="คาถานี้ถูกเลือกไว้แล้ว — จะไม่เพิ่มซ้ำ"
+            )
+        if len(chosen) >= required:
+            return self._spell_selection_step(
+                data,
+                channel_id,
+                key=key,
+                notice=(f"เลือกครบ {required} รายการแล้ว — เอารายการเดิมออกก่อน "
+                        "หรือกดยืนยัน"),
+            )
+        chosen.append(spell_key)
+        build[key] = chosen
+        await self._save(draft, data)
+        return self._spell_selection_step(
+            data,
+            channel_id,
+            key=key,
+            notice=f"เลือก {self.reg.get_spell(spell_key).name_th_hint} แล้ว",
+        )
+
+    async def _advance_after_spell(
+        self, draft, data: dict, channel_id: str, key: str
+    ) -> BridgeResult:
+        build = data["_build"]
+        return_step = build.pop("_return_spell_step", None)
+        if return_step and return_step != key:
+            notice = ""
+            if return_step == "prepared" and key == "book":
+                legal = set(build.get("book") or [])
+                old_prepared = list(build.get("prepared") or [])
+                build["prepared"] = [spell for spell in old_prepared if spell in legal]
+                removed = [spell for spell in old_prepared if spell not in legal]
+                if removed:
+                    notice = (
+                        "เอาคาถาที่ไม่ได้อยู่ในตำราแล้วออกจากชุดเตรียมไว้: "
+                        + self._spell_names(removed)
+                    )
+            build["step"] = return_step
+            await self._save(draft, data)
+            return self._spell_selection_step(
+                data, channel_id, key=return_step, notice=notice
+            )
+
+        cls = self.reg.get_class(build["class"])
+        sc = cls.spellcasting
+        if key == "cantrips" and sc and sc.spellbook_size > 0:
+            return await self._begin_spell_step(draft, data, channel_id, "book")
+        if key in {"cantrips", "book"} and sc and sc.prepared_count > 0:
+            return await self._begin_spell_step(draft, data, channel_id, "prepared")
+        build["step"] = "review"
         await self._save(draft, data)
         return self._review_step(data, channel_id)
+
+    async def _back_from_spell(
+        self, draft, data: dict, channel_id: str, key: str
+    ) -> BridgeResult:
+        build = data["_build"]
+        cls = self.reg.get_class(build["class"])
+        sc = cls.spellcasting
+        previous: str | None = None
+        if key == "prepared" and sc and sc.spellbook_size > 0 and "book" in build:
+            previous = "book"
+        elif key in {"prepared", "book"} and "cantrips" in build:
+            previous = "cantrips"
+        if previous is None:
+            previous = self._pre_spell_step(data)
+
+        build["_return_spell_step"] = key
+        build["step"] = previous
+        await self._save(draft, data)
+        return self.render(data, channel_id)
+
+    def _pre_spell_step(self, data: dict) -> str:
+        build = data["_build"]
+        if "expertise" in build:
+            return "expertise"
+        species = self.reg.get_species(build["species"])
+        completed_traits = [
+            trait for trait in species.traits
+            if trait.skill_choice and f"species_skill:{trait.key}" in build
+        ]
+        if completed_traits:
+            build["species_skill_trait"] = completed_traits[-1].key
+            return "species_skill"
+        return "skills"
+
+    async def _resume_spell_after_back(
+        self, draft, data: dict, channel_id: str
+    ) -> BridgeResult:
+        target = data["_build"].pop("_return_spell_step", None)
+        if target not in {"cantrips", "book", "prepared"}:
+            return self._diagnostic(channel_id, "ไม่พบขั้นตอนคาถาที่จะกลับไป")
+        data["_build"]["step"] = target
+        await self._save(draft, data)
+        return self._spell_selection_step(data, channel_id, key=target)
+
+    async def _cancel_draft(self, draft: CharacterDraft, channel_id: str) -> BridgeResult:
+        async with self.db.unit_of_work() as s:
+            row = await s.get(CharacterDraft, draft.id)
+            if row is not None and row.status == "ACTIVE":
+                row.status = "CANCELLED"
+        return BridgeResult(handled=True, responses=[OutboundMessage(
+            channel_id,
+            "ยกเลิกการสร้างตัวละครนี้แล้ว ข้อมูลของผู้เล่นคนอื่นไม่ถูกเปลี่ยนแปลง",
+            kind=MessageKind.TABLE_NOTICE,
+        )])
+
+    @staticmethod
+    def _spell_component(
+        data: dict, key: str, action: str, payload: str = ""
+    ) -> str:
+        token = str((data.get("_build") or {}).get("component_token") or "unbound")
+        suffix = f":{payload}" if payload else ""
+        return f"{_SPELL_COMPONENT_PREFIX}:{token}:{key}:{action}{suffix}"
+
+    @staticmethod
+    def _parse_spell_component(value: str) -> tuple[str, str, str, str] | None:
+        parts = (value or "").split(":", 4)
+        if len(parts) < 4 or parts[0] != _SPELL_COMPONENT_PREFIX:
+            return None
+        payload = parts[4] if len(parts) == 5 else ""
+        return parts[1], parts[2], parts[3], payload
+
+    def _spell_names(self, keys) -> str:
+        return ", ".join(
+            f"{self.reg.get_spell(key).name_th_hint} ({self.reg.get_spell(key).display_name_en})"
+            for key in keys
+        )
+
+    @staticmethod
+    def _invalid_spell_selection(
+        chosen: list[str], pool: list[str], required: int
+    ) -> str | None:
+        if len(chosen) != len(set(chosen)):
+            return f"duplicate selections={chosen!r}; expected unique choices"
+        illegal = [spell for spell in chosen if spell not in pool]
+        if illegal:
+            return f"illegal choices={illegal!r}; expected choices from the current legal pool"
+        if len(chosen) > required:
+            return (f"selected_count={len(chosen)}; required_count={required}; "
+                    "expected selected_count <= required_count")
+        return None
 
     # ---------- review + finalize --------------------------------------------------------
     def _review_step(self, data, channel_id) -> BridgeResult:
@@ -420,6 +968,9 @@ class BuildFlow:
         ]
         if b.get("expertise"):
             lines.append(f"เชี่ยวชาญพิเศษ: {', '.join(self.reg.skills[s].name_th for s in b['expertise'])}")
+        if b.get("planned_subclass"):
+            sub = self.reg.get_subclass(b["planned_subclass"])
+            lines.append(f"Subclass แผนไว้: {sub.name_th}")
         if b.get("cantrips"):
             lines.append(f"Cantrips: {', '.join(self.reg.get_spell(s).name_th_hint for s in b['cantrips'])}")
         if b.get("book"):
@@ -443,6 +994,17 @@ class BuildFlow:
                                         channel_id=channel_id)
 
     # ---------- utils -----------------------------------------------------------------
+    @staticmethod
+    def _diagnostic(channel_id: str, detail: str) -> BridgeResult:
+        return BridgeResult(handled=True, responses=[OutboundMessage(
+            channel_id,
+            "ขั้นตอนนี้ไม่มีตัวเลือกที่ถูกกฎให้ดำเนินต่อ จึงหยุดไว้เพื่อไม่ให้ข้อมูลเสียหาย\n\n"
+            f"รายละเอียด: `{detail}`\n"
+            "แจ้งเจ้าของโต๊ะให้ตรวจ rules content แล้วใช้ `!rv resume` หลังแก้ไข",
+            kind=MessageKind.TECHNICAL_ERROR,
+            title="สร้างตัวละครต่อไม่ได้",
+        )])
+
     def _all_skills_so_far(self, data: dict) -> list[str]:
         b = data["_build"]
         bg = self.reg.get_background(b["background"])

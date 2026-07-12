@@ -261,6 +261,64 @@ def _session_opening(messages, _model) -> OpeningScene:
     )
 
 
+def _campaign_proposal(messages, _model) -> dict:
+    """Deterministic world proposal grown from the PREMISE marker — campaign-specific
+    names (never a universal tavern), a navigable 3-location graph, session prep."""
+    premise = _marker(messages, "PREMISE") or "โลกที่ยังไม่มีใครตั้งชื่อ"
+    return {
+        "identity_name": f"แคมเปญ: {premise[:60]}",
+        "brief": f"โลกนี้เกิดจากไอเดียของเจ้าของโต๊ะ — {premise}",
+        "central_question": "ความจริงที่ถูกฝังไว้จะคุ้มราคาที่ต้องจ่ายหรือไม่?",
+        "world_facts": [
+            {"fact": "ผู้คนที่นี่ไม่พูดถึงเรื่องนั้นตอนกลางคืน"},
+            {"fact": "ผู้มาเยือนต้องรายงานตัวกับผู้ดูแลเขตก่อนพระอาทิตย์ตก"},
+        ],
+        "locations": [
+            {"key": "watch-yard", "name": "ลานเวรยามเก่า", "location_type": "LOCATION",
+             "obvious": "ลานหินกว้าง มีหอสังเกตการณ์ไม้เอียงๆ และกระดานประกาศที่ถูกฉีกครึ่ง",
+             "current_activity": "ชาวบ้านกลุ่มเล็กกำลังถกเถียงกันเรื่องประกาศที่หายไป",
+             "exits": [{"to": "keeper-hall", "label": "ทางเดินสู่หอผู้ดูแล", "travel_minutes": 5},
+                        {"to": "old-boundary", "label": "ถนนสู่แนวเขตเก่า", "travel_minutes": 15}]},
+            {"key": "keeper-hall", "name": "หอผู้ดูแลเขต", "location_type": "BUILDING",
+             "obvious": "อาคารเตี้ยหลังคาหนัก ในโถงมีสมุดทะเบียนเล่มใหญ่วางเปิดอยู่",
+             "exits": [{"to": "watch-yard", "label": "ประตูหน้าออกสู่ลาน", "travel_minutes": 5}]},
+            {"key": "old-boundary", "name": "แนวเขตเก่า", "location_type": "LOCATION",
+             "obvious": "เสาหินปักเรียงเป็นแนว บางต้นล้ม มีรอยเชือกใหม่ผูกอยู่กับต้นที่ยังตั้ง",
+             "exits": [{"to": "watch-yard", "label": "ถนนกลับสู่ลานเวรยาม", "travel_minutes": 15}]},
+        ],
+        "npcs": [
+            {"key": "keeper-orin", "name": "ผู้ดูแลโอริน", "personality": "ละเอียด ระแวดระวัง",
+             "voice": "เนิบ ชัดถ้อยชัดคำ", "goal": "ปกปิดว่าทะเบียนหน้าหนึ่งถูกฉีกไป",
+             "location": "keeper-hall"},
+            {"key": "runner-mai", "name": "คนส่งข่าวไหม", "personality": "ปากไว ใจร้อน",
+             "voice": "รัว เร็ว", "goal": "หาคนช่วยตามหาพี่ชายที่หายไปแถวแนวเขต",
+             "location": "watch-yard"},
+        ],
+        "factions": [
+            {"key": "boundary-wardens", "name": "ผู้พิทักษ์แนวเขต",
+             "goal": "ไม่ให้ใครข้ามแนวเขตเก่าโดยไม่มีตรา", "next_action": "เพิ่มเวรยามกลางคืน"},
+        ],
+        "threats": [
+            {"key": "the-unmarked", "name": "สิ่งที่ไม่มีตรา",
+             "goal": "ลบชื่อผู้คนออกจากทะเบียน", "next_action": "ชื่อถัดไปจะหายภายในคืนนี้",
+             "progress": 20, "scheduled_minutes": 480},
+        ],
+        "secrets": [
+            {"key": "torn-page", "fact": "หน้าทะเบียนที่หายไปมีชื่อของผู้ดูแลโอรินเอง",
+             "clues": ["รอยฉีกในสมุดทะเบียนตรงกับกระดาษที่พบใต้หอสังเกตการณ์",
+                        "คนส่งข่าวไหมจำได้ว่าพี่ชายเคยถือกระดาษหน้านั้น"]},
+        ],
+        "session_prep": {
+            "purpose": "แนะนำแนวเขตและการหายไปครั้งแรก",
+            "opening_location": "watch-yard",
+            "present_npcs": ["คนส่งข่าวไหม"],
+            "current_activity": "ชาวบ้านกำลังถกเถียงเรื่องประกาศที่ถูกฉีก",
+            "allowed_clues": ["ประกาศที่ถูกฉีกครึ่งพูดถึง 'ชื่อที่หายไป'"],
+        },
+        "starting_location": "watch-yard",
+    }
+
+
 def _npc_response(messages, _model) -> NPCResponse:
     # Default: cautious in-character reply, no proposed deltas. The utterance may echo
     # only what the NPC was told is KNOWN_TO_NPC. Tests override to propose deltas.
@@ -280,4 +338,5 @@ def install_default_script(fake: FakeLLMProvider) -> FakeLLMProvider:
     fake.on("generate_session_opening", _session_opening)
     fake.on("frame_scene", _frame_scene)
     fake.on("generate_location_expansion", _location_expansion)
+    fake.on("propose_campaign_world", _campaign_proposal)
     return fake

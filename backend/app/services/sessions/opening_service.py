@@ -20,7 +20,7 @@ from app.ai.jobs import SafeRecapGenerator
 from app.ai.llm.base import LLMMessage, LLMProvider
 from app.ai.prompts.system_prompts import OPENING_SYSTEM
 from app.ai.prompts.thai_dm_style import THAI_DM_STYLE
-from app.core.clock import format_game_time
+from app.core.clock import format_game_time_th
 from app.core.errors import LLMError
 from app.core.ids import SYSTEM_ACTOR
 from app.core.logging import get_logger
@@ -58,6 +58,56 @@ class SessionOpeningService:
         self.provider = provider
         self.recap = SafeRecapGenerator(provider)
 
+    async def resolve_opening_location(
+        self, *, campaign_id: str, attendance_member_ids: list[str]
+    ) -> str | None:
+        """Canonical WHERE-to-open resolution (E7). Creation order is NEVER intent:
+        1. current party anchor (continuity — where play last was)
+        2. attending characters' canonical position (majority)
+        3. campaign.starting_location_id (imported / AI-approved / owner-set)
+        4. legacy session_prep.opening_location_id
+        5. the campaign's ONLY location (unambiguous by count, never 'latest')
+        None → the caller must show a setup-incomplete notice; nothing is invented."""
+        from collections import Counter
+
+        from app.models.location import Location
+        from app.world import LocationService
+
+        async with self.db.session() as s:
+            campaign = await s.get(Campaign, campaign_id)
+            if campaign is None:
+                return None
+
+            async def _alive(location_id: str | None) -> str | None:
+                if not location_id:
+                    return None
+                loc = await s.get(Location, location_id)
+                return loc.id if loc is not None and loc.campaign_id == campaign_id else None
+
+            anchor = await _alive(campaign.current_party_anchor_id)
+            if anchor:
+                return anchor
+            positions: list[str] = []
+            for mid in attendance_member_ids:
+                member = await s.get(CampaignMember, mid)
+                if member is None or member.active_character_id is None:
+                    continue
+                char = await s.get(Character, member.active_character_id)
+                if char is not None and char.location_id:
+                    positions.append(char.location_id)
+            for candidate, _ in Counter(positions).most_common():
+                found = await _alive(candidate)
+                if found:
+                    return found
+            start = await _alive(campaign.starting_location_id)
+            if start:
+                return start
+            legacy = await _alive((campaign.session_prep or {}).get("opening_location_id"))
+            if legacy:
+                return legacy
+            only = await LocationService(s).only_location(campaign_id)
+            return only.id if only is not None else None
+
     async def open_new_session(
         self,
         *,
@@ -72,21 +122,26 @@ class SessionOpeningService:
         immediate_threat_ids: list[str] | None = None,
         mode: SceneMode = SceneMode.EXPLORATION,
     ) -> OpeningResult:
+        # 0. resolve WHERE to open when the caller didn't pin it (canonical priority;
+        #    never an invented default).
+        if not location_id:
+            location_id = await self.resolve_opening_location(
+                campaign_id=campaign_id, attendance_member_ids=attendance_member_ids)
+            if not location_id:
+                from app.core.errors import ValidationError
+
+                raise ValidationError(
+                    "campaign has no starting location — import a world, create one "
+                    "with AI, or pick a location explicitly")
+
         # 1. create + open the session. Imported Session Prep, when present,
-        #    constrains WHERE we open and WHAT is happening (not the DM's freedom of
-        #    presentation, but its obligation not to discard the campaign).
+        #    constrains WHAT is happening at the opening (activity, cast, clues) —
+        #    the DM's obligation not to discard the campaign.
         async with self.db.session() as read:
             from app.models.campaign import Campaign
 
             campaign = await read.get(Campaign, campaign_id)
             prep = dict((campaign.session_prep if campaign else None) or {})
-        prep_location = prep.get("opening_location_id")
-        if prep_location:
-            location_id = prep_location
-        prep_clues = list(prep.get("allowed_clues") or [])
-        prep_activity = prep.get("current_activity") or ""
-        prep_npc_names = list(prep.get("present_npcs") or [])
-        prep_npc_refs = await self._resolve_npc_refs(campaign_id, prep_npc_names)
 
         async with self.db.unit_of_work() as s:
             session_row = await SessionService(s).create_session(
@@ -94,6 +149,14 @@ class SessionOpeningService:
             )
             await SessionService(s).open_session(session_row.id)
             session_id, number = session_row.id, session_row.number
+
+        # WHERE to open is the CALLER's canonical resolution (anchor → positions →
+        # starting location → legacy prep → owner's explicit choice). Prep supplies
+        # the WHAT of Session 1 — activity, cast, clues — never a teleport.
+        prep_clues = list(prep.get("allowed_clues") or [])
+        prep_activity = prep.get("current_activity") or ""
+        prep_npc_names = list(prep.get("present_npcs") or [])
+        prep_npc_refs = await self._resolve_npc_refs(campaign_id, prep_npc_names)
 
         # 2. gather the bounded opening context (no DM-only records).
         ctx = await self._gather(campaign_id, attendance_member_ids, location_id)
@@ -125,7 +188,8 @@ class SessionOpeningService:
             # Imported allowed clues seed the scene (failure-with-teeth material).
             if prep_clues:
                 scene.allowed_clues = prep_clues
-            # Place every attending character at the opening location (canonical position).
+            # Place every attending character at the opening location (canonical position)
+            # and move the party anchor here — the continuity point for next session.
             if location_id:
                 from app.models.character import Character as _Char
 
@@ -134,6 +198,9 @@ class SessionOpeningService:
                     char = await s.get(_Char, cid)
                     if char is not None:
                         char.location_id = location_id
+                campaign_row = await s.get(Campaign, campaign_id)
+                if campaign_row is not None:
+                    campaign_row.current_party_anchor_id = location_id
             await SessionService(s).begin_active_play(session_id)
             row = await s.get(Session, session_id)
             row.active_play_state = ActivePlayState.TABLE_OPEN.value
@@ -161,7 +228,7 @@ class SessionOpeningService:
         messages: list[OutboundMessage] = [OutboundMessage(
             channel_id, "", kind=MessageKind.SESSION_TITLE,
             title=f"เซสชันที่ {number} — {opening.title}",
-            data={"footer": f"{ctx['location_name']} · {format_game_time(ctx['game_time'])}"},
+            data={"footer": f"{ctx['location_name']} · {format_game_time_th(ctx['game_time'])}"},
         )]
         if recap_text:
             messages.append(OutboundMessage(

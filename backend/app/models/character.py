@@ -25,6 +25,7 @@ class Character(Base, TimestampMixin):
     name: Mapped[str] = mapped_column(String(120))
     species: Mapped[str] = mapped_column(String(60), default="human")
     char_class: Mapped[str] = mapped_column(String(60), default="fighter")
+    planned_subclass: Mapped[str | None] = mapped_column(String(80), nullable=True, default=None)
     background: Mapped[str] = mapped_column(String(60), default="")
     ruleset_id: Mapped[str] = mapped_column(String(16), default="srd521")
 
@@ -71,6 +72,13 @@ class Character(Base, TimestampMixin):
     # Canonical physical position (where this character IS). Scene presence derives
     # from co-location; supports party splits. NULL until placed at session start.
     location_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+
+    # Explicit, persistent travel CONSENT (§18). When set to another character's id,
+    # this character has agreed to travel with that leader and moves when the leader
+    # moves (and only while co-located). Co-location alone is NEVER consent — a
+    # character with no follow state stays put when someone else leaves. Cleared when
+    # this character acts/moves on their own initiative or explicitly stops following.
+    following_character_id: Mapped[str | None] = mapped_column(String(32), nullable=True, default=None)
 
     # Narrative hooks (experience overhaul) — the DM engine's raw material.
     hooks: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)

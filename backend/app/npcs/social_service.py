@@ -27,6 +27,9 @@ class SocialResult:
     utterance: str
     committed_belief_changes: list[str] = field(default_factory=list)
     attitude_change: str | None = None
+    # The NPC's stance toward THIS listener after recording the interaction.
+    stance: str | None = None
+    memory_type: str | None = None
 
 
 class NPCSocialService:
@@ -43,24 +46,45 @@ class NPCSocialService:
         utterance: str,
         session_id: str | None = None,
         scene_id: str | None = None,
+        source_event_id: str | None = None,
     ) -> SocialResult:
-        # 1. generate (read-only, epistemic-scoped context).
+        # 1. generate (read-only, epistemic-scoped context — now including this NPC's
+        #    relationship with + memories of THIS specific listener).
         async with self.db.session() as read:
             from app.models.npc import NPC
 
             npc = await read.get(NPC, npc_id)
+            listener_name = await _listener_name(read, listener_ref)
+            game_time, _ = await _campaign_time_and_loc(read, campaign_id, npc_id)
             response: NPCResponse = await self.generator.run(
-                read, npc=npc, listener_ref=listener_ref, utterance=utterance
+                read, npc=npc, listener_ref=listener_ref, utterance=utterance,
+                listener_name=listener_name, game_time=game_time,
             )
         display = _compose_display(npc, response)
 
-        # 2. validate + commit proposed deltas (engine-owned).
+        # 2. validate + commit proposed deltas (engine-owned) + record the episodic
+        #    memory of what this listener just did (deterministic, always for major
+        #    events — the memory loop, §10).
         committed: list[str] = []
         attitude_change: str | None = None
         async with self.db.unit_of_work() as s:
             knowledge = NPCKnowledgeService(s)
             events = EventService(s)
             actor = entity_ref("npc", npc_id)
+
+            listener_name = await _listener_name(s, listener_ref)
+            game_time, location_id = await _campaign_time_and_loc(s, campaign_id, npc_id)
+            from app.npcs.memory_service import NPCMemoryService
+
+            memory = await NPCMemoryService(s).record_interaction(
+                npc_id=npc_id, listener_ref=listener_ref, listener_name=listener_name,
+                utterance=utterance, event_id=source_event_id,
+                location_id=location_id, game_time=game_time,
+            )
+            recalled = await NPCMemoryService(s).recall(
+                npc_id=npc_id, listener_ref=listener_ref, game_time=game_time)
+            stance = recalled.relationship.current_stance if recalled.relationship else None
+            memory_type = memory.memory_type
 
             for belief in response.proposed_belief_deltas:
                 if belief.npc_id != npc_id:
@@ -98,7 +122,30 @@ class NPCSocialService:
         return SocialResult(
             npc_id=npc_id, utterance=display,
             committed_belief_changes=committed, attitude_change=attitude_change,
+            stance=stance, memory_type=memory_type,
         )
+
+
+async def _listener_name(session, listener_ref: str) -> str:
+    from app.core.ids import parse_entity_ref
+    from app.models.character import Character
+
+    kind, cid = parse_entity_ref(listener_ref)
+    if kind == "character" and cid:
+        char = await session.get(Character, cid)
+        if char is not None:
+            return char.name
+    return listener_ref
+
+
+async def _campaign_time_and_loc(session, campaign_id: str, npc_id: str) -> tuple[int, str | None]:
+    from app.models.campaign import Campaign
+    from app.models.npc import NPC
+
+    campaign = await session.get(Campaign, campaign_id)
+    npc = await session.get(NPC, npc_id)
+    return (campaign.current_game_time if campaign else 0,
+            npc.current_location_id if npc else None)
 
 
 _NONVERBAL_MODES = {"SLATE", "SIGN", "NONVERBAL", "TELEPATHY", "OTHER"}

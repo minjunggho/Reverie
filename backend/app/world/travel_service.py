@@ -15,7 +15,6 @@ from sqlalchemy import select
 from app.ai.llm.base import LLMProvider
 from app.ai.narration_guard import screen_decision_prompt, screen_narration
 from app.core.errors import LLMError
-from app.core.ids import parse_entity_ref
 from app.discord_bridge.dto import BridgeResult, OutboundMessage
 from app.memory.context_builders import build_scene_frame_context
 from app.memory.scene_context import SceneContextBuilder
@@ -91,21 +90,37 @@ class TravelService:
         # cast, objects, threats, clues, purpose) carries over; it is rebuilt from
         # canon at the destination, never inherited from the scene being left.
         perceivable: list[str] = []
+        game_time = 0
         async with self.db.unit_of_work() as s:
             if travel_minutes > 0:
                 clock = await WorldClockService(s).advance_time(
                     campaign_id=ctx.campaign_id, minutes=travel_minutes,
                     session_id=ctx.session_id, actor_entity=f"character:{ctx.character_id}")
                 perceivable = list(clock.perceivable_notes)
+            from app.models.campaign import Campaign
+
+            campaign_row = await s.get(Campaign, ctx.campaign_id)
+            game_time = campaign_row.current_game_time if campaign_row else 0
+            # The active scene IS the table's focus: its move drags the party anchor
+            # (the continuity point the next session opens from).
+            if campaign_row is not None:
+                campaign_row.current_party_anchor_id = dest_id
             scene_row = await SceneService(s).get_active_scene(ctx.session_id) if ctx.session_id else None
             if scene_row is not None:
-                movers: list[str] = []
-                for ref in list(scene_row.participants or []):
-                    kind, cid = parse_entity_ref(ref)
-                    if kind == "character" and cid:
-                        movers.append(cid)
-                if ctx.character_id and ctx.character_id not in movers:
-                    movers.append(ctx.character_id)
+                # MOVEMENT CONSENT (§18): only the acting character moves by default.
+                # Co-location is NOT consent. Another character travels along ONLY
+                # when it has an explicit, persistent follow state pointing at the
+                # actor AND is co-located right now. Everyone else stays put — a split
+                # party remains split across scenes and sessions.
+                movers: list[str] = [ctx.character_id] if ctx.character_id else []
+                if ctx.character_id:
+                    followers = await PositionService(s).consenting_followers(
+                        campaign_id=ctx.campaign_id, leader_id=ctx.character_id,
+                        at_location_id=current_id)
+                    movers.extend(followers)
+                    # The actor moving on their own initiative is now leading, not
+                    # following — break any stale follow state they held.
+                    await PositionService(s).stop_follow(follower_id=ctx.character_id)
                 for cid in movers:
                     await PositionService(s).move(
                         character_id=cid, to_location_id=dest_id, campaign_id=ctx.campaign_id,
@@ -114,10 +129,6 @@ class TravelService:
                 dest_npc_refs = [f"npc:{n.id}" for n in (await s.execute(
                     select(NPC).where(NPC.campaign_id == ctx.campaign_id,
                                       NPC.current_location_id == dest_id))).scalars()]
-                from app.models.campaign import Campaign
-
-                campaign_row = await s.get(Campaign, ctx.campaign_id)
-                game_time = campaign_row.current_game_time if campaign_row else 0
                 await SceneService(s).close_scene(scene_row)
                 await SceneService(s).create_scene(
                     session_id=scene_row.session_id, location_id=dest_id,
@@ -147,6 +158,13 @@ class TravelService:
         data = {"decision_prompt": prompt}
         if sctx.exits:
             data["fields"] = [{"name": "ทางออก", "value": "\n".join(sctx.exits), "inline": False}]
+        # Authoritative time in the frame footer — players always know when time moved.
+        from app.core.clock import format_game_time_th
+
+        footer = format_game_time_th(game_time)
+        if travel_minutes > 0:
+            footer += f" · เดินทาง {travel_minutes} นาที"
+        data["footer"] = footer
         responses = [OutboundMessage(ctx.channel_id, text, kind=MessageKind.SCENE_FRAME,
                                      title=sctx.location_name, data=data)]
         if perceivable:

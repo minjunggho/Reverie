@@ -197,6 +197,38 @@ async def test_walking_outside_transitions_to_canonical_location(db, provider):
         new_scene = await SceneService(s).get_active_scene(opening.session_id)
         assert new_scene.id != opening.scene_id
         assert new_scene.location_id == street.id
+        # Travel dragged the party anchor — the next session opens HERE, not at
+        # the imported starting location (E7 continuity).
+        campaign = await s.get(Campaign, cid)
+        assert campaign.current_party_anchor_id == street.id
+    # Elapsed/current time is visible on the arrival frame.
+    assert "วันที่ 1" in frame.data.get("footer", "")
+
+
+async def test_left_behind_character_does_not_teleport_with_the_party(db, provider):
+    admin = AdminBridge(db, provider)
+    cid, opening, veskan_id, aria_id = await _party_and_session(db, provider, admin)
+    # Aria stayed somewhere else earlier (canonical position differs from the actor's).
+    async with db.unit_of_work() as s:
+        cathedral = (await s.execute(select(Location).where(
+            Location.name == "Cathedral District"))).scalar_one()
+        aria = await s.get(Character, aria_id)
+        aria.location_id = cathedral.id
+    provider.on("interpret_committed_action", lambda m, model: ActionInterpretation(
+        goal="ออกไปข้างนอก", method="เดินออกประตูหน้า", intent_confidence=0.9,
+        movement_intent=True, movement_reference="ออกไปข้างนอก"))
+    bridge = build_bridge(db, provider=provider, rng=SequenceRandomness(default=10))
+    r = await bridge.handle_inbound(_msg("! ผมเดินออกไปข้างนอก", author="owner"))
+    assert "Bellmaker Street" in r.note
+    async with db.session() as s:
+        street = (await s.execute(select(Location).where(
+            Location.name == "Bellmaker Street"))).scalar_one()
+        veskan = await s.get(Character, veskan_id)
+        aria = await s.get(Character, aria_id)
+        assert veskan.location_id == street.id           # the actor moved
+        cathedral = (await s.execute(select(Location).where(
+            Location.name == "Cathedral District"))).scalar_one()
+        assert aria.location_id == cathedral.id          # the absent friend did NOT
 
 
 async def test_travel_up_advances_time_and_ticks_threats(db, provider):

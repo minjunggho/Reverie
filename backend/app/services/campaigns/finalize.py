@@ -41,6 +41,7 @@ async def finalize_character(db, *, draft: CharacterDraft, data: dict,
             ac=armor_class(cls.name, scores["dex"]),
         )
         char.background = bg.name
+        char.planned_subclass = b.get("planned_subclass") or None
         char.hooks = {k: v for k, v in data.items() if k in HOOK_KEYS and v}
         char.appearance = data.get("appearance", "")
         char.languages = ["Common"]
@@ -120,6 +121,10 @@ async def finalize_character(db, *, draft: CharacterDraft, data: dict,
             await InventoryService(s).grant(character_id=char.id, name=item,
                                             record_event=False)
             gear.append(item)
+        from app.services.economy import WalletService
+        from app.services.economy.wallet_service import format_balances
+
+        purse = await WalletService(s).grant_starting_funds(character=char)
 
         row = await s.get(CharacterDraft, draft.id)
         row.status = "DONE"
@@ -143,8 +148,12 @@ async def finalize_character(db, *, draft: CharacterDraft, data: dict,
             fields.append({"name": "การร่ายเวท",
                            "value": f"Save DC {blk['save_dc']} · โจมตีเวท +{blk['attack_bonus']}",
                            "inline": False})
+        if b.get("planned_subclass"):
+            sub = reg.get_subclass(b["planned_subclass"])
+            fields.append({"name": "Subclass แผนไว้", "value": sub.name_th, "inline": False})
         fields.append({"name": "🎒 สัมภาระ", "value": "\n".join(f"• {g}" for g in gear[:8]),
                        "inline": False})
+        fields.append({"name": "💰 ถุงเงิน", "value": format_balances(purse), "inline": False})
         hook_lines = [f"• {data[k]}" for k in ("desire", "fear", "flaw", "connection")
                       if data.get(k)]
         if hook_lines:

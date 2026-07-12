@@ -9,7 +9,7 @@ inbound path as if it had been typed (uniform, testable).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from app.models.enums import MessageCategory
 from app.presentation import MessageKind
@@ -35,6 +35,42 @@ class InboundMessage:
     attachments: tuple[InboundAttachment, ...] = ()
 
 
+@dataclass(frozen=True)
+class SelectOption:
+    """One Discord-safe option in an engine-described select menu."""
+
+    label: str
+    value: str
+    description: str | None = None
+    default: bool = False
+
+
+@dataclass(frozen=True)
+class SelectMenu:
+    """A select menu rendered by the Discord adapter.
+
+    Values re-enter the normal inbound route and are always revalidated against
+    authoritative draft/rules state; they are never trusted merely because the
+    client displayed them.
+    """
+
+    custom_id: str
+    placeholder: str
+    options: list[SelectOption]
+    min_values: int = 1
+    max_values: int = 1
+
+
+@dataclass(frozen=True)
+class ActionButton:
+    """A Discord button whose value re-enters the normal inbound route."""
+
+    label: str
+    value: str
+    style: Literal["secondary", "primary", "success", "danger"] = "secondary"
+    disabled: bool = False
+
+
 @dataclass
 class OutboundMessage:
     """A message the engine wants the bot to post."""
@@ -48,6 +84,10 @@ class OutboundMessage:
     data: dict[str, Any] = field(default_factory=dict)
     # Quick-reply options (label == value fed back as typed text on click).
     choices: list[str] = field(default_factory=list)
+    # Rich components for bounded, paginated choice screens. ``choices`` remains
+    # the compact legacy quick-reply contract used elsewhere.
+    select_menus: list[SelectMenu] = field(default_factory=list)
+    action_buttons: list[ActionButton] = field(default_factory=list)
 
 
 @dataclass

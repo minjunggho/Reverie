@@ -217,11 +217,15 @@ async def build_narration_context(
 # --- Phase 11: NPC response (epistemic-scoped) -------------------------------
 async def build_npc_response_context(
     session: AsyncSession, *, npc, listener_ref: str, utterance: str,
+    listener_name: str | None = None, game_time: int = 0,
 ) -> list[LLMMessage]:
     """Assemble an NPC prompt from ONLY that NPC's own epistemic records + the
-    campaign protocols it is authorized to know. It never touches objective
-    KnowledgeRecord/Secret, so unlearned truth cannot leak in."""
+    campaign protocols it is authorized to know + how it feels about and what it
+    remembers of THIS specific listener. It never touches objective
+    KnowledgeRecord/Secret, so unlearned truth cannot leak in; and one NPC's
+    memories are never visible to another (retrieval is scoped to npc.id)."""
     from app.npcs.knowledge_service import NPCKnowledgeService
+    from app.npcs.memory_service import NPCMemoryService
 
     knowledge = NPCKnowledgeService(session)
     facts = await knowledge.facts_npc_may_use(npc.id)
@@ -234,11 +238,18 @@ async def build_npc_response_context(
             lines.append(f"- {p['title']}:")
             lines.extend(f"  {i + 1}. {rule}" for i, rule in enumerate(p["rules"]))
         proto_block = "\n".join(lines) + "\n"
+    # Retrieval-scoped relationship + episodic memories about THIS listener.
+    recalled = await NPCMemoryService(session).recall(
+        npc_id=npc.id, listener_ref=listener_ref, game_time=game_time)
+    memory_block = recalled.as_prompt_block(listener_name or listener_ref)
+    memory_section = (f"MEMORY_OF_LISTENER (ตอบให้สอดคล้องกับความรู้สึก/ความทรงจำนี้):\n"
+                      f"{memory_block}\n") if memory_block else ""
     persona = (
         f"ชื่อ={npc.name}; บุคลิก={npc.personality or '-'}; "
         f"น้ำเสียง={npc.voice_register or '-'}; อารมณ์={npc.emotional_state}; "
         f"การสื่อสาร={npc.communication_mode}"
     )
+    listener_line = f"LISTENER: {listener_name or listener_ref} ({listener_ref})"
     return [
         {"role": "system", "content": NPC_RESPONSE_SYSTEM},
         {
@@ -247,7 +258,8 @@ async def build_npc_response_context(
                 f"NPC: {persona}\n"
                 f"KNOWN_TO_NPC:\n{known}\n"
                 f"{proto_block}"
-                f"LISTENER: {listener_ref}\n"
+                f"{memory_section}"
+                f"{listener_line}\n"
                 f"UTTERANCE: {utterance}"
             ),
         },

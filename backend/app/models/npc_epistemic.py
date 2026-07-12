@@ -4,12 +4,15 @@ These separate what is OBJECTIVELY true (KnowledgeRecord/Secret) from what a spe
 NPC knows/believes/suspects. The retrieval layer only ever hands an NPC prompt rows
 from THIS table for THAT npc — never objective truth the NPC has not learned.
 
-`NPCFact` consolidates knowledge/belief/suspicion/rumor/memory via `status`
-(KnowledgeStatus). `NPCRelationship` holds per-entity attitude + trust.
+`NPCFact` consolidates knowledge/belief/suspicion/rumor via `status`
+(KnowledgeStatus). `NPCRelationship` holds per-entity multi-dimensional feeling.
+`NPCMemory` is episodic: specific things a specific character DID to this NPC,
+linked to the committed source event, retrieved to make behavior player-specific
+and persistent across sessions.
 """
 from __future__ import annotations
 
-from sqlalchemy import Float, Integer, String, Text
+from sqlalchemy import Boolean, Float, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, fk_id, pk_column
@@ -28,11 +31,51 @@ class NPCFact(Base, TimestampMixin):
     confidence: Mapped[float] = mapped_column(Float, default=1.0)
 
 
+# Bounded relationship dimensions (§7). Each is clamped to [-100, 100] by the
+# service; `trust`/`attitude` are kept for back-compat with older callers/tests.
+RELATIONSHIP_DIMENSIONS = (
+    "familiarity", "trust", "affection", "respect",
+    "fear", "anger", "suspicion", "obligation",
+)
+
+
 class NPCRelationship(Base, TimestampMixin):
     __tablename__ = "npc_relationships"
 
     id: Mapped[str] = pk_column()
     npc_id: Mapped[str] = fk_id("npcs.id")
     entity_ref: Mapped[str] = mapped_column(String(80))
+    # Back-compat coarse fields.
     attitude: Mapped[str] = mapped_column(String(40), default="neutral")
     trust: Mapped[int] = mapped_column(Integer, default=0)
+    # Multi-dimensional feeling toward THIS specific character.
+    familiarity: Mapped[int] = mapped_column(Integer, default=0)
+    affection: Mapped[int] = mapped_column(Integer, default=0)
+    respect: Mapped[int] = mapped_column(Integer, default=0)
+    fear: Mapped[int] = mapped_column(Integer, default=0)
+    anger: Mapped[int] = mapped_column(Integer, default=0)
+    suspicion: Mapped[int] = mapped_column(Integer, default=0)
+    obligation: Mapped[int] = mapped_column(Integer, default=0)
+    current_stance: Mapped[str] = mapped_column(String(40), default="neutral")
+    last_interaction_event_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+
+class NPCMemory(Base, TimestampMixin):
+    __tablename__ = "npc_memories"
+
+    id: Mapped[str] = pk_column()
+    npc_id: Mapped[str] = fk_id("npcs.id")
+    # The character/entity this memory is ABOUT (whose action it records).
+    subject_ref: Mapped[str] = mapped_column(String(80), index=True)
+    event_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    memory_type: Mapped[str] = mapped_column(String(24), default="INTERACTION")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    importance: Mapped[int] = mapped_column(Integer, default=10)      # 0..100
+    emotional_valence: Mapped[int] = mapped_column(Integer, default=0)  # -3..3
+    confidence: Mapped[float] = mapped_column(Float, default=1.0)
+    witnessed_directly: Mapped[bool] = mapped_column(Boolean, default=True)
+    source_ref: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    location_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    game_time: Mapped[int] = mapped_column(Integer, default=0)
+    last_recalled_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)

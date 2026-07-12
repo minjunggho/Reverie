@@ -18,6 +18,7 @@ from app.api.health import router as health_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.db.session import get_database
+from app.rules_content import get_registry
 
 # Production Activity frontend build (activity/dist), served same-origin at /activity.
 _ACTIVITY_DIST = Path(__file__).resolve().parents[2] / "activity" / "dist"
@@ -27,6 +28,9 @@ _ACTIVITY_DIST = Path(__file__).resolve().parents[2] / "activity" / "dist"
 async def lifespan(app: FastAPI):
     settings = get_settings()
     configure_logging(settings.log_level)
+    # Fail before accepting traffic if character creation cannot be completed
+    # from the deployed rules/UI content.
+    get_registry()
     db = get_database(settings)
     # For local/dev SQLite convenience, ensure tables exist. Production uses Alembic.
     if settings.is_sqlite:

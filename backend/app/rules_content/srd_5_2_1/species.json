@@ -1,26 +1,24 @@
 [
   {
-    "definition_id": "species:human", "definition_version": 1,
-    "name": "human", "name_th": "มนุษย์",
-    "pitch_th": "ธีม 'คนธรรมดา' จะตรงและแรงที่สุด — ทุกอย่างที่ได้มา ได้มาด้วยตัวเอง",
+    "definition_id": "species:aasimar", "definition_version": 1,
+    "name": "aasimar", "name_th": "เอซิแมร์",
+    "pitch_th": "ผู้มีแสงส่องจากสายเลือดอันศักดิ์สิทธิ์ — คนที่ไม่เคยเข้าใจว่าแสงยิ่งใหญ่แค่ไหน",
     "speed": 30,
     "traits": [
-      {"key": "resourceful", "name_th": "ไหวพริบเอาตัวรอด", "summary_th": "ได้ Heroic Inspiration ทุกครั้งที่พักยาวเสร็จ"},
-      {"key": "skillful", "name_th": "หัวไว", "summary_th": "ถนัดทักษะเพิ่มหนึ่งอย่างที่เลือกเอง", "skill_choice": {"count": 1, "options": "any"}},
-      {"key": "versatile", "name_th": "รอบด้าน", "summary_th": "ได้ Origin Feat เพิ่มหนึ่งรายการ (บันทึกไว้ ใช้งานภายหลัง)"}
-    ]
+      {"key": "celestial_blood", "name_th": "สายเลือดชั้นฟ้า", "summary_th": "มีความโดดเด่นทางจิตวิญญาณและความชัดเจนของเป้าหมาย", "implementation_status": "recorded"},
+      {"key": "darkvision", "name_th": "ตาเห็นในมืด", "summary_th": "มองเห็นในความมืดสลัวได้ 60 ฟุต", "darkvision": 60, "implementation_status": "active"}
+    ],
+    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
   },
   {
-    "definition_id": "species:elf", "definition_version": 1,
-    "name": "elf", "name_th": "เอลฟ์",
-    "pitch_th": "ความย้อนแย้งที่น่าสนใจ — ถ้าเผ่าที่ผูกกับเวทมนตร์ มีคนที่รู้สึกว่าตัวเองไร้พรสวรรค์ล่ะ?",
+    "definition_id": "species:dragonborn", "definition_version": 1,
+    "name": "dragonborn", "name_th": "ดราก้อนบอร์น",
+    "pitch_th": "ผู้สืบเชื้อสายมังกรที่พกความกล้าหาญและเกียรติด้วยร่างกาย",
     "speed": 30,
     "traits": [
-      {"key": "darkvision", "name_th": "ตาเห็นในมืด", "summary_th": "มองเห็นในความมืดสลัวได้ 60 ฟุต", "darkvision": 60},
-      {"key": "fey_ancestry", "name_th": "สายเลือดภูต", "summary_th": "ได้เปรียบในการต้านการถูกทำเสน่ห์"},
-      {"key": "keen_senses", "name_th": "ประสาทสัมผัสไว", "summary_th": "ถนัดทักษะรับรู้หนึ่งอย่างที่เลือก", "skill_choice": {"count": 1, "options": ["insight", "perception", "survival"]}},
-      {"key": "trance", "name_th": "ภวังค์", "summary_th": "ไม่ต้องหลับ เข้าภวังค์ 4 ชั่วโมงแทนการพักยาว"}
-    ]
+      {"key": "draconic_heritage", "name_th": "สายเลือดมังกร", "summary_th": "ยึดถือพลังและความสำเร็จในรูปแบบของตนเอง", "implementation_status": "recorded"}
+    ],
+    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
   },
   {
     "definition_id": "species:dwarf", "definition_version": 1,
@@ -28,11 +26,46 @@
     "pitch_th": "หนักแน่น อึด และจำไม่ลืม — ภูเขาสอนให้ทนก่อนจะสอนให้แข็งแกร่ง",
     "speed": 30,
     "traits": [
-      {"key": "darkvision", "name_th": "ตาเห็นในมืด", "summary_th": "มองเห็นในความมืดสลัวได้ 120 ฟุต", "darkvision": 120},
-      {"key": "dwarven_resilience", "name_th": "ความทรหดคนแคระ", "summary_th": "ต้านทานดาเมจพิษ และได้เปรียบต้านสภาวะถูกพิษ", "resistances": ["poison"]},
-      {"key": "dwarven_toughness", "name_th": "ร่างเหล็ก", "summary_th": "HP สูงสุดเพิ่ม 1 ต่อเลเวล", "hp_per_level": 1},
-      {"key": "stonecunning", "name_th": "สัมผัสศิลา", "summary_th": "รับรู้โครงสร้างหินรอบตัวได้พิเศษ"}
-    ]
+      {"key": "darkvision", "name_th": "ตาเห็นในมืด", "summary_th": "มองเห็นในความมืดสลัวได้ 120 ฟุต", "darkvision": 120, "implementation_status": "active"},
+      {"key": "dwarven_resilience", "name_th": "ความทรหดคนแคระ", "summary_th": "ต้านทานดาเมจพิษ และได้เปรียบต้านสภาวะถูกพิษ", "resistances": ["poison"], "implementation_status": "active"},
+      {"key": "dwarven_toughness", "name_th": "ร่างเหล็ก", "summary_th": "HP สูงสุดเพิ่ม 1 ต่อเลเวล", "hp_per_level": 1, "implementation_status": "active"},
+      {"key": "stonecunning", "name_th": "สัมผัสศิลา", "summary_th": "รับรู้โครงสร้างหินรอบตัวได้พิเศษ", "implementation_status": "recorded"}
+    ],
+    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
+  },
+  {
+    "definition_id": "species:elf", "definition_version": 1,
+    "name": "elf", "name_th": "เอลฟ์",
+    "pitch_th": "ความย้อนแย้งที่น่าสนใจ — ถ้าเผ่าที่ผูกกับเวทมนตร์ มีคนที่รู้สึกว่าตัวเองไร้พรสวรรค์ล่ะ?",
+    "speed": 30,
+    "traits": [
+      {"key": "darkvision", "name_th": "ตาเห็นในมืด", "summary_th": "มองเห็นในความมืดสลัวได้ 60 ฟุต", "darkvision": 60, "implementation_status": "active"},
+      {"key": "fey_ancestry", "name_th": "สายเลือดภูต", "summary_th": "ได้เปรียบในการต้านการถูกทำเสน่ห์", "implementation_status": "recorded"},
+      {"key": "keen_senses", "name_th": "ประสาทสัมผัสไว", "summary_th": "ถนัดทักษะรับรู้หนึ่งอย่างที่เลือก", "skill_choice": {"count": 1, "options": ["insight", "perception", "survival"]}, "implementation_status": "active"},
+      {"key": "trance", "name_th": "ภวังค์", "summary_th": "ไม่ต้องหลับ เข้าภวังค์ 4 ชั่วโมงแทนการพักยาว", "implementation_status": "recorded"}
+    ],
+    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
+  },
+  {
+    "definition_id": "species:gnome", "definition_version": 1,
+    "name": "gnome", "name_th": "โนม",
+    "pitch_th": "ตัวเล็กแต่คิดเร็วและมีความแปลกชวนสนใจ — โลกของพวกเขามักเต็มไปด้วยความลับเล็กๆ",
+    "speed": 30,
+    "traits": [
+      {"key": "darkvision", "name_th": "ตาเห็นในมืด", "summary_th": "มองเห็นในความมืดสลัวได้ 60 ฟุต", "darkvision": 60, "implementation_status": "active"},
+      {"key": "gnome_cunning", "name_th": "ปัญญาโนม", "summary_th": "มักมีภูมิคุ้มกันต่อความลึกลับของเวทที่ไม่เอื้ออำนวย", "implementation_status": "recorded"}
+    ],
+    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
+  },
+  {
+    "definition_id": "species:goliath", "definition_version": 1,
+    "name": "goliath", "name_th": "โกลิอาธ",
+    "pitch_th": "ร่างสูงสุดแสนหนักและมีสายเลือดของภูเขา — มักเดินตามเสียงของธรรมชาติและประวัติศาสตร์",
+    "speed": 30,
+    "traits": [
+      {"key": "stone_endurance", "name_th": "ความอดทนจากหิน", "summary_th": "ทนทานต่อแรงกดดันและความล้มเหลวทางกายภาพ", "implementation_status": "recorded"}
+    ],
+    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
   },
   {
     "definition_id": "species:halfling", "definition_version": 1,
@@ -40,10 +73,45 @@
     "pitch_th": "ตัวเล็ก ใจใหญ่ และโชคเข้าข้างเสมอ — โลกมองข้ามจนกระทั่งสายเกินไป",
     "speed": 30,
     "traits": [
-      {"key": "brave", "name_th": "ใจกล้า", "summary_th": "ได้เปรียบในการต้านความกลัว"},
-      {"key": "luck", "name_th": "โชคช่วย", "summary_th": "ทอยได้ 1 บน d20 แล้วทอยใหม่ได้"},
-      {"key": "nimbleness", "name_th": "ตัวจิ๋วลื่นไหล", "summary_th": "ลอดผ่านช่องว่างของสิ่งมีชีวิตที่ใหญ่กว่าได้"},
-      {"key": "naturally_stealthy", "name_th": "กลืนหาย", "summary_th": "ซ่อนตัวหลังสิ่งมีชีวิตที่ใหญ่กว่าได้"}
-    ]
+      {"key": "brave", "name_th": "ใจกล้า", "summary_th": "ได้เปรียบในการต้านความกลัว", "implementation_status": "recorded"},
+      {"key": "luck", "name_th": "โชคช่วย", "summary_th": "ทอยได้ 1 บน d20 แล้วทอยใหม่ได้", "implementation_status": "recorded"},
+      {"key": "nimbleness", "name_th": "ตัวจิ๋วลื่นไหล", "summary_th": "ลอดผ่านช่องว่างของสิ่งมีชีวิตที่ใหญ่กว่าได้", "implementation_status": "recorded"},
+      {"key": "naturally_stealthy", "name_th": "กลืนหาย", "summary_th": "ซ่อนตัวหลังสิ่งมีชีวิตที่ใหญ่กว่าได้", "implementation_status": "recorded"}
+    ],
+    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
+  },
+  {
+    "definition_id": "species:human", "definition_version": 1,
+    "name": "human", "name_th": "มนุษย์",
+    "pitch_th": "ธีม 'คนธรรมดา' จะตรงและแรงที่สุด — ทุกอย่างที่ได้มา ได้มาด้วยตัวเอง",
+    "speed": 30,
+    "traits": [
+      {"key": "resourceful", "name_th": "ไหวพริบเอาตัวรอด", "summary_th": "ได้ Heroic Inspiration ทุกครั้งที่พักยาวเสร็จ", "implementation_status": "recorded"},
+      {"key": "skillful", "name_th": "หัวไว", "summary_th": "ถนัดทักษะเพิ่มหนึ่งอย่างที่เลือกเอง", "skill_choice": {"count": 1, "options": "any"}, "implementation_status": "active"},
+      {"key": "versatile", "name_th": "รอบด้าน", "summary_th": "ได้ Origin Feat เพิ่มหนึ่งรายการ (บันทึกไว้ ใช้งานภายหลัง)", "implementation_status": "recorded"}
+    ],
+    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
+  },
+  {
+    "definition_id": "species:orc", "definition_version": 1,
+    "name": "orc", "name_th": "ออร์ค",
+    "pitch_th": "ร่างกายแข็งแรงและใจเป็นนักสู้ — ไม่จำเป็นต้องให้ใครยกย่องให้ยอมรับ",
+    "speed": 30,
+    "traits": [
+      {"key": "darkvision", "name_th": "ตาเห็นในมืด", "summary_th": "มองเห็นในความมืดสลัวได้ 60 ฟุต", "darkvision": 60, "implementation_status": "active"},
+      {"key": "aggressive", "name_th": "ก้าวร้าว", "summary_th": "มีจังหวะเอาชนะที่ยากจะลืม", "implementation_status": "recorded"}
+    ],
+    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
+  },
+  {
+    "definition_id": "species:tiefling", "definition_version": 1,
+    "name": "tiefling", "name_th": "ทิฟลิง",
+    "pitch_th": "ผู้ถือพลังแห่งความเผ็ดร้อนและความพยายาม — คนที่เลือกเดินตามหนทางของตัวเอง",
+    "speed": 30,
+    "traits": [
+      {"key": "darkvision", "name_th": "ตาเห็นในมืด", "summary_th": "มองเห็นในความมืดสลัวได้ 60 ฟุต", "darkvision": 60, "implementation_status": "active"},
+      {"key": "infernal_resistance", "name_th": "ต้านทานไฟนรก", "summary_th": "มีความต้านทานต่อความร้อนจากแหล่งไฟนรก", "implementation_status": "recorded"}
+    ],
+    "source_id": "srd521-chapter-3", "source_kind": "srd", "content_status": "official"
   }
 ]

@@ -58,6 +58,20 @@ class Campaign(Base, TimestampMixin):
     # Monotonic event sequence counter for this campaign (assigned under lock).
     event_seq: Mapped[int] = mapped_column(Integer, default=0)
 
+    # Canonical anchors (E7). Each field has exactly one meaning — creation order is
+    # NEVER campaign intent, and no field doubles as another.
+    #   starting_location_id: where Session 1 opens (imported/AI-approved/owner-set).
+    #   current_party_anchor_id: where the party currently is (updated by session
+    #     opening and party travel; the continuity anchor for the next session).
+    # Plain String (no FK) to avoid a campaigns<->locations FK cycle; both always
+    # hold Location ids of this campaign.
+    starting_location_id: Mapped[str | None] = mapped_column(String(32), nullable=True, default=None)
+    current_party_anchor_id: Mapped[str | None] = mapped_column(String(32), nullable=True, default=None)
+    # Owner-set opening situation used when Session 1 has prep-less canon.
+    default_session_opening: Mapped[str] = mapped_column(Text, default="")
+    # Version stamp of the world model this campaign's canon was written against.
+    world_model_version: Mapped[int] = mapped_column(Integer, default=2)
+
 
 class CampaignMember(Base, TimestampMixin):
     __tablename__ = "campaign_members"
