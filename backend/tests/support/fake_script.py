@@ -19,6 +19,7 @@ from app.models.enums import (
 )
 from app.schemas.llm_io import (
     ActionInterpretation,
+    ActionStep,
     AdjudicationDecision,
     ClassificationResult,
     ConsequenceProposal,
@@ -35,6 +36,56 @@ from app.schemas.llm_io import (
 
 def _joined(messages) -> str:
     return "\n".join(m.get("content", "") for m in messages)
+
+
+# Deterministic compound-action splitter for the FAKE interpreter (the real LLM
+# does this itself). Splits on connectives, classifies each clause into a typed
+# ActionStep, and marks dialogue/future-intention as non-executable.
+_STEP_CONNECTIVES = ("แล้ว", "จากนั้น", " then ", ", ")
+_FUTURE_MARKERS = ("เดี๋ยว", "ไว้ค่อย", "จะไป", "ต้องไป", "later", "จะ")
+
+
+def _classify_clause(clause: str) -> ActionStep:
+    c = clause.strip()
+    low = c.lower()
+    # Dialogue / future intention: preserved, never executed as a physical action.
+    is_thanks = any(w in c for w in ("ขอบคุณ", "ขอบใจ", "thank"))
+    if is_thanks and any(w in c for w in ("ต้องไป", "จะไป", "ธุระ", "เดี๋ยว")):
+        return ActionStep(kind="SPEAK", text=c, temporal="FUTURE")
+    if is_thanks or c.startswith("“") or c.startswith('"') or "พูด" in c:
+        target = "เขา" if "เขา" in c else ""
+        return ActionStep(kind="SPEAK", text=c, targets=[target] if target else [],
+                          temporal="IMMEDIATE")
+    if any(w in c for w in ("ต่อย", "โจมตี", "ฟัน", "แทง", "attack", "punch", "hit")):
+        tgt = _grab_target(c, ("ต่อย", "โจมตี", "attack", "punch", "hit"))
+        return ActionStep(kind="ATTACK", text=c, targets=[tgt] if tgt else [], method=c)
+    if any(w in c for w in ("หยิบ", "คว้า", "เก็บ", "grab", "take", "pick")):
+        return ActionStep(kind="SEARCH", text=c, method=c)
+    if any(w in c for w in ("วิ่งหนี", "หนี", "flee", "run", "เดินออก", "ออกจาก", "ออกไป", "leave", "ไปหา")):
+        dest = c
+        return ActionStep(kind="MOVE", text=c, destination=dest, method=c)
+    if c.startswith("ร่าย") or low.startswith("cast"):
+        return ActionStep(kind="CAST", text=c, spell_reference=c.replace("ร่าย", "").strip())
+    return ActionStep(kind="OTHER", text=c, method=c)
+
+
+def _grab_target(clause: str, verbs) -> str:
+    import re as _re
+
+    rest = clause
+    for v in verbs:
+        rest = _re.sub(rf".*?{v}", "", rest, count=1, flags=_re.I)
+    return rest.strip().split()[0].strip("“”\"") if rest.strip() else ""
+
+
+def _compound_steps(text: str):
+    import re as _re
+
+    pattern = "|".join(_re.escape(c) for c in _STEP_CONNECTIVES)
+    clauses = [p.strip() for p in _re.split(pattern, text) if p.strip()]
+    if len(clauses) < 2:
+        return None
+    return [_classify_clause(c) for c in clauses]
 
 
 def _marker(messages, name: str) -> str:
@@ -62,9 +113,31 @@ def _classify(messages, _model) -> ClassificationResult:
 
 def _interpret(messages, _model) -> ActionInterpretation:
     text = _marker(messages, "ACTION") or _joined(messages)
+    low = text.lower()
+
+    # Natural following (reuse consent system): "ตาม Kael ไป" / "I follow Kael".
+    if (("ตาม" in text and "หยุด" not in text and "เลิก" not in text)
+            or low.startswith("i follow") or " follow " in low):
+        import re as _re
+
+        after = _re.sub(r".*?ตาม|.*?follow", "", text, count=1, flags=_re.I)
+        leader = _re.split(r"ไป|\bto\b", after, maxsplit=1)[0].strip()
+        return ActionInterpretation(
+            goal=f"ตาม {leader}", method="เดินตาม", intent_confidence=0.9,
+            follow_intent=True, follow_reference=leader)
+    if any(p in text for p in ("หยุดตาม", "เลิกตาม", "อยู่ที่นี่", "ไม่ตาม")) \
+            or "stay here" in low or "stop following" in low:
+        return ActionInterpretation(goal="หยุดตาม", method="อยู่กับที่",
+                                    intent_confidence=0.9, stop_following=True)
+
+    # Ordered compound action: split on Thai/English connectives into steps.
+    compound = _compound_steps(text)
+    if compound is not None and len([s for s in compound if s.temporal == "IMMEDIATE"]) >= 2:
+        return ActionInterpretation(
+            goal=text[:60], method="หลายขั้นตอน", intent_confidence=0.85,
+            target_references=[t for s in compound for t in s.targets], steps=compound)
 
     # Spellcasting: "ร่าย <spell> ใส่ <target>" / "cast <spell> at <target>".
-    low = text.lower()
     if text.startswith("ร่าย") or "ร่ายคาถา" in text or low.startswith("cast "):
         import re as _re
 

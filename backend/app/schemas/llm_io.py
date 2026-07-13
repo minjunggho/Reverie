@@ -30,6 +30,49 @@ class ClassificationResult(BaseModel):
     target_references: list[str] = Field(default_factory=list)
 
 
+# --- Ordered action plan (compound `!` actions) ------------------------------
+STEP_KINDS = (
+    "SPEAK", "ATTACK", "CAST", "INTERACT", "SEARCH", "MOVE", "HIDE", "USE_ITEM",
+    "TRANSFER_ITEM", "TRANSFER_CURRENCY", "WAIT", "OTHER",
+)
+
+
+class ActionStep(BaseModel):
+    """One step of an ordered action. Compound input like 'ต่อยยาม หยิบจดหมาย
+    แล้ววิ่งหนี' becomes three steps executed IN ORDER; an earlier step's
+    consequence may prevent a later one. `temporal` separates what the player is
+    doing NOW from what they only SAID (dialogue/future intention/flavor), which
+    is preserved but NEVER executed as a physical action."""
+    kind: Literal[
+        "SPEAK", "ATTACK", "CAST", "INTERACT", "SEARCH", "MOVE", "HIDE",
+        "USE_ITEM", "TRANSFER_ITEM", "TRANSFER_CURRENCY", "WAIT", "OTHER",
+    ] = "OTHER"
+    text: str = ""                       # the clause, verbatim (preserves intent)
+    targets: list[str] = Field(default_factory=list)
+    method: str = ""
+    destination: str = ""                # MOVE: exit/place phrase
+    spell_reference: str = ""            # CAST: the spell name as spoken
+    item_reference: str = ""             # USE_ITEM/TRANSFER_ITEM
+    amount: str = ""                     # TRANSFER_CURRENCY
+    condition: str = ""                  # "if the guard turns" — a declared condition
+    depends_on_previous: bool = False    # only run if the prior step succeeded
+    # IMMEDIATE = do it now; FUTURE = the player only stated an intention ("เดี๋ยว
+    # จะไป"); FLAVOR = pure description. FUTURE/FLAVOR are recorded, not executed.
+    temporal: Literal["IMMEDIATE", "FUTURE", "FLAVOR"] = "IMMEDIATE"
+
+
+class ActionPlan(BaseModel):
+    actor_ref: str = ""
+    steps: list[ActionStep] = Field(default_factory=list)
+    confidence: float = 1.0
+    ambiguity: str = ""                  # what is unclear, if anything
+    clarification_question: str = ""     # ONE focused question, only if it matters
+
+    @property
+    def executable_steps(self) -> list[ActionStep]:
+        return [s for s in self.steps if s.temporal == "IMMEDIATE"]
+
+
 # --- Action interpretation (`!` messages) -----------------------------------
 class ActionInterpretation(BaseModel):
     goal: str
@@ -77,6 +120,17 @@ class ActionInterpretation(BaseModel):
     spell_reference: str = ""
     slot_level: int | None = None
     metamagic: str = ""
+    # Natural following (reuses the consent/follow system): "ฉันตาม Kael ไป" sets
+    # follow_intent + follow_reference; "ฉันหยุดตาม"/"ฉันอยู่ที่นี่" sets stop_following.
+    # The engine resolves the leader + enforces co-location consent; the LLM only
+    # names who is being followed.
+    follow_intent: bool = False
+    follow_reference: str = ""
+    stop_following: bool = False
+    # Ordered compound steps, when the action is more than one thing ("A แล้ว B แล้ว
+    # C"). Empty for a simple single action (the common case) — the pipeline then
+    # uses the flat flags above exactly as before (fully backward compatible).
+    steps: list[ActionStep] = Field(default_factory=list)
 
 
 # --- Adjudication ------------------------------------------------------------

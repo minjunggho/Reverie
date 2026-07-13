@@ -107,9 +107,13 @@ class CommittedActionPipeline:
                 session_row.version += 1
 
     # --- core ----------------------------------------------------------------
-    async def _process(self, ctx: ResolvedContext, action_text: str, *, allow_clarify: bool) -> BridgeResult:
+    async def _process(self, ctx: ResolvedContext, action_text: str, *, allow_clarify: bool,
+                       preset_interpretation=None) -> BridgeResult:
         # Steps 1-9: load context, hydrate the present cast, interpret, resolve
         # target mentions to canonical identities, adjudicate (all read-only).
+        # `preset_interpretation` is supplied when the ordered-plan executor
+        # dispatches a single step — it skips re-interpretation and the plan/follow
+        # branches (no recursion), routing that one step through the normal path.
         async with self.db.session() as read:
             scene = await SceneService(read).get_active_scene(ctx.session_id) if ctx.session_id else None
             character = await read.get(Character, ctx.character_id) if ctx.character_id else None
@@ -121,12 +125,26 @@ class CommittedActionPipeline:
             directory = await SceneEntityDirectory(read).build(
                 scene, actor_character_id=ctx.character_id, campaign_id=ctx.campaign_id
             )
-            interpretation = await self.interpreter.run(
+            interpretation = preset_interpretation or await self.interpreter.run(
                 read, action_text=action_text, scene=scene, character=character,
                 directory=directory,
             )
             # Resolve linguistic mentions ONCE, at the engine boundary.
             resolution = directory.resolve_mentions(interpretation.target_references)
+
+        # Natural following + ordered compound plans are decided ONCE, before the
+        # flat single-action routing (skipped for preset steps to avoid recursion).
+        if preset_interpretation is None:
+            if ((interpretation.follow_intent or interpretation.stop_following)
+                    and ctx.character_id and ctx.session_id):
+                return await self._handle_follow(ctx, interpretation)
+            immediate = [s for s in interpretation.steps if s.temporal == "IMMEDIATE"]
+            if len(immediate) >= 2 and ctx.character_id and ctx.session_id:
+                from app.orchestration.action_plan import build_plan
+
+                actor = entity_ref("character", ctx.character_id)
+                return await self._execute_plan(
+                    ctx, build_plan(interpretation, actor_ref=actor), allow_clarify=allow_clarify)
 
         # Resting is its own domain flow, routed BEFORE adjudication: the numbers
         # come from RestService, never from a generic ability check.
@@ -465,6 +483,86 @@ class CommittedActionPipeline:
             handled=True, category=MessageCategory.COMMITTED_ACTION, state_mutated=True,
             responses=responses, note="social_intent -> NPCSocialService",
         )
+
+    # --- ordered compound plan: steps executed IN ORDER ------------------------
+    async def _execute_plan(self, ctx: ResolvedContext, plan, *, allow_clarify: bool) -> BridgeResult:
+        """Execute an ordered plan step by step. Each step routes through the SAME
+        single-action pipeline (no parallel mechanics). State commits between steps,
+        so a later step sees the world an earlier one left — and an earlier step's
+        consequence can PREVENT a later one: a physical step that could not happen
+        (movement blocked, target unreachable, a check that mattered failed) halts
+        the chain, and the remaining steps are reported as not attempted. FUTURE /
+        FLAVOR steps are already excluded (they are intent, not action)."""
+        from app.orchestration.action_plan import step_to_interpretation
+
+        responses: list[OutboundMessage] = []
+        executed = 0
+        halted_at: str | None = None
+        for step in plan.executable_steps:
+            step_interp = step_to_interpretation(step)
+            result = await self._process(
+                ctx, step.text or step.method or step.kind,
+                allow_clarify=False, preset_interpretation=step_interp)
+            responses.extend(result.responses)
+            executed += 1
+            # Interruption: a physical step that produced no state change (blocked /
+            # unreachable / auto-failure) stops the sequence — earlier consequences
+            # prevented the rest.
+            physical = step.kind in ("MOVE", "ATTACK", "CAST", "INTERACT", "SEARCH",
+                                     "HIDE", "USE_ITEM", "TRANSFER_ITEM", "TRANSFER_CURRENCY")
+            if physical and not result.state_mutated:
+                halted_at = step.kind
+                break
+        remaining = len(plan.executable_steps) - executed
+        if halted_at and remaining > 0:
+            responses.append(OutboundMessage(
+                ctx.channel_id,
+                f"…เหตุการณ์ก่อนหน้าทำให้ทำขั้นต่อไปไม่ได้ ({remaining} ขั้นที่เหลือถูกยกเลิก)",
+                kind=MessageKind.TABLE_NOTICE))
+        return BridgeResult(
+            handled=True, category=MessageCategory.COMMITTED_ACTION,
+            state_mutated=executed > 0, responses=responses,
+            note=f"ordered plan: {executed}/{len(plan.executable_steps)} steps"
+                 + (f", halted at {halted_at}" if halted_at else ""))
+
+    # --- natural following: reuse the consent/follow system --------------------
+    async def _handle_follow(self, ctx: ResolvedContext, interpretation) -> BridgeResult:
+        """'ฉันตาม Kael ไป' / 'ฉันหยุดตาม' — set or clear explicit travel consent via
+        PositionService (the SAME system `!rv follow` uses). Following requires
+        co-location; a character only ever changes ITS OWN follow state."""
+        from app.world import PositionService
+
+        if interpretation.stop_following:
+            async with self.db.unit_of_work() as s:
+                await PositionService(s).stop_follow(follower_id=ctx.character_id)
+                actor = await s.get(Character, ctx.character_id)
+                name = actor.name if actor else "ตัวละครของเจ้า"
+            return self._table_note(ctx, f"{name} หยุดตามแล้ว — จะอยู่ที่นี่")
+
+        # Resolve the named leader among co-located party characters.
+        async with self.db.session() as read:
+            scene = await SceneService(read).get_active_scene(ctx.session_id)
+            directory = await SceneEntityDirectory(read).build(
+                scene, actor_character_id=ctx.character_id, campaign_id=ctx.campaign_id)
+            resolution = directory.resolve_mentions(
+                [interpretation.follow_reference] if interpretation.follow_reference else [])
+            actor = await read.get(Character, ctx.character_id)
+        leaders = [e for e in resolution.resolved if e.entity_type == PLAYER_CHARACTER
+                   and e.entity_ref != entity_ref("character", ctx.character_id)]
+        if not leaders:
+            return self._table_note(
+                ctx, f"จะตามใคร? บอกชื่อตัวละครที่อยู่ด้วยกันตอนนี้")
+        _, leader_id = parse_entity_ref(leaders[0].entity_ref)
+        async with self.db.unit_of_work() as s:
+            leader = await s.get(Character, leader_id)
+            me = await s.get(Character, ctx.character_id)
+            if leader is None or me is None or leader.location_id != me.location_id:
+                return self._table_note(
+                    ctx, f"ต้องอยู่ที่เดียวกับ {leaders[0].canonical_name} ก่อนจึงจะตามได้")
+            await PositionService(s).set_follow(follower_id=me.id, leader_id=leader_id)
+            actor_name, leader_name = me.name, leader.name
+        return self._table_note(
+            ctx, f"{actor_name} จะเดินทางตาม {leader_name} ตราบใดที่ยังอยู่ด้วยกัน")
 
     # --- spellcasting: engine-resolved, never a generic check ------------------
     async def _handle_cast(
