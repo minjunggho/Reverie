@@ -1,17 +1,16 @@
-"""The supported rules subset (small, correct, documented).
+"""Primitive rules helpers for the authoritative ruleset — D&D 2024 (SRD 5.2.1).
 
-This is intentionally NOT a complete D&D engine. It implements exactly enough 5e-
-flavored mechanics to prove the DM interaction loop:
-
+See docs/rules-authority.md. This module is the small, edition-agnostic core:
 - Six abilities and the standard modifier formula.
 - Flat proficiency bonus by level.
-- A fixed skill -> ability map (the common skills).
-- A small allowlist of classes / ancestries.
+- The skill -> ability map.
+- The selectable-class / ancestry allowlists (validation).
 
-Supported checks: ability checks, saving throws, single-weapon attacks + damage.
-NOT supported: spells, subclasses, feats, multiclassing, encumbrance, tools,
-languages, conditions beyond a small set. Unsupported input is rejected loudly
-(RulesViolation), never silently faked.
+Everything class-specific — features, resources, spellcasting, combat, rest — is
+built ON these primitives in the reusable systems under `app/tabletop/` and the
+typed definitions in `app/rules_content/registry.py`. What each CLASS can and can't
+do mechanically is governed by its typed definition + `support_status`, not by this
+module. Unsupported input is rejected loudly (RulesViolation), never silently faked.
 """
 from __future__ import annotations
 

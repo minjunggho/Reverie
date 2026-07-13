@@ -21,8 +21,22 @@ from app.rules_content.choice_names import (
 )
 
 RULESET_ID = "srd521"
+# The one authoritative edition (see docs/rules-authority.md). Surfaced by
+# diagnostics and stamped in the manifest so a deployment is provably on it.
+RULESET_EDITION = "D&D 2024 (SRD 5.2.1)"
 _CONTENT_DIR = Path(__file__).parent / "srd_5_2_1"
 _MANIFEST_FILE = "manifest.json"
+
+# The spellcasting models a class definition may declare. One authoritative set,
+# so the class model — not scattered per-class code — says HOW a class casts.
+SPELLCASTING_MODELS = (
+    "NONE", "KNOWN_SPELLS", "PREPARED_SPELLS", "SPELLBOOK", "PACT_MAGIC", "INNATE",
+)
+
+# Feature activation types the execution framework understands.
+FEATURE_ACTIVATIONS = (
+    "passive", "action", "bonus_action", "reaction", "free", "triggered",
+)
 
 # These are class features, not spells, even if a malformed content pack labels
 # them with spell-like timing or healing data.
@@ -78,10 +92,20 @@ class SpellDef(_Def):
     concentration: bool = False
     ritual: bool = False
     damage: str | None = None      # e.g. "1d10 fire"
-    healing: str | None = None
+    healing: str | None = None     # e.g. "1d8"
     ux_category: str               # โจมตี/ป้องกัน/ควบคุม/สำรวจ/ภาพลวงตา/ฟื้นฟู/ใช้งาน
     mech_summary_th: str
     classes: list[str] = Field(default_factory=list)
+    # HOW the spell resolves — explicit so the engine never guesses:
+    #   attack: the target is hit by a spell attack roll (none|melee|ranged).
+    #   save_ability: the target rolls a save vs the caster's DC (str..cha), else None.
+    #   save_effect: brief Thai description of what a failed save does.
+    #   half_on_save: damage is halved on a successful save (default for save spells).
+    attack: Literal["none", "melee", "ranged"] = "none"
+    save_ability: str | None = None
+    save_effect: str = ""
+    half_on_save: bool = False
+    scales_with_slot: bool = False   # extra damage/effect when cast at a higher slot
     # Optional explicit UI declaration.  When present it must be a subset of the
     # authoritative legal ``classes`` list or startup validation fails.
     display_classes: list[str] | None = None
@@ -91,12 +115,19 @@ class SpellDef(_Def):
     def display_name_en(self) -> str:
         return self.name_en or self.name.replace("_", " ").title()
 
+    @property
+    def is_cantrip(self) -> bool:
+        return self.level == 0
+
 
 class RulesContentManifest(BaseModel):
     ruleset_id: str
     backend_rules_content_version: str
     ui_rules_content_version: str
     selectable_classes: list[str]
+    # The authoritative edition string (see docs/rules-authority.md). Optional for
+    # back-compat; when present it must match RULESET_EDITION.
+    rules_edition: str = RULESET_EDITION
 
 
 class TraitDef(BaseModel):
@@ -131,11 +162,25 @@ class BackgroundDef(_Def):
 
 
 class SpellcastingDef(BaseModel):
+    # The authoritative casting model for the class (see SPELLCASTING_MODELS).
+    #   KNOWN_SPELLS    - a fixed list learned (bard, ranger-2024 knows+prepares)
+    #   PREPARED_SPELLS - prepares from the whole class list each day (cleric)
+    #   SPELLBOOK       - a spellbook + daily preparation (wizard)
+    #   PACT_MAGIC      - few slots, all at the highest level, short-rest recharge (warlock)
+    #   INNATE          - fixed at-will/per-day spells (some species/monsters)
+    model: Literal[
+        "NONE", "KNOWN_SPELLS", "PREPARED_SPELLS", "SPELLBOOK", "PACT_MAGIC", "INNATE"
+    ] = "PREPARED_SPELLS"
     ability: str
     cantrips_known: int = 0
     spellbook_size: int = 0                # wizard only
     prepared_count: int = 0
     spell_list: str = ""                   # class key used to filter SpellDef.classes
+    # Slot pool resource id keyed by SPELL level (1 = 1st-level slots). Level-1
+    # characters only ever use 1st-level slots; higher entries extend the same
+    # atomic ResourceEngine path without new code.
+    slot_resources: dict[str, str] = Field(
+        default_factory=lambda: {"1": "resource:spell_slots_1"})
 
 
 class BaseAC(BaseModel):
@@ -149,7 +194,18 @@ class FeatureDef(BaseModel):
     key: str
     name_th: str
     summary_th: str
-    resource_id: str | None = None
+    # WHEN the feature is gained and HOW it is used — so level progression and the
+    # action economy are represented in data, not scattered in code.
+    level: int = 1                          # minimum class level to have it
+    activation: Literal[
+        "passive", "action", "bonus_action", "reaction", "free", "triggered"
+    ] = "passive"
+    resource_id: str | None = None          # limited-use pool this feature spends
+    recovery: str = ""                       # short_rest | long_rest | "" (see resource)
+    display_th: str = ""                     # optional player-facing one-liner
+    # Whether the engine can mechanically EXECUTE this feature today, vs. it being
+    # narrative/flavor for now. Honest, like the class support levels.
+    execution: Literal["supported", "narrative"] = "narrative"
     # Choice-granting features (e.g. Rogue Expertise at L1):
     expertise_choice: dict[str, Any] | None = None  # {"count": 2, "from": "proficient"}
 
@@ -171,9 +227,24 @@ class ClassDef(_Def):
     weapon_training_th: str
     base_ac: BaseAC
     primary_abilities: list[str]           # drives the recommended array arrangement
+    subclass_level: int = 3                # class level at which a subclass is chosen
+    starting_equipment: list[str] = Field(default_factory=list)  # class kit (2024)
     features: list[FeatureDef] = Field(default_factory=list)
     spellcasting: SpellcastingDef | None = None
     concept_keywords: list[str] = Field(default_factory=list)  # Thai recommend hints
+
+    @property
+    def casting_model(self) -> str:
+        return self.spellcasting.model if self.spellcasting else "NONE"
+
+    def features_at(self, level: int) -> list[FeatureDef]:
+        """Every class feature a character of this class has AT `level` — the one
+        authoritative answer to 'what does a level-N X have', used by the sheet,
+        level-up, and the action-economy view."""
+        return [f for f in self.features if f.level <= level]
+
+    def features_by_activation(self, activation: str, level: int) -> list[FeatureDef]:
+        return [f for f in self.features_at(level) if f.activation == activation]
 
 
 class SubclassDef(_Def):
@@ -315,6 +386,12 @@ class RulesRegistry:
             add_issue(
                 "*", "manifest", f"ruleset_id {self.manifest.ruleset_id!r}",
                 f"ruleset_id {RULESET_ID!r}",
+            )
+        # One authoritative edition — the manifest may not claim a different one.
+        if self.manifest.rules_edition != RULESET_EDITION:
+            add_issue(
+                "*", "rules_edition", f"edition {self.manifest.rules_edition!r}",
+                f"the authoritative edition {RULESET_EDITION!r}",
             )
         if self.manifest.ui_rules_content_version != self.rules_content_version:
             add_issue(
@@ -466,8 +543,67 @@ class RulesRegistry:
                     "the preparation source to contain at least the required number of choices",
                 )
 
+        # --- framework coherence: casting model, features, spell resolution ------
+        self._validate_framework(add_issue)
+
         if issues:
             raise RulesViolation("\n".join(issues))
+
+    def _validate_framework(self, add_issue) -> None:
+        """The class/feature/spell TYPES must be internally coherent — the model
+        declares HOW each class casts, WHEN each feature is gained, and HOW each
+        spell resolves, and none of it may contradict itself or reference missing
+        resources. Applies to ALL classes in the pack, not just selectable ones,
+        so locked classes stay honestly represented."""
+        for name, cls in self.classes.items():
+            sc = cls.spellcasting
+            model = cls.casting_model
+            if model not in SPELLCASTING_MODELS:
+                add_issue(name, "casting_model", f"model {model!r}",
+                          f"one of {list(SPELLCASTING_MODELS)}")
+            # Model ⇔ fields coherence.
+            if sc is not None:
+                if model == "SPELLBOOK" and sc.spellbook_size <= 0:
+                    add_issue(name, "casting_model", "SPELLBOOK with spellbook_size=0",
+                              "a spellbook model to have spellbook_size > 0")
+                if model in ("PREPARED_SPELLS", "KNOWN_SPELLS") and sc.spellbook_size > 0:
+                    add_issue(name, "casting_model", f"{model} with a spellbook",
+                              "only the SPELLBOOK model to declare spellbook_size")
+                for lvl, rid in sc.slot_resources.items():
+                    if rid not in self.resources:
+                        add_issue(name, "slot_resources", f"missing resource {rid!r}",
+                                  "every slot pool to reference a real resource definition")
+            # Features: valid level + activation + resource refs; supported features
+            # must actually have something to spend or execute.
+            for feat in cls.features:
+                if feat.level < 1:
+                    add_issue(name, "feature_level", f"{feat.key} level {feat.level}",
+                              "every feature level to be >= 1")
+                if feat.activation not in FEATURE_ACTIVATIONS:
+                    add_issue(name, "feature_activation",
+                              f"{feat.key} activation {feat.activation!r}",
+                              f"one of {list(FEATURE_ACTIVATIONS)}")
+                if feat.resource_id and feat.resource_id not in self.resources:
+                    add_issue(name, "feature_resource",
+                              f"{feat.key} -> {feat.resource_id!r}",
+                              "every feature resource to reference a real definition")
+
+        # Every spell must be RESOLVABLE by the engine (honest selection): a cantrip
+        # or a leveled spell that has at least one concrete effect the engine runs.
+        for spell in self.spells.values():
+            if spell.content_type != "spell":
+                continue
+            resolvable = bool(spell.damage or spell.healing or spell.attack != "none"
+                              or spell.save_ability or spell.ux_category)
+            if not resolvable:
+                add_issue(",".join(spell.classes) or "*", "spell_resolution",
+                          f"spell {spell.name!r} has no resolvable effect",
+                          "every spell to have damage/healing/attack/save/utility")
+            if spell.save_ability and spell.save_ability.lower() not in (
+                    "str", "dex", "con", "int", "wis", "cha"):
+                add_issue(",".join(spell.classes) or "*", "spell_save",
+                          f"spell {spell.name!r} save {spell.save_ability!r}",
+                          "a valid saving-throw ability")
 
     # --- queries ---------------------------------------------------------------
     def get_class(self, name: str) -> ClassDef:
@@ -546,6 +682,19 @@ class RulesRegistry:
     def selectable_class_defs(self) -> list[ClassDef]:
         """Classes the current backend and character-creation UI both support."""
         return [self.classes[key] for key in self.selectable_classes]
+
+    def class_features_at(self, class_name: str, level: int) -> list[FeatureDef]:
+        """Framework query: the class features a level-`level` character of
+        `class_name` has. One path for the sheet, level-up, and action economy."""
+        return self.get_class(class_name).features_at(level)
+
+    def slot_resource_for(self, class_name: str, spell_level: int) -> str | None:
+        """The ResourceState id backing spell slots of `spell_level` for this class,
+        or None if the class has no such slots (or isn't a caster)."""
+        cls = self.get_class(class_name)
+        if cls.spellcasting is None:
+            return None
+        return cls.spellcasting.slot_resources.get(str(spell_level))
 
     def get_resource(self, definition_id: str) -> ResourceDef:
         d = self.resources.get(definition_id)

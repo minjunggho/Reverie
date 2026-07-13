@@ -1,34 +1,141 @@
 [
   {
-    "definition_id": "resource:spell_slots_1", "definition_version": 1,
-    "name": "Spell Slots (Level 1)", "name_th": "ช่องเวทระดับ 1",
+    "definition_id": "resource:spell_slots_1",
+    "definition_version": 1,
+    "name": "Spell Slots (Level 1)",
+    "name_th": "ช่องเวทระดับ 1",
     "recharge": "long_rest",
-    "max_formula": {"kind": "by_class_level", "table": {"1": 2, "2": 3, "3": 4}}
+    "max_formula": {
+      "kind": "by_class_level",
+      "table": {
+        "1": 2,
+        "2": 3,
+        "3": 4
+      }
+    }
   },
   {
-    "definition_id": "resource:arcane_recovery", "definition_version": 1,
-    "name": "Arcane Recovery", "name_th": "ฟื้นพลังเวท",
+    "definition_id": "resource:arcane_recovery",
+    "definition_version": 1,
+    "name": "Arcane Recovery",
+    "name_th": "ฟื้นพลังเวท",
     "recharge": "long_rest_cycle_after_short_rest",
-    "max_formula": {"kind": "flat", "value": 1},
+    "max_formula": {
+      "kind": "flat",
+      "value": 1
+    },
     "special_op": "restore_slot_levels"
   },
   {
-    "definition_id": "resource:second_wind", "definition_version": 1,
-    "name": "Second Wind", "name_th": "ลมหายใจที่สอง",
+    "definition_id": "resource:second_wind",
+    "definition_version": 1,
+    "name": "Second Wind",
+    "name_th": "ลมหายใจที่สอง",
     "recharge": "long_rest",
     "short_rest_partial": 1,
-    "max_formula": {"kind": "flat", "value": 2}
+    "max_formula": {
+      "kind": "flat",
+      "value": 2
+    }
   },
   {
-    "definition_id": "resource:bardic_inspiration", "definition_version": 1,
-    "name": "Bardic Inspiration", "name_th": "แรงบันดาลใจกวี",
+    "definition_id": "resource:bardic_inspiration",
+    "definition_version": 1,
+    "name": "Bardic Inspiration",
+    "name_th": "แรงบันดาลใจกวี",
     "recharge": "long_rest",
-    "max_formula": {"kind": "ability_mod_min_1", "ability": "cha"}
+    "max_formula": {
+      "kind": "ability_mod_min_1",
+      "ability": "cha"
+    }
   },
   {
-    "definition_id": "resource:heroic_inspiration", "definition_version": 1,
-    "name": "Heroic Inspiration", "name_th": "แรงใจวีรชน",
+    "definition_id": "resource:heroic_inspiration",
+    "definition_version": 1,
+    "name": "Heroic Inspiration",
+    "name_th": "แรงใจวีรชน",
     "recharge": "long_rest",
-    "max_formula": {"kind": "flat", "value": 1}
+    "max_formula": {
+      "kind": "flat",
+      "value": 1
+    }
+  },
+  {
+    "definition_id": "resource:rage",
+    "ruleset_id": "srd521",
+    "name": "rage",
+    "name_th": "เกรี้ยวกราด (Rage)",
+    "recharge": "long_rest",
+    "max_formula": {
+      "kind": "by_class_level",
+      "table": {
+        "1": 2,
+        "3": 3,
+        "6": 4
+      }
+    }
+  },
+  {
+    "definition_id": "resource:focus",
+    "ruleset_id": "srd521",
+    "name": "focus",
+    "name_th": "สมาธิ (Focus)",
+    "recharge": "short_rest",
+    "max_formula": {
+      "kind": "by_class_level",
+      "table": {
+        "2": 2,
+        "3": 3,
+        "4": 4,
+        "5": 5
+      }
+    }
+  },
+  {
+    "definition_id": "resource:action_surge",
+    "ruleset_id": "srd521",
+    "name": "action_surge",
+    "name_th": "ระเบิดพลัง (Action Surge)",
+    "recharge": "short_rest",
+    "max_formula": {
+      "kind": "flat",
+      "value": 1
+    }
+  },
+  {
+    "definition_id": "resource:pact_slots",
+    "ruleset_id": "srd521",
+    "name": "pact_slots",
+    "name_th": "ช่องเวทพันธะ (Pact Slots)",
+    "recharge": "short_rest",
+    "max_formula": {
+      "kind": "by_class_level",
+      "table": {
+        "1": 1,
+        "2": 2
+      }
+    }
+  },
+  {
+    "definition_id": "resource:lay_on_hands",
+    "ruleset_id": "srd521",
+    "name": "lay_on_hands",
+    "name_th": "วางมือรักษา (Lay on Hands)",
+    "recharge": "long_rest",
+    "max_formula": {
+      "kind": "flat",
+      "value": 5
+    }
+  },
+  {
+    "definition_id": "resource:channel_divinity",
+    "ruleset_id": "srd521",
+    "name": "channel_divinity",
+    "name_th": "ศักดิ์สิทธิ์ (Channel Divinity)",
+    "recharge": "short_rest",
+    "max_formula": {
+      "kind": "flat",
+      "value": 1
+    }
   }
 ]

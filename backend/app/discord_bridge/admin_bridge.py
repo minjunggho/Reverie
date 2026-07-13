@@ -665,7 +665,7 @@ class AdminBridge:
             rules_content_hash,
         )
         from app.rules_content import get_registry
-        from app.rules_content.registry import RULESET_ID
+        from app.rules_content.registry import RULESET_EDITION, RULESET_ID
 
         campaign, member = await self._resolve(ctx)
         if campaign is None:
@@ -688,8 +688,10 @@ class AdminBridge:
             f"llm: {settings.llm_provider} / {settings.llm_model}",
             f"prompts: v{PROMPT_VERSION} · importer: v{IMPORTER_VERSION} · memory: v{MEMORY_SYSTEM_VERSION}",
             f"world model: engine v{WORLD_MODEL_VERSION} · campaign v{campaign.world_model_version}",
-            f"rules: {RULESET_ID} v{reg.rules_content_version} · content `{rules_content_hash()}` · "
-            f"classes={len(reg.classes)} subclasses={len(reg.subclasses)} "
+            f"rules: {RULESET_EDITION} · {RULESET_ID} v{reg.rules_content_version} · "
+            f"content `{rules_content_hash()}`",
+            f"content counts: classes={len(reg.classes)} "
+            f"(selectable {len(reg.selectable_classes)}) subclasses={len(reg.subclasses)} "
             f"species={len(reg.species)} backgrounds={len(reg.backgrounds)} "
             f"spells={len(reg.spells)}",
         ]

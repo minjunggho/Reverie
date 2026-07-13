@@ -2,5 +2,13 @@
   "ruleset_id": "srd521",
   "backend_rules_content_version": "1",
   "ui_rules_content_version": "1",
-  "selectable_classes": ["fighter", "rogue", "wizard", "cleric", "ranger", "bard"]
+  "selectable_classes": [
+    "fighter",
+    "rogue",
+    "wizard",
+    "cleric",
+    "ranger",
+    "bard"
+  ],
+  "rules_edition": "D&D 2024 (SRD 5.2.1)"
 }
