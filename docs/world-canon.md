@@ -75,6 +75,49 @@ fact. A `COLLABORATIVE` mode may relax this later (not built).
   ("เจ้าเห็นอะไรข้างนอก?", "เมืองนี้ชื่ออะไร?"). Fact-provenance policy documented;
   the narrator receives canonical context instead of a "don't hallucinate" line.
 
+## Connective geography — multi-hop navigation + the outside rule (§4–5)
+
+`resolve_exit` answers only "which *adjacent* edge does this reference mean?". That
+teleports: a player at the tavern who says "ไปมหาวิหาร" names a place several hops
+away with no direct edge. **`RouteService`** (`app/world/route_service.py`) closes
+the gap — the engine finds the destination anywhere in the reachable world and routes
+to it through the connective geography.
+
+- **Pathfinding.** `find_route` is Dijkstra over `LocationConnection` by
+  `travel_minutes`, ties breaking toward fewer hops (a direct authored edge always
+  wins). It only crosses **open** edges — a locked/blocked/hidden gate is not a path.
+- **Destination resolution + classification.** `resolve_destination` matches a
+  reference against every authored location's name (conservative substring, never
+  fuzzy), picks the closest reachable match, and returns a `DestinationClass`:
+  `EXISTING_ADJACENT` · `EXISTING_ROUTED` · `ORDINARY_EXPANDABLE` · `UNREACHABLE` ·
+  `AMBIGUOUS`. A named place with no open route is `UNREACHABLE` (a locked vault, not
+  a lie); an unnamed request is `ORDINARY_EXPANDABLE` (the caller may expand).
+- **The outside rule.** Because the graph is authoritative, a correct graph already
+  routes tavern → street → … → shop through the exterior. `route_obeys_outside_rule`
+  makes the invariant checkable: a hop straight from one interior location to another
+  is a violation **unless** they are rooms of one building (one is the other's parent,
+  or they share an *interior* parent). Two buildings sharing a *district* do not —
+  you must step outside between them.
+- **Connector inference (sparse worlds).** When a named place is `UNREACHABLE` only
+  because a sparse import gave a building no way OUT, `infer_exterior_link`
+  deterministically (no LLM) commits the minimum edge from the interior to its parent
+  (bidirectional, persisted, idempotent), then re-routes. The world stays explorable
+  without ever routing THROUGH an unrelated building.
+
+**TravelService** now consults `RouteService` between the adjacent-exit fast path and
+expansion: a multi-hop route traverses the whole path — the world clock advances by
+the **summed** travel time (ticking threats/events across the journey), the actor
+moves to the final destination, and the arrival frame's footer shows the compressed
+route ("· ผ่าน จัตุรัสตลาด"). Detail is compressed; time and world state still reflect
+every hop. A real-but-unreachable place is declined with a focused note — never
+fabricated. **Bug fixed:** an empty `direction` field no longer counts as "outside"
+in `resolve_exit` (§4: an empty direction must never mean outside).
+
+Reachability stays enforced two ways: `campaign_validation._reachable_from` (a BFS
+over the proposal graph) blocks committing a world with stranded locations, and
+`RouteService` guarantees runtime traversal + inference so the committed world is
+always navigable. Tests: `tests/test_connective_geography.py` (11).
+
 ## Fact provenance (anti-hallucination)
 
 Every narrative fact must be one of: IMPORTED_CANON · AUTHORED_CANON ·

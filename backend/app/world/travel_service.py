@@ -57,8 +57,16 @@ class TravelService:
         if current_id is None:
             return self._note(ctx, "ยังไม่รู้ว่าตัวละครอยู่ตรงไหนในโลก — เริ่มเซสชันก่อน")
 
-        # Resolve destination: authored exit, else canon-consistent expansion.
+        # Resolve destination through the world graph, in priority order:
+        #   1. a direct authored exit (fast path);
+        #   2. a MULTI-HOP route to a named authored destination — the outside rule
+        #      falls out of routing (tavern → street → … → shop), and a missing
+        #      exterior link is inferred so the world stays explorable;
+        #   3. bounded expansion of an ordinary place;
+        #   4. a focused, character-facing clarification. Never a fabricated
+        #      destination chosen "because it was the only edge".
         travel_minutes = 0
+        waypoints: list[str] = []
         if match is not None:
             if match.connection.access_state != "open":
                 return self._note(
@@ -66,23 +74,30 @@ class TravelService:
             dest_id = match.connection.to_location_id
             travel_minutes = match.connection.travel_minutes
         else:
-            if not allow_expansion:
-                # CANONICAL_TRAVEL/RETURN_OR_EXIT with no matching edge: a focused
-                # navigation clarification, never a fabricated Location (Fix 6).
+            routed = await self._resolve_multi_hop(ctx, current_id=current_id, reference=reference)
+            if isinstance(routed, tuple):
+                dest_id, travel_minutes, waypoints = routed
+            elif isinstance(routed, str):
+                # A real, named place the party simply can't reach right now.
+                return self._note(ctx, routed)
+            elif not allow_expansion:
+                # CANONICAL_TRAVEL/RETURN_OR_EXIT with no matching edge/route: a
+                # focused navigation clarification, never a fabricated Location.
                 return self._note(
                     ctx, f"{actor_name}ไม่รู้ทางไปตรงนั้น — มีทางไหนที่รู้จักบ้าง?")
-            dest = await self.expansion.find_or_expand(
-                campaign_id=ctx.campaign_id, from_location_id=current_id, request=reference)
-            if dest is None:
-                # A focused, CHARACTER-facing clarification — not "what's out there?".
-                return self._note(
-                    ctx, f"{actor_name}จะไปทางไหน? บอกทิศทางหรือชื่อสถานที่หน่อย")
-            dest_id = dest.id
-            async with self.db.session() as read:
-                for e in await WorldGraphService(read).exits(current_id):
-                    if e.to_location_id == dest_id:
-                        travel_minutes = e.travel_minutes
-                        break
+            else:
+                dest = await self.expansion.find_or_expand(
+                    campaign_id=ctx.campaign_id, from_location_id=current_id, request=reference)
+                if dest is None:
+                    # A focused, CHARACTER-facing clarification — not "what's out there?".
+                    return self._note(
+                        ctx, f"{actor_name}จะไปทางไหน? บอกทิศทางหรือชื่อสถานที่หน่อย")
+                dest_id = dest.id
+                async with self.db.session() as read:
+                    for e in await WorldGraphService(read).exits(current_id):
+                        if e.to_location_id == dest_id:
+                            travel_minutes = e.travel_minutes
+                            break
 
         # Advance the world (threats/events tick), move the party, then a REAL scene
         # transition: close the origin Scene and open a fresh one at the destination
@@ -164,6 +179,10 @@ class TravelService:
         footer = format_game_time_th(game_time)
         if travel_minutes > 0:
             footer += f" · เดินทาง {travel_minutes} นาที"
+        if waypoints:
+            # The compressed route: players see they passed THROUGH the exterior, not
+            # teleported. Detail is compressed; time and world state still reflect it.
+            footer += " · ผ่าน " + " → ".join(waypoints)
         data["footer"] = footer
         responses = [OutboundMessage(ctx.channel_id, text, kind=MessageKind.SCENE_FRAME,
                                      title=sctx.location_name, data=data)]
@@ -174,6 +193,46 @@ class TravelService:
         return BridgeResult(handled=True, category=MessageCategory.COMMITTED_ACTION,
                             state_mutated=True, responses=responses,
                             note=f"travel -> {sctx.location_name}")
+
+    async def _resolve_multi_hop(
+        self, ctx, *, current_id: str, reference: str,
+    ) -> tuple[str, int, list[str]] | str | None:
+        """Resolve a movement reference against the WHOLE reachable world.
+
+        Returns a `(dest_id, total_minutes, waypoint_names)` route tuple for a named
+        authored destination; a note string when the place is real but currently
+        unreachable; or None when the reference names no authored place (the caller
+        may then expand an ordinary location or clarify)."""
+        from app.world.route_service import DestinationClass, RouteService
+
+        async with self.db.session() as read:
+            res = await RouteService(read).resolve_destination(
+                campaign_id=ctx.campaign_id, from_location_id=current_id, reference=reference)
+
+        if res.route is not None and res.klass in (
+                DestinationClass.EXISTING_ADJACENT, DestinationClass.EXISTING_ROUTED):
+            return (res.route.destination_id, res.route.total_minutes, res.route.waypoint_names)
+
+        if res.klass is DestinationClass.UNREACHABLE and res.target is not None:
+            # Infer the minimum connective geography — an exterior link out of the
+            # current interior and out of the target toward their shared exterior —
+            # then re-route. Deterministic, committed, and persisted; this never
+            # routes through an unrelated building (the outside rule).
+            async with self.db.unit_of_work() as s:
+                rs = RouteService(s)
+                await rs.infer_exterior_link(campaign_id=ctx.campaign_id, location_id=current_id)
+                await rs.infer_exterior_link(campaign_id=ctx.campaign_id, location_id=res.target.id)
+            async with self.db.session() as read:
+                route = await RouteService(read).find_route(
+                    campaign_id=ctx.campaign_id, from_location_id=current_id,
+                    to_location_id=res.target.id)
+            if route is not None:
+                return (route.destination_id, route.total_minutes, route.waypoint_names)
+            # Real place, but no open route right now (a locked gate, a severed graph
+            # component) — say so; never fabricate a destination or expand over it.
+            return f"{res.target.name} มีอยู่จริง แต่ตอนนี้ยังไปไม่ถึง — ลองหาทางอื่นดู"
+
+        return None   # ORDINARY_EXPANDABLE / AMBIGUOUS → the caller decides
 
     async def _frame(self, read, sctx, *, arrival_from: str) -> Narration:
         messages = build_scene_frame_context(sctx, arrival_from=arrival_from)

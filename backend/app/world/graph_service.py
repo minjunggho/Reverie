@@ -104,7 +104,9 @@ class WorldGraphService:
             family = "back"
         if family:
             for e in candidates:
-                if _norm(e.direction) == family or (family == "outside" and e.direction in ("outside", "")):
+                # An EMPTY direction never means "outside" (§4): only an edge
+                # explicitly tagged with the direction family matches.
+                if _norm(e.direction) == family:
                     dest = await self.session.get(Location, e.to_location_id)
                     return ExitMatch(e, dest.name if dest else "", 0.8)
         # 4. single obvious exit + a generic "go/leave" reference → that exit.
