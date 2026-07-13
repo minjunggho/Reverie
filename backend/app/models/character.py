@@ -25,7 +25,11 @@ class Character(Base, TimestampMixin):
     name: Mapped[str] = mapped_column(String(120))
     species: Mapped[str] = mapped_column(String(60), default="human")
     char_class: Mapped[str] = mapped_column(String(60), default="fighter")
+    # A NARRATIVE preference chosen early (creation) — never mechanical on its own.
     planned_subclass: Mapped[str | None] = mapped_column(String(80), nullable=True, default=None)
+    # The ACTIVE subclass — set only when the character reaches its class's
+    # subclass_level and the player confirms. This is what grants subclass features.
+    active_subclass: Mapped[str | None] = mapped_column(String(80), nullable=True, default=None)
     background: Mapped[str] = mapped_column(String(60), default="")
     ruleset_id: Mapped[str] = mapped_column(String(16), default="srd521")
 

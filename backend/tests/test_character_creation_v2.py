@@ -54,14 +54,17 @@ async def _draft_for(db, member_id):
 # --- identity module (pure logic) ----------------------------------------------
 
 def test_unsupported_class_keeps_fiction_and_proposes_chassis():
-    for stated, chassis in (("paladin", "fighter"), ("sorcerer", "wizard"),
-                            ("warlock", "wizard"), ("druid", "cleric"),
-                            ("barbarian", "fighter")):
+    for stated, chassis in (("paladin", "fighter"), ("druid", "cleric"),
+                            ("barbarian", "fighter"), ("monk", "fighter")):
         r = idmod.resolve_class_intention(f"I am a {stated} of legend")
         assert r.stated == stated and r.is_unsupported and r.chassis == chassis
         assert r.recommended == chassis
     supported = idmod.resolve_class_intention("a cunning rogue")
     assert supported.is_supported and supported.recommended == "rogue"
+    # Sorcerer + Warlock were unlocked — a stated one now maps to ITSELF, no chassis.
+    for now_supported in ("sorcerer", "warlock"):
+        r = idmod.resolve_class_intention(f"I am a {now_supported}")
+        assert r.is_supported and r.recommended == now_supported
 
 
 def test_custom_ancestry_detection_and_base_suggestion():
@@ -108,17 +111,27 @@ async def test_one_message_rich_concept_goes_straight_to_reflection(db, provider
     assert "temple of Bahamut" in draft.data.get("_origin_text", "")
 
 
-async def test_explicit_sorcerer_intent_maps_to_wizard_chassis(db, provider):
+async def test_explicit_sorcerer_intent_now_maps_to_the_real_sorcerer_class(db, provider):
     world = await build_world(db)
     table = Table(db, provider)
     await table.send("!rv character")
-    r = await table.send("Kaelen, a human Sorcerer whose magic runs in the blood")
+    await table.send("Kaelen, a human Sorcerer whose magic runs in the blood")
     draft = await _draft_for(db, world.p1_member_id)
-    assert draft.data.get("_narrative_class") == "sorcerer"
-    assert draft.data.get("_class_hint") == "wizard"
-    # The reflection honors the fiction and states the chassis transparently.
-    body = r.responses[0].content
-    assert "sorcerer" in body.lower()
+    # Sorcerer is now a FULLY_SUPPORTED class — a direct hint, not a narrative chassis.
+    assert draft.data.get("_class_hint") == "sorcerer"
+    assert draft.data.get("_narrative_class") is None
+    assert (draft.data.get("identity") or {}).get("class_intention") == "sorcerer"
+
+
+async def test_explicit_paladin_intent_still_maps_to_a_supported_chassis(db, provider):
+    world = await build_world(db)
+    table = Table(db, provider)
+    await table.send("!rv character")
+    r = await table.send("Ser Alden, a human Paladin sworn to the dawn")
+    draft = await _draft_for(db, world.p1_member_id)
+    assert draft.data.get("_narrative_class") == "paladin"     # still locked
+    assert draft.data.get("_class_hint") == "fighter"
+    assert "paladin" in r.responses[0].content.lower()
 
 
 async def test_no_repeated_question_for_already_supplied_field(db, provider):
@@ -254,7 +267,7 @@ async def test_identity_survives_restart_before_finalize(tmp_path, provider):
         draft = await _draft_for(restarted, world.p1_member_id)
         assert draft is not None
         assert draft.data["identity"].get("class_intention") == "warlock"
-        assert draft.data.get("_class_hint") == "wizard"
+        assert draft.data.get("_class_hint") == "warlock"      # now a supported class
         assert "old pact" in draft.data.get("_origin_text", "")
     finally:
         await restarted.dispose()

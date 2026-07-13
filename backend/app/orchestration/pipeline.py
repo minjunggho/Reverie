@@ -19,12 +19,15 @@ produced in step 12 by the deterministic dice engine.
 """
 from __future__ import annotations
 
+from sqlalchemy import select
+
 from app.ai.jobs import (
     ActionInterpreter,
     AdjudicationJudge,
     ConsequencePlanner,
     DMNarrator,
 )
+from app.core.errors import RulesViolation, ValidationError
 from app.core.ids import SYSTEM_ACTOR, entity_ref, parse_entity_ref
 from app.core.logging import get_logger
 from app.discord_bridge.dto import BridgeResult, OutboundMessage
@@ -144,6 +147,14 @@ class CommittedActionPipeline:
             reference = interpretation.movement_reference or action_text
             allow_expansion = kind in ("SEARCH_FOR_PLACE", "NONE")
             return await self.travel.travel(ctx, reference=reference, allow_expansion=allow_expansion)
+
+        # Spellcasting is its own domain flow: the ENGINE resolves the spell + targets
+        # + authoritative stats and runs SpellEngine.cast — the numbers never come
+        # from a generic ability check or the narrator. Routed BEFORE adjudication.
+        if interpretation.cast_intent and ctx.character_id and ctx.session_id:
+            return await self._handle_cast(
+                ctx, action_text=action_text, interpretation=interpretation,
+                resolved_targets=resolution.resolved)
 
         async with self.db.session() as read:
             scene = await SceneService(read).get_active_scene(ctx.session_id) if ctx.session_id else None
@@ -454,6 +465,170 @@ class CommittedActionPipeline:
             handled=True, category=MessageCategory.COMMITTED_ACTION, state_mutated=True,
             responses=responses, note="social_intent -> NPCSocialService",
         )
+
+    # --- spellcasting: engine-resolved, never a generic check ------------------
+    async def _handle_cast(
+        self, ctx: ResolvedContext, *, action_text: str, interpretation,
+        resolved_targets: list[EntityContext],
+    ) -> BridgeResult:
+        """A real CAST action → SpellEngine.cast. The engine resolves the spell (via
+        the authoritative spell resolver, against the caster's OWN known/prepared
+        pool), the targets (from the scene), and every number (from stored stats +
+        the dice engine). Invalid casts consume nothing. Damage/healing/slot/
+        concentration/event all commit in one transaction; the LLM only narrates."""
+        from app.rules_content import get_registry
+        from app.tabletop.spellcasting import SpellEngine, spellcasting_profile
+
+        reg = get_registry()
+        # 1. Resolve the spell against the CASTER'S castable pool (cantrips + prepared).
+        async with self.db.session() as read:
+            character = await read.get(Character, ctx.character_id)
+            profile = await spellcasting_profile(read, character)
+            if not profile.is_caster:
+                return self._table_note(ctx, f"{character.name} ไม่ใช่ผู้ใช้เวท")
+            pool = list(dict.fromkeys(profile.cantrips + profile.prepared))
+        reference = interpretation.spell_reference or action_text
+        if not pool:
+            return self._table_note(ctx, f"{character.name} ยังไม่มีคาถาที่พร้อมร่าย")
+        resolution = reg.resolve_spell_name(reference, allowed_keys=pool)
+        if resolution.ambiguous:
+            names = ", ".join(reg.get_spell(k).name_th_hint for k in resolution.ambiguous_keys)
+            return await self._enter_clarification(
+                ctx, action_text, f"หมายถึงคาถาไหน: {names}?")
+        if resolution.key is None:
+            hint = ""
+            if resolution.suggestion_keys:
+                hint = " ใกล้เคียง: " + ", ".join(
+                    reg.get_spell(k).name_th_hint for k in resolution.suggestion_keys)
+            return self._table_note(
+                ctx, f"{character.name} ไม่มีคาถาชื่อ “{reference}” ที่พร้อมร่าย.{hint}")
+        spell = reg.get_spell(resolution.key)
+
+        # 2. Resolve targets + authoritative stats (never invented by the LLM).
+        npc_targets = [e for e in resolved_targets if e.entity_type != PLAYER_CHARACTER]
+        pc_targets = [e for e in resolved_targets if e.entity_type == PLAYER_CHARACTER]
+        needs_target = spell.attack != "none" or spell.save_ability is not None
+        target_ec = (npc_targets or pc_targets or [None])[0]
+        if needs_target and target_ec is None:
+            return await self._enter_clarification(
+                ctx, action_text, f"จะร่าย {spell.name_th_hint} ใส่ใคร?")
+
+        async with self.db.session() as read:
+            stats = await self._target_combat_stats(read, ctx.session_id, target_ec)
+        # An attack/save spell needs authoritative target numbers; without them we
+        # fail safe (no slot spent) rather than invent AC/HP (spec §target).
+        if needs_target and stats is None:
+            return self._table_note(
+                ctx, f"ยังไม่มีค่ากลไกของเป้าหมายสำหรับ {spell.name_th_hint} "
+                     "(เริ่มการต่อสู้ก่อน หรือเล็งเป้าที่มีสถานะกลไก)")
+
+        # 3. Cast + apply + commit atomically.
+        target_acs = {stats["ref"]: stats["ac"]} if (stats and spell.attack != "none") else {}
+        target_save_mods = ({stats["ref"]: stats["save_mods"].get(spell.save_ability, 0)}
+                            if (stats and spell.save_ability) else {})
+        try:
+            async with self.db.unit_of_work() as s:
+                caster = await s.get(Character, ctx.character_id)
+                engine = SpellEngine(s, self.dice)
+                outcome = await engine.cast(
+                    character=caster, spell_key=spell.name,
+                    slot_level=interpretation.slot_level,
+                    target_acs=target_acs, target_save_mods=target_save_mods,
+                    session_id=ctx.session_id, campaign_id=ctx.campaign_id,
+                    scene_id=(await SceneService(s).get_active_scene(ctx.session_id)).id
+                    if ctx.session_id else None)
+                # Apply the committed damage/healing to the authoritative target model.
+                await self._apply_spell_effects(s, ctx, outcome, stats, target_ec, spell)
+                pm = await s.get(ProcessedMessage, ctx.processed_message_id) if ctx.processed_message_id else None
+                if pm is not None:
+                    pm.stage = ProcessingStage.SENT.value
+                    pm.category = MessageCategory.COMMITTED_ACTION.value
+                    pm.result = {"response": outcome.line_th, "spell": spell.name}
+                session_row = await s.get(Session, ctx.session_id) if ctx.session_id else None
+                if session_row is not None:
+                    session_row.active_play_state = ActivePlayState.TABLE_OPEN.value
+                    session_row.version += 1
+        except (RulesViolation, ValidationError) as exc:
+            # Illegal cast (not known/prepared, no slot, etc.) — nothing consumed.
+            return self._table_note(ctx, f"ร่าย {spell.name_th_hint} ไม่ได้: {exc}")
+
+        # 4. Narration from the committed result (facts fixed; prose cannot contradict).
+        return BridgeResult(
+            handled=True, category=MessageCategory.COMMITTED_ACTION, state_mutated=True,
+            responses=[OutboundMessage(
+                ctx.channel_id, outcome.line_th, kind=MessageKind.CHECK_RESOLUTION,
+                title=spell.name_th_hint,
+                data={"roll_line": outcome.line_th,
+                      "decision_prompt": self._cast_decision_prompt(outcome, target_ec),
+                      "outcome": "success" if (outcome.damage or outcome.healing
+                                               or not needs_target) else "resolved"})],
+            note=f"cast {spell.name}: dmg={outcome.damage} heal={outcome.healing}")
+
+    async def _target_combat_stats(self, read, session_id: str | None, target_ec) -> dict | None:
+        """Authoritative combat-relevant stats for a target, or None if unavailable.
+        In combat: from the Combatant snapshot. For a player character: from the
+        Character. NPCs outside combat have no stats — return None (fail safe)."""
+        if target_ec is None:
+            return None
+        from app.tabletop.rules.derive import save_bonus
+        from app.tabletop.rules.core import ABILITIES
+
+        ref = target_ec.entity_ref
+        if session_id:
+            from app.models.combat import Combatant, CombatEncounter
+
+            enc = (await read.execute(select(CombatEncounter).where(
+                CombatEncounter.session_id == session_id,
+                CombatEncounter.status == "active"))).scalars().first()
+            if enc is not None:
+                combatant = (await read.execute(select(Combatant).where(
+                    Combatant.encounter_id == enc.id,
+                    Combatant.entity_ref == ref))).scalars().first()
+                if combatant is not None:
+                    return {"ref": ref, "ac": combatant.ac, "save_mods": {},
+                            "kind": "combatant", "id": combatant.id, "hp": combatant.hp}
+        kind, cid = parse_entity_ref(ref)
+        if kind == "character" and cid:
+            char = await read.get(Character, cid)
+            if char is not None:
+                return {"ref": ref, "ac": char.ac,
+                        "save_mods": {a: save_bonus(char, a).total for a in ABILITIES},
+                        "kind": "character", "id": cid, "hp": char.hp}
+        return None
+
+    async def _apply_spell_effects(self, s, ctx, outcome, stats, target_ec, spell) -> None:
+        """Apply the committed damage/healing to the authoritative target model
+        (Combatant HP in combat, else Character HP). Healing defaults to the caster
+        when the spell has no explicit other target."""
+        if outcome.damage and stats is not None:
+            if stats["kind"] == "combatant":
+                from app.models.combat import Combatant
+
+                cb = await s.get(Combatant, stats["id"])
+                if cb is not None:
+                    cb.hp = max(0, cb.hp - outcome.damage)
+                    if cb.hp <= 0:
+                        cb.alive = False
+            elif stats["kind"] == "character":
+                tgt = await s.get(Character, stats["id"])
+                if tgt is not None:
+                    tgt.hp = max(0, tgt.hp - outcome.damage)
+        if outcome.healing:
+            # Heal the named PC target if any, else the caster.
+            heal_id = ctx.character_id
+            if target_ec is not None:
+                k, cid = parse_entity_ref(target_ec.entity_ref)
+                if k == "character" and cid:
+                    heal_id = cid
+            tgt = await s.get(Character, heal_id)
+            if tgt is not None:
+                tgt.hp = min(tgt.max_hp, tgt.hp + outcome.healing)
+
+    @staticmethod
+    def _cast_decision_prompt(outcome, target_ec) -> str:
+        if outcome.concentration:
+            return "รักษาสมาธิไว้ให้ดี — จะทำอะไรต่อ?"
+        return "จะทำอะไรต่อ?"
 
     # --- resting: a real domain operation, never a generic ability check -------
     async def _handle_rest(

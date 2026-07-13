@@ -8,7 +8,9 @@
     "wizard",
     "cleric",
     "ranger",
-    "bard"
+    "bard",
+    "sorcerer",
+    "warlock"
   ],
   "rules_edition": "D&D 2024 (SRD 5.2.1)"
 }

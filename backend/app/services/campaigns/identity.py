@@ -54,9 +54,11 @@ BUNDLED_SPECIES: frozenset[str] = frozenset({
 })
 
 # Real D&D classes the engine does NOT yet run mechanically. Stating one is fine —
-# the fiction is preserved and the closest supported chassis is proposed.
+# the fiction is preserved and the closest supported chassis is proposed. (Sorcerer
+# and Warlock were unlocked once their end-to-end path passed, so they are no longer
+# here; `resolve_class_intention` keys off the live SUPPORTED_CLASSES regardless.)
 UNSUPPORTED_CLASSES: frozenset[str] = frozenset({
-    "paladin", "sorcerer", "warlock", "barbarian", "druid", "monk", "artificer",
+    "paladin", "barbarian", "druid", "monk", "artificer",
 })
 
 # Closest supported mechanical chassis for an unsupported stated class. Transparent,
@@ -65,8 +67,6 @@ CHASSIS_FOR_UNSUPPORTED: dict[str, str] = {
     "paladin": "fighter",     # armored oathbound warrior
     "barbarian": "fighter",   # martial powerhouse
     "monk": "fighter",        # martial (unarmed flavor narrative-only for now)
-    "sorcerer": "wizard",     # arcane caster
-    "warlock": "wizard",      # arcane caster
     "artificer": "wizard",    # arcane caster
     "druid": "cleric",        # nature/divine caster
 }

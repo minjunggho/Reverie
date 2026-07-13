@@ -108,9 +108,9 @@ def test_choice_normalization_is_unicode_safe():
 
 def test_valid_rules_content_passes_and_exposes_only_backend_supported_classes():
     registry = RulesRegistry()
-    assert registry.selectable_classes == (
-        "fighter", "rogue", "wizard", "cleric", "ranger", "bard"
-    )
+    assert set(registry.selectable_classes) == {
+        "fighter", "rogue", "wizard", "cleric", "ranger", "bard", "sorcerer", "warlock"
+    }
     assert [cls.name for cls in registry.selectable_class_defs()] == list(
         registry.selectable_classes
     )
@@ -127,17 +127,17 @@ def test_every_class_declares_an_explicit_support_status():
     }
     fully = {n for n, s in statuses.items() if s == "FULLY_SUPPORTED"}
     assert fully == set(registry.selectable_classes)
-    # Unfinished classes are retained, not deleted.
-    assert {"barbarian", "druid", "monk", "paladin", "sorcerer", "warlock"} <= set(statuses)
+    # Still-unfinished classes are retained, not deleted, and not FULLY_SUPPORTED.
+    assert {"barbarian", "druid", "monk", "paladin"} <= set(statuses)
     assert all(statuses[n] != "FULLY_SUPPORTED"
-               for n in ("barbarian", "druid", "monk", "paladin", "sorcerer", "warlock"))
+               for n in ("barbarian", "druid", "monk", "paladin"))
 
 
 def test_fully_supported_flag_on_unselectable_class_fails(tmp_path: Path):
     content = _copy_content(tmp_path)
     classes = _read(content, "classes.json")
     for cls in classes:
-        if cls["name"] == "warlock":
+        if cls["name"] == "barbarian":       # a still-locked class
             cls["support_status"] = "FULLY_SUPPORTED"
     _write(content, "classes.json", classes)
 
@@ -146,7 +146,7 @@ def test_fully_supported_flag_on_unselectable_class_fails(tmp_path: Path):
 
     message = str(exc_info.value)
     assert "pool=support_status" in message
-    assert "warlock" in message
+    assert "barbarian" in message
 
 
 def test_selectable_class_without_rules_content_fails(tmp_path: Path):

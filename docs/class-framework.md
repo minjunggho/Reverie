@@ -102,17 +102,43 @@ gained their distinctive mechanics (above) this phase.
 | paladin | Lay on Hands + Channel Divinity resources, PREPARED model | smite/aura execution; spell list content; tests |
 | druid | PREPARED model | Wild Shape statblocks; nature spell list; tests |
 
-## Why the six-class restriction was NOT removed this phase
+## Framework gaps closed (Step 5) — spell cast path + subclass progression
 
-The acceptance matrix for each class includes **subclass-level progression** and the
-**actual Discord gameplay (natural-language cast) path**. Neither is implemented for
-*any* class yet — including the already-live wizard/bard — so per the mandate ("do
-not claim full support if any official class fails its acceptance matrix") sorcerer
-and warlock stay `UNSUPPORTED` and non-selectable. Their distinctive mechanics and
-resources are implemented and tested; unlocking is a deliberate later step once the
-two framework-wide gaps close. Unlock criterion (unchanged): a class becomes
-`FULLY_SUPPORTED` and selectable **only when its full acceptance matrix passes** —
-never by editing the selectable list alone (startup validation forbids that).
+Both framework-wide gaps that blocked the caster unlock are now shipped:
+
+- **Real spellcasting in committed actions.** `! ร่าย <spell> ใส่ <target>` →
+  `ActionInterpretation.cast_intent` → `CommittedActionPipeline._handle_cast` →
+  the authoritative spell resolver (against the caster's OWN pool) → target +
+  stats from the scene/`Combatant`/`Character` (never the LLM) → `SpellEngine.cast`
+  → atomic commit (slot/damage/healing/concentration/`SPELL_CAST` event) →
+  narration from the committed result. Invalid casts consume nothing; duplicate
+  Discord deliveries cast once (existing `ProcessedMessage` dedup). Damage lands on
+  authoritative `Combatant` HP in combat; healing/buffs on `Character`; an
+  attack/save spell with no authoritative target stats fails safe with a Thai
+  diagnostic. Tested in `tests/test_spell_pipeline.py` (Thai/English/alias forms,
+  stored AC/save, damage/heal/concentration/slot-once/invalid/duplicate/restart,
+  per selectable caster, + a ReverieClient smoke test).
+- **Subclass progression.** `Character.active_subclass` (migration
+  `20260715_subclass`) is distinct from the narrative `planned_subclass`.
+  `SubclassService` validates (parent class + selection level), persists the active
+  subclass, and grants its features/resources/always-prepared spells through the
+  shared systems (idempotent). `level_up` reads each class's own `subclass_level`
+  and **pauses** (`SubclassSelectionRequired`) until a valid choice is confirmed —
+  a plan never auto-activates. Tested in `tests/test_subclass_progression.py`.
+
+## The unlock: 8 selectable classes
+
+With both gaps closed, **Sorcerer and Warlock were unlocked** — but only after their
+complete end-to-end path passed (`tests/test_unlock_sorcerer_warlock.py`: guided
+finalize with the correct spells + the class-declared slot pool, then a real cast
+through the committed pipeline committing damage to a combatant). Selectable classes
+are now: fighter, rogue, wizard, cleric, ranger, bard, **sorcerer, warlock**.
+
+**Still locked** (represented in the framework, not yet playable — their
+class-specific execution + tests are incomplete): barbarian, monk, paladin, druid.
+Unlock criterion unchanged: `FULLY_SUPPORTED` + selectable **only when the full
+end-to-end acceptance path passes** — never by editing the selectable list alone
+(startup validation forbids it).
 
 ## Known integration gaps (framework built, wiring pending)
 

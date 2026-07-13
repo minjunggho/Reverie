@@ -68,6 +68,15 @@ class ActionInterpretation(BaseModel):
     rest_intent: bool = False
     rest_kind: Literal["short", "long", "ambiguous"] = "ambiguous"
     rest_scope: Literal["actor", "party_request"] = "actor"
+    # Spellcasting: the action is fundamentally casting a spell. `spell_reference`
+    # is the player's name for it ("ลูกไฟ", "fire bolt", "cure_wounds") — resolved
+    # by the ENGINE against the caster's known/prepared pool via the existing
+    # spell resolver; the LLM never picks the spell key or the mechanical result.
+    # `target_references` (above) name who it hits. slot_level/metamagic are optional.
+    cast_intent: bool = False
+    spell_reference: str = ""
+    slot_level: int | None = None
+    metamagic: str = ""
 
 
 # --- Adjudication ------------------------------------------------------------

@@ -41,7 +41,9 @@ SKILL_TO_ABILITY: dict[str, str] = {
 }
 SUPPORTED_SKILLS = frozenset(SKILL_TO_ABILITY)
 
-SUPPORTED_CLASSES = frozenset({"fighter", "rogue", "wizard", "cleric", "ranger", "bard"})
+SUPPORTED_CLASSES = frozenset({
+    "fighter", "rogue", "wizard", "cleric", "ranger", "bard", "sorcerer", "warlock",
+})
 SUPPORTED_ANCESTRIES = frozenset(
     {"human", "elf", "dwarf", "halfling", "half-orc", "tiefling", "gnome"}
 )

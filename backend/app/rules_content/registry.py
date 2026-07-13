@@ -247,6 +247,18 @@ class ClassDef(_Def):
         return [f for f in self.features_at(level) if f.activation == activation]
 
 
+class SubclassFeatureDef(BaseModel):
+    key: str
+    name_th: str
+    summary_th: str = ""
+    level: int = 3                          # level at which this subclass feature lands
+    activation: Literal[
+        "passive", "action", "bonus_action", "reaction", "free", "triggered"
+    ] = "passive"
+    resource_id: str | None = None          # a limited-use pool the subclass grants
+    grants_spells: list[str] = Field(default_factory=list)  # always-prepared subclass spells
+
+
 class SubclassDef(_Def):
     name: str
     name_th: str
@@ -254,8 +266,11 @@ class SubclassDef(_Def):
     parent_class: str
     selection_level: int = 3
     concept_keywords: list[str] = Field(default_factory=list)
-    features: list[dict[str, Any]] = Field(default_factory=list)
+    features: list[SubclassFeatureDef] = Field(default_factory=list)
     implementation_status: str = "planned"
+
+    def features_at(self, level: int) -> list[SubclassFeatureDef]:
+        return [f for f in self.features if f.level <= level]
 
 
 class RulesRegistry:

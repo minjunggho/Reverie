@@ -22,12 +22,17 @@ CLASS_PRESETS: dict[str, dict] = {
     "bard": dict(abilities={"cha": 16, "dex": 14, "con": 13, "int": 12, "wis": 10, "str": 8},
                  proficiencies=["persuasion", "performance", "deception", "insight"],
                  max_hp=9, ac=13),
+    "sorcerer": dict(abilities={"cha": 16, "con": 14, "dex": 13, "wis": 12, "int": 10, "str": 8},
+                     proficiencies=["arcana", "deception"], max_hp=7, ac=12),
+    "warlock": dict(abilities={"cha": 16, "con": 14, "dex": 13, "wis": 12, "int": 10, "str": 8},
+                    proficiencies=["arcana", "intimidation"], max_hp=9, ac=12),
 }
 
 # Thai class fantasy names for reveals/prompts.
 CLASS_TH: dict[str, str] = {
     "fighter": "นักรบ", "rogue": "นักย่องเบา", "wizard": "จอมเวท",
     "cleric": "นักบวช", "ranger": "นายพราน", "bard": "กวี",
+    "sorcerer": "จอมเวทสายเลือด", "warlock": "ผู้สืบสัญญา",
 }
 
 # Deterministic fallback when the AI proposes an unsupported class: map concept

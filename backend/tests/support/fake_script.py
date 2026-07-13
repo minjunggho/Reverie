@@ -63,6 +63,23 @@ def _classify(messages, _model) -> ClassificationResult:
 def _interpret(messages, _model) -> ActionInterpretation:
     text = _marker(messages, "ACTION") or _joined(messages)
 
+    # Spellcasting: "ร่าย <spell> ใส่ <target>" / "cast <spell> at <target>".
+    low = text.lower()
+    if text.startswith("ร่าย") or "ร่ายคาถา" in text or low.startswith("cast "):
+        import re as _re
+
+        after = text.replace("ร่ายคาถา", "").replace("ร่าย", "").strip()
+        after = _re.sub(r"^cast\s+", "", after, flags=_re.I)
+        # spell name = text before ใส่/at; target = after it.
+        m = _re.split(r"ใส่|\bat\b|to\b", after, maxsplit=1)
+        spell_ref = m[0].strip()
+        targets = [m[1].strip()] if len(m) > 1 and m[1].strip() else []
+        return ActionInterpretation(
+            goal=f"ร่าย {spell_ref}", method="ร่ายคาถา", target_references=targets,
+            declared_constraints=[], risk_awareness=[], intent_confidence=0.9,
+            missing_information=[], cast_intent=True, spell_reference=spell_ref,
+        )
+
     if "จัดการ" in text and "ยาม" in text:
         return ActionInterpretation(
             goal="จัดการกับยาม", method="ไม่ระบุ",

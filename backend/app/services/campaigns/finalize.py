@@ -59,6 +59,9 @@ async def finalize_character(db, *, draft: CharacterDraft, data: dict,
             ac=armor_class(cls.name, scores["dex"]),
         )
         char.background = bg.name
+        # A subclass chosen in Stage B is a NARRATIVE plan by default; it only
+        # becomes mechanical (active) at the class's subclass level. For a class
+        # that chooses its subclass at level 1, activate + grant it now.
         char.planned_subclass = b.get("planned_subclass") or None
         char.hooks = {k: v for k, v in data.items() if k in HOOK_KEYS and v}
         char.appearance = data.get("appearance", "")
@@ -157,6 +160,15 @@ async def finalize_character(db, *, draft: CharacterDraft, data: dict,
             for slot_level_str, rid in (sc.slot_resources or {}).items():
                 if int(slot_level_str) <= (char.level + 1) // 2:   # 1st-level slots from L1
                     await engine.grant(char, rid)
+
+        # Activate a level-1 subclass (if this class chooses one at creation).
+        if cls.subclass_level <= 1 and b.get("planned_subclass"):
+            from app.tabletop.progression import SubclassService
+
+            try:
+                await SubclassService(s).select_subclass(char, b["planned_subclass"])
+            except Exception:  # noqa: BLE001 — a bad plan never blocks creation
+                pass
 
         gear = await InventoryService(s).grant_starting_gear(character=char)
         for item in bg.equipment_th:

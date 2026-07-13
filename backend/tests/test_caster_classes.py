@@ -287,18 +287,20 @@ def test_each_class_declares_its_own_slot_pool_no_hardcoding():
     assert reg.slot_resource_for("fighter", 1) is None       # non-caster
 
 
-def test_sorcerer_and_warlock_remain_locked_pending_full_matrix():
-    """Sorcerer/Warlock mechanics are implemented + tested, but their FULL
-    acceptance matrix (subclass-level progression + natural-language Discord cast
-    path) is not met — the same gaps the live wizard/bard share — so they stay
-    non-selectable and creation rejects them. Unlock is a deliberate later step."""
+def test_sorcerer_and_warlock_unlocked_after_end_to_end_gate():
+    """Sorcerer/Warlock were unlocked in Part 3 — their complete path (creation →
+    cast through the committed pipeline → resources → rest) passes (see
+    tests/test_unlock_sorcerer_warlock.py). Barbarian/monk/paladin/druid stay
+    locked pending their own mechanics + tests."""
     from app.tabletop.rules.core import SUPPORTED_CLASSES, validate_class
 
     reg = get_registry()
-    for locked in ("sorcerer", "warlock"):
+    for unlocked in ("sorcerer", "warlock"):
+        assert unlocked in reg.selectable_classes and unlocked in SUPPORTED_CLASSES
+        assert reg.get_class(unlocked).support_status == "FULLY_SUPPORTED"
+        assert validate_class(unlocked) == unlocked
+    for locked in ("barbarian", "monk", "paladin", "druid"):
         assert locked not in reg.selectable_classes
-        assert locked not in SUPPORTED_CLASSES
-        assert reg.get_class(locked).support_status != "FULLY_SUPPORTED"
         with pytest.raises(RulesViolation):
             validate_class(locked)
 

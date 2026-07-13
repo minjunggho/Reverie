@@ -27,8 +27,26 @@ from app.tabletop.rules.core import ability_modifier, proficiency_bonus_for_leve
 _HIT_DIE_AVERAGE = {6: 4, 8: 5, 10: 6, 12: 7}
 
 
-async def level_up(session: AsyncSession, character: Character) -> dict:
-    """Advance `character` by one level. Returns a Thai-note summary dict."""
+class SubclassSelectionRequired(Exception):
+    """Raised when level-up reaches the class's subclass level with no active
+    subclass — the caller must present the choice and call level_up again with
+    `chosen_subclass` set. Level-up does NOT complete until this is resolved."""
+
+    def __init__(self, character: Character) -> None:
+        from app.tabletop.progression.subclass import SubclassService
+
+        self.char_class = character.char_class
+        self.level = character.level
+        super().__init__(f"{character.char_class} must choose a subclass at level "
+                         f"{character.level}")
+
+
+async def level_up(session: AsyncSession, character: Character,
+                   *, chosen_subclass: str | None = None) -> dict:
+    """Advance `character` by one level. If the new level is the class's subclass
+    level and no subclass is active, a choice is REQUIRED: pass `chosen_subclass`
+    (validated) or a `SubclassSelectionRequired` is raised and the level does not
+    complete. Returns a Thai-note summary dict."""
     reg = get_registry()
     cls = reg.get_class(character.char_class)
     from app.tabletop.resources import ResourceEngine
@@ -47,6 +65,25 @@ async def level_up(session: AsyncSession, character: Character) -> dict:
 
     notes: list[str] = [f"เลเวล {before_level} → {character.level}",
                         f"HP +{hp_gain} (สูงสุด {character.max_hp})"]
+
+    # Subclass gate: at the class's subclass level, a choice is REQUIRED before the
+    # level can complete. A planned_subclass is only a suggestion — it must be
+    # explicitly confirmed (passed here) to become active and grant features.
+    from app.tabletop.progression.subclass import SubclassService
+
+    subclass_svc = SubclassService(session)
+    if subclass_svc.requires_selection(character):
+        if not chosen_subclass:
+            raise SubclassSelectionRequired(character)
+        result = await subclass_svc.select_subclass(character, chosen_subclass)
+        notes.append(f"เลือก subclass: {result['name_th']}")
+        notes.extend(f"ได้ฟีเจอร์ subclass: {n}" for n in result["notes"])
+    elif character.active_subclass:
+        # Already have a subclass — grant any of its features newly unlocked now.
+        sub = reg.subclasses.get(character.active_subclass.lower())
+        if sub is not None:
+            for n in await subclass_svc._grant_features(character, sub):
+                notes.append(f"ได้ฟีเจอร์ subclass: {n}")
 
     # Grant features newly unlocked at the new level; wire their resources.
     from sqlalchemy import select
