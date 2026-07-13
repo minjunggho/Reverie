@@ -103,9 +103,9 @@ async def test_resource_spend_reject_and_recover_atomically(db, provider):
         assert state.current == state.max_value == 2
 
 
-async def test_rage_resource_is_level_scaled_for_a_locked_class(db, provider):
-    """The framework represents a locked class's resource honestly: a barbarian's
-    Rage scales by level even though barbarian is not selectable."""
+async def test_rage_resource_is_level_scaled(db, provider):
+    """A barbarian's Rage uses count scales by level through the shared resource
+    formula — the framework, not a per-class engine, owns the scaling."""
     world = await build_world(db)
     reg = get_registry()
     d = reg.get_resource("resource:rage")
@@ -301,23 +301,25 @@ async def test_level_up_scales_hp_proficiency_and_resources(db, provider):
         assert "action_surge" in grants
 
 
-# --- locked-class discipline ----------------------------------------------------
+# --- unlock discipline ----------------------------------------------------------
 
-def test_unsupported_classes_stay_locked_until_proven():
+def test_all_twelve_core_classes_are_unlocked_and_consistent():
+    """Every class was unlocked only after its own end-to-end path passed. The three
+    sources of truth stay in lockstep: manifest selectable == backend SUPPORTED ==
+    the classes flagged FULLY_SUPPORTED in content."""
     reg = get_registry()
     from app.tabletop.rules.core import SUPPORTED_CLASSES
 
     assert set(reg.selectable_classes) == set(SUPPORTED_CLASSES)
-    # Still locked (their class-specific mechanics/tests aren't done); sorcerer and
-    # warlock were unlocked in Part 3 after their end-to-end path passed.
-    for locked in ("paladin", "druid"):
-        assert locked in reg.classes                          # represented in the framework
-        assert locked not in reg.selectable_classes           # but NOT selectable
-        assert reg.get_class(locked).support_status != "FULLY_SUPPORTED"
+    assert len(SUPPORTED_CLASSES) == 12
+    for cls in SUPPORTED_CLASSES:
+        assert cls in reg.classes                              # represented in the framework
+        assert reg.get_class(cls).support_status == "FULLY_SUPPORTED"
 
 
-def test_creation_rejects_a_locked_class():
+def test_creation_rejects_a_class_outside_the_content_pack():
     from app.tabletop.rules.core import validate_class
 
+    # Artificer has no SRD content here, so it is still rejected loudly.
     with pytest.raises(RulesViolation):
-        validate_class("paladin")
+        validate_class("artificer")

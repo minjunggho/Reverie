@@ -288,21 +288,20 @@ def test_each_class_declares_its_own_slot_pool_no_hardcoding():
 
 
 def test_sorcerer_and_warlock_unlocked_after_end_to_end_gate():
-    """Sorcerer/Warlock were unlocked in Part 3 — their complete path (creation →
-    cast through the committed pipeline → resources → rest) passes (see
-    tests/test_unlock_sorcerer_warlock.py). Barbarian/monk/paladin/druid stay
-    locked pending their own mechanics + tests."""
+    """Sorcerer/Warlock were unlocked in Part 3; the martial four (fighter/rogue/
+    barbarian/monk) and the divine/nature four (cleric/ranger/druid/paladin) followed
+    once each cleared its own end-to-end gate. All twelve core classes are now live —
+    only classes outside the SRD content (Artificer) remain unsupported."""
     from app.tabletop.rules.core import SUPPORTED_CLASSES, validate_class
 
     reg = get_registry()
-    for unlocked in ("sorcerer", "warlock"):
+    for unlocked in ("sorcerer", "warlock", "barbarian", "monk", "druid", "paladin"):
         assert unlocked in reg.selectable_classes and unlocked in SUPPORTED_CLASSES
         assert reg.get_class(unlocked).support_status == "FULLY_SUPPORTED"
         assert validate_class(unlocked) == unlocked
-    for locked in ("paladin", "druid"):
-        assert locked not in reg.selectable_classes
-        with pytest.raises(RulesViolation):
-            validate_class(locked)
+    # A class outside the content pack is still rejected loudly.
+    with pytest.raises(RulesViolation):
+        validate_class("artificer")
 
 
 async def test_wizard_arcane_recovery_resource_exists_and_scales(db, provider):

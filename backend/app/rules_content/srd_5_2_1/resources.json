@@ -123,7 +123,7 @@
     "name_th": "วางมือรักษา (Lay on Hands)",
     "recharge": "long_rest",
     "max_formula": {
-      "kind": "flat",
+      "kind": "flat_times_level",
       "value": 5
     }
   },
@@ -166,6 +166,21 @@
         "9": 1,
         "13": 2,
         "17": 3
+      }
+    }
+  },
+  {
+    "definition_id": "resource:wild_shape",
+    "ruleset_id": "srd521",
+    "name": "wild_shape",
+    "name_th": "แปลงร่างสัตว์ (Wild Shape)",
+    "recharge": "short_rest",
+    "max_formula": {
+      "kind": "by_class_level",
+      "table": {
+        "2": 2,
+        "6": 3,
+        "17": 4
       }
     }
   }

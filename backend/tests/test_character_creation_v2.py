@@ -54,15 +54,15 @@ async def _draft_for(db, member_id):
 # --- identity module (pure logic) ----------------------------------------------
 
 def test_unsupported_class_keeps_fiction_and_proposes_chassis():
-    # Only Paladin + Druid remain locked; a stated one keeps its fiction + chassis.
-    for stated, chassis in (("paladin", "fighter"), ("druid", "cleric")):
-        r = idmod.resolve_class_intention(f"I am a {stated} of legend")
-        assert r.stated == stated and r.is_unsupported and r.chassis == chassis
-        assert r.recommended == chassis
+    # Only classes outside the SRD content (Artificer) remain unsupported; a stated
+    # one keeps its fiction and proposes the closest supported chassis.
+    r = idmod.resolve_class_intention("I am an artificer of legend")
+    assert r.stated == "artificer" and r.is_unsupported and r.chassis == "wizard"
+    assert r.recommended == "wizard"
     supported = idmod.resolve_class_intention("a cunning rogue")
     assert supported.is_supported and supported.recommended == "rogue"
-    # Classes unlocked over the phases now map to THEMSELVES, no chassis.
-    for now_supported in ("sorcerer", "warlock", "barbarian", "monk"):
+    # Every core class unlocked over the phases now maps to ITSELF, no chassis.
+    for now_supported in ("sorcerer", "warlock", "barbarian", "monk", "paladin", "druid"):
         r = idmod.resolve_class_intention(f"I am a {now_supported}")
         assert r.is_supported and r.recommended == now_supported
 
@@ -104,8 +104,9 @@ async def test_one_message_rich_concept_goes_straight_to_reflection(db, provider
     draft = await _draft_for(db, world.p1_member_id)
     ident = draft.data.get("identity") or {}
     assert ident.get("class_intention") == "paladin"        # fiction captured
-    assert draft.data.get("_narrative_class") == "paladin"
-    assert draft.data.get("_class_hint") == "fighter"       # supported chassis proposed
+    # Paladin is now a fully-supported class — a direct hint, no narrative chassis.
+    assert draft.data.get("_narrative_class") is None
+    assert draft.data.get("_class_hint") == "paladin"
     assert ident.get("ancestry")                            # ancestry captured
     # The complete original text is preserved verbatim.
     assert "temple of Bahamut" in draft.data.get("_origin_text", "")
@@ -123,15 +124,17 @@ async def test_explicit_sorcerer_intent_now_maps_to_the_real_sorcerer_class(db, 
     assert (draft.data.get("identity") or {}).get("class_intention") == "sorcerer"
 
 
-async def test_explicit_paladin_intent_still_maps_to_a_supported_chassis(db, provider):
+async def test_explicit_artificer_intent_still_maps_to_a_supported_chassis(db, provider):
     world = await build_world(db)
     table = Table(db, provider)
     await table.send("!rv character")
-    r = await table.send("Ser Alden, a human Paladin sworn to the dawn")
+    # Artificer has no SRD content, so it keeps its fiction and proposes a chassis.
+    await table.send("Cogsworth, a gnome Artificer who builds clockwork wonders")
     draft = await _draft_for(db, world.p1_member_id)
-    assert draft.data.get("_narrative_class") == "paladin"     # still locked
-    assert draft.data.get("_class_hint") == "fighter"
-    assert "paladin" in r.responses[0].content.lower()
+    assert draft.data.get("_narrative_class") == "artificer"   # still unsupported
+    assert draft.data.get("_class_hint") == "wizard"           # closest supported chassis
+    # The fiction is preserved verbatim even for a class the engine can't run.
+    assert "artificer" in draft.data.get("_origin_text", "").lower()
 
 
 async def test_no_repeated_question_for_already_supplied_field(db, provider):

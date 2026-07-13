@@ -20,6 +20,15 @@ from app.rules_content.choice_names import (
     resolve_choice_name,
 )
 
+def _read_optional(content_dir, name: str) -> list[dict]:
+    """Read a content file if present, else an empty list (for additive packs
+    like beast_forms.json that older content directories may not have)."""
+    path = content_dir / name
+    if not path.is_file():
+        return []
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 RULESET_ID = "srd521"
 # The one authoritative edition (see docs/rules-authority.md). Surfaced by
 # diagnostics and stamped in the manifest so a deployment is provably on it.
@@ -56,7 +65,8 @@ class _Def(BaseModel):
 
 class MaxFormula(BaseModel):
     """Data expression for a resource maximum (never code)."""
-    kind: Literal["flat", "by_class_level", "ability_mod_min_1", "half_level_round_up"]
+    kind: Literal["flat", "by_class_level", "ability_mod_min_1", "half_level_round_up",
+                  "flat_times_level"]
     value: int | None = None
     table: dict[str, int] = Field(default_factory=dict)
     ability: str | None = None
@@ -249,6 +259,28 @@ class ClassDef(_Def):
         return [f for f in self.features_at(level) if f.activation == activation]
 
 
+class BeastFormDef(_Def):
+    """An authoritative Wild Shape beast form. Its statistics are AUTHORED content,
+    never invented by the LLM at transformation time — a druid may only become a
+    form defined here, gated by its max_druid_level (CR gate)."""
+    key: str
+    name_th: str
+    challenge: float = 0.0       # CR (informational)
+    max_druid_level: int = 1     # earliest druid level allowed to assume this form
+    ac: int = 10
+    form_hp: int = 1             # temporary HP pool while shaped (the form's HP)
+    speed: int = 30
+    swim_speed: int = 0
+    fly_speed: int = 0
+    str_score: int = 10
+    dex_score: int = 10
+    con_score: int = 10
+    attack_name_th: str = ""
+    attack_bonus: int = 0
+    damage: str = ""             # e.g. "1d6 piercing"
+    traits_th: list[str] = Field(default_factory=list)
+
+
 class SubclassFeatureDef(BaseModel):
     key: str
     name_th: str
@@ -287,6 +319,7 @@ class RulesRegistry:
         self.spells: dict[str, SpellDef] = {}
         self.resources: dict[str, ResourceDef] = {}
         self.skills: dict[str, SkillDef] = {}
+        self.beast_forms: dict[str, BeastFormDef] = {}
         self._load(content_dir)
 
     def _load(self, content_dir: Path) -> None:
@@ -347,6 +380,9 @@ class RulesRegistry:
         for raw in read("skills.json"):
             d = SkillDef.model_validate(raw)
             self.skills[d.name] = d
+        for raw in _read_optional(content_dir, "beast_forms.json"):
+            d = BeastFormDef.model_validate(raw)
+            self.beast_forms[d.key] = d
 
         self._validate_rules_content()
         self._validate_subclasses()
@@ -713,6 +749,20 @@ class RulesRegistry:
             return None
         return cls.spellcasting.slot_resources.get(str(spell_level))
 
+    def get_beast_form(self, key: str) -> BeastFormDef:
+        d = self.beast_forms.get((key or "").lower())
+        if d is None:
+            raise RulesViolation(f"unknown beast form: {key!r}")
+        return d
+
+    def legal_beast_forms(self, druid_level: int) -> list[BeastFormDef]:
+        """The authoritative forms a druid of this level may assume (CR-gated).
+        A druid can NEVER become a form absent from this list — the LLM does not
+        invent forms or their stats."""
+        return sorted((f for f in self.beast_forms.values()
+                       if f.max_druid_level <= druid_level),
+                      key=lambda f: (f.challenge, f.key))
+
     def get_resource(self, definition_id: str) -> ResourceDef:
         d = self.resources.get(definition_id)
         if d is None:
@@ -737,6 +787,8 @@ class RulesRegistry:
             return max(1, ability_mod)
         if formula.kind == "half_level_round_up":
             return (class_level + 1) // 2
+        if formula.kind == "flat_times_level":       # e.g. Lay on Hands = 5 × level
+            return int(formula.value or 0) * class_level
         raise RulesViolation(f"unknown max formula kind {formula.kind!r}")
 
 

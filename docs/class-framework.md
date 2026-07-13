@@ -57,9 +57,9 @@ heal, concentration), known caster (bard model), spellbook caster (wizard — sl
 spend/reject, attack cantrip, save-half), pact caster (warlock — PACT_MAGIC model +
 pact slots, framework-level), resource class (barbarian — level-scaled Rage,
 framework-level). Plus: resource atomicity + restart persistence, capabilities
-composition, level-up scaling, and the **locked-class discipline** (barbarian/
-warlock/sorcerer/paladin/druid/monk are represented in the framework but not
-selectable, and creation rejects them).
+composition, level-up scaling, and the **unlock discipline** (all twelve core
+classes are FULLY_SUPPORTED and selectable; a class outside the SRD content —
+Artificer — is still rejected by `validate_class`).
 
 ## Caster mechanics (Phase 4A) — `app/tabletop/classes/`
 
@@ -84,23 +84,14 @@ persistence code), with tests in `tests/test_caster_classes.py`:
 `spell_slots_1` is gone — and only grants features/resources at the character's
 level.
 
-## What is done vs. remaining, per class
+## What is done, per class
 
-**Fully supported & selectable (6):** fighter, rogue, wizard, cleric, ranger, bard.
-Creation, finalize, derived stats, resources, spell selection + honest cast, rest,
-restart persistence, and sheet all work through the shared systems. Wizard and Bard
-gained their distinctive mechanics (above) this phase.
-
-**Locked — represented in the framework, mechanics partially/fully built:**
-
-| Class | Model + mechanics present | Remaining before unlock |
-|---|---|---|
-| sorcerer | KNOWN model, spell pool, Sorcery Points, slot⇄SP conversion, Metamagic — all tested | subclass (Origin) L3 progression; Discord cast path; end-to-end creation test (gated on unlock) |
-| warlock | PACT_MAGIC + pact slots (short-rest), spell pool, Invocations + prereqs, Pact Boon — all tested | subclass (Patron) L3 progression; Discord cast path; end-to-end creation test |
-| barbarian | Rage resource (level-scaled), Unarmored Defense | Rage damage/resistance execution in combat; tests |
-| monk | Focus/Ki resource, Martial Arts feature | unarmed strike + ki-fueled actions execution; tests |
-| paladin | Lay on Hands + Channel Divinity resources, PREPARED model | smite/aura execution; spell list content; tests |
-| druid | PREPARED model | Wild Shape statblocks; nature spell list; tests |
+**All twelve core classes are fully supported & selectable.** Creation, finalize,
+derived stats, resources, spell selection + honest cast, class-feature activation,
+combat integration, rest recovery, restart persistence, level + subclass
+progression, and sheet all work through the shared systems — no per-class engine.
+The remaining unsupported class (Artificer) has no SRD content and falls back to a
+chassis at creation; `validate_class` rejects it loudly.
 
 ## Framework gaps closed (Step 5) — spell cast path + subclass progression
 
@@ -126,41 +117,51 @@ Both framework-wide gaps that blocked the caster unlock are now shipped:
   and **pauses** (`SubclassSelectionRequired`) until a valid choice is confirmed —
   a plan never auto-activates. Tested in `tests/test_subclass_progression.py`.
 
-## The unlock: 8 selectable classes
+## The unlock: all 12 core classes selectable
 
-With both gaps closed, **Sorcerer and Warlock were unlocked** — but only after their
-complete end-to-end path passed (`tests/test_unlock_sorcerer_warlock.py`: guided
-finalize with the correct spells + the class-declared slot pool, then a real cast
-through the committed pipeline committing damage to a combatant). Selectable classes
-are now: fighter, rogue, wizard, cleric, ranger, bard, **sorcerer, warlock**.
+Every unlock cleared the same bar — `FULLY_SUPPORTED` + selectable **only when the
+full end-to-end acceptance path passes** (creation → feature/cast through the
+committed pipeline → resources → combat → rest → restart → level → subclass), never
+by editing the selectable list alone (startup validation forbids it).
 
-**Martial classes fully built + unlocked** (`tests/test_martial_classes.py`, 15):
-Fighter (Second Wind heal + Action Surge through the feature-activation pipeline,
-Extra Attack L5, Indomitable L9), Rogue (Sneak Attack with *validated eligibility*
-— finesse/ranged + advantage-or-ally + not disadvantage, never vibes; Cunning
-Action L2, Uncanny Dodge L5, Evasion L7), Barbarian (Rage as a non-concentration
-ActiveEffect with physical resistance + a level-scaled damage bonus applied in
-combat, Reckless Attack, Danger Sense, Extra Attack L5, Unarmored Defense = CON),
-Monk (Martial Arts die, Ki/Focus abilities spending Focus with short-rest recovery,
-Unarmored Defense = WIS, Stunning Strike L5). New primitive:
-`_handle_activate` + `ClassFeatureService` (app/tabletop/classes/features.py) —
-"ใช้ <feature>" spends the feature's resource via ResourceEngine and applies its
-committed effect; combat-integrated pieces (Rage, Sneak Attack, Extra Attack) live
-in `martial_combat.py`. Barbarian/Monk unlocked (10 selectable) only after the
-end-to-end gate passed.
+- **Sorcerer, Warlock** (`tests/test_unlock_sorcerer_warlock.py`): guided finalize
+  with the class-declared slot pool, then a real cast committing damage to a
+  combatant.
+- **Fighter, Rogue, Barbarian, Monk** (`tests/test_martial_classes.py`, 15):
+  Fighter (Second Wind + Action Surge through the feature-activation pipeline, Extra
+  Attack L5, Indomitable L9), Rogue (Sneak Attack with *validated eligibility* —
+  finesse/ranged + advantage-or-ally + not disadvantage, never vibes; Cunning Action
+  L2, Uncanny Dodge L5, Evasion L7), Barbarian (Rage as a non-concentration
+  ActiveEffect with physical resistance + a level-scaled damage bonus applied in
+  combat, Reckless Attack, Danger Sense, Extra Attack L5, Unarmored Defense = CON),
+  Monk (Martial Arts die, Ki/Focus abilities spending Focus with short-rest
+  recovery, Unarmored Defense = WIS, Stunning Strike L5).
+- **Cleric, Ranger, Druid, Paladin** (`tests/test_divine_nature_classes.py`, 16):
+  Cleric (Channel Divinity through the activation pipeline), Ranger (Hunter's Mark
+  cast through the SpellEngine as a concentration buff, spellcasting from L1),
+  Druid (**Wild Shape from authoritative `BeastFormDef` content** — CR-gated legal
+  forms by druid level, form HP carried as a temp pool so the base sheet is never
+  corrupted, clean revert, use recovers on short rest; the LLM never invents a
+  form), Paladin (**Lay on Hands as a class feature, never a spell** — a 5×level HP
+  pool drawn through `ClassFeatureService`, asserted absent from every spell pool;
+  Divine Smite spends a spell slot for radiant damage; half-caster spellcasting
+  granted at L2, guarded in `finalize`).
 
-**Still locked** (represented in the framework, not yet playable — their
-class-specific execution + tests are incomplete): paladin, druid.
-Unlock criterion unchanged: `FULLY_SUPPORTED` + selectable **only when the full
-end-to-end acceptance path passes** — never by editing the selectable list alone
-(startup validation forbids it).
+**Shared primitive:** `_handle_activate` + `ClassFeatureService`
+(`app/tabletop/classes/features.py`) — "ใช้ <feature>" spends the feature's
+resource via ResourceEngine and applies its committed effect; combat-integrated
+pieces (Rage, Sneak Attack, Extra Attack, rage resistance) live in
+`martial_combat.py`, and Wild Shape in `druid.py` (`WildShapeService`). Channel
+Divinity, Divine Smite, Lay on Hands, and Wild Shape all reuse this one activation
+verb — the LLM decides neither availability nor numbers.
+
+Selectable classes are now all twelve: fighter, rogue, wizard, cleric, ranger,
+bard, sorcerer, warlock, barbarian, monk, druid, paladin. The old prepared-spell
+creation deadlock stays permanently covered by a regression test in
+`test_divine_nature_classes.py`.
 
 ## Known integration gaps (framework built, wiring pending)
 
-- **Discord cast path:** `SpellEngine.cast` is the honest core and is tested
-  directly; routing a natural-language `! ร่ายไฟลูกไฟใส่...` through the committed
-  pipeline to the engine (target/AC resolution from the scene) is the next
-  integration.
 - **Higher-level spell slots:** `slot_resources` is keyed by spell level and the
   engine spends by level; content currently ships 1st-level slots (correct for
   level-1 play). Higher slot pools are additive content, no new code.

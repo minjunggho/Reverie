@@ -156,11 +156,14 @@ async def finalize_character(db, *, draft: CharacterDraft, data: dict,
                                          kind="known", prepared=True,
                                          source_type="CLASS", source_key=cls.definition_id))
             # Grant the slot pools THIS class declares (wizard/bard/etc. →
-            # spell_slots_1; warlock → pact_slots), not a hardcoded pool. Only slot
-            # levels the character can actually use at their level are granted.
-            for slot_level_str, rid in (sc.slot_resources or {}).items():
-                if int(slot_level_str) <= (char.level + 1) // 2:   # 1st-level slots from L1
-                    await engine.grant(char, rid)
+            # spell_slots_1; warlock → pact_slots), not a hardcoded pool — but only
+            # once the class actually HAS spellcasting at this level (half-casters
+            # like Paladin gain it at level 2, so a level-1 Paladin gets no slots).
+            spellcasts_now = any(f.key == "spellcasting" for f in cls.features_at(char.level))
+            if spellcasts_now:
+                for slot_level_str, rid in (sc.slot_resources or {}).items():
+                    if int(slot_level_str) <= (char.level + 1) // 2:   # 1st-level slots from L1
+                        await engine.grant(char, rid)
 
         # Activate a level-1 subclass (if this class chooses one at creation).
         if cls.subclass_level <= 1 and b.get("planned_subclass"):

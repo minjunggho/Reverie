@@ -30,6 +30,10 @@ CLASS_PRESETS: dict[str, dict] = {
                       proficiencies=["athletics", "intimidation"], max_hp=14, ac=15),
     "monk": dict(abilities={"dex": 16, "wis": 15, "con": 13, "str": 12, "int": 10, "cha": 8},
                  proficiencies=["acrobatics", "stealth"], max_hp=9, ac=15),
+    "druid": dict(abilities={"wis": 16, "con": 14, "dex": 13, "int": 12, "str": 10, "cha": 8},
+                  proficiencies=["nature", "perception"], max_hp=9, ac=13),
+    "paladin": dict(abilities={"str": 16, "cha": 14, "con": 14, "wis": 12, "dex": 10, "int": 8},
+                    proficiencies=["athletics", "religion"], max_hp=12, ac=16),
 }
 
 # Thai class fantasy names for reveals/prompts.
@@ -38,6 +42,7 @@ CLASS_TH: dict[str, str] = {
     "cleric": "นักบวช", "ranger": "นายพราน", "bard": "กวี",
     "sorcerer": "จอมเวทสายเลือด", "warlock": "ผู้สืบสัญญา",
     "barbarian": "นักรบคลั่ง", "monk": "นักพรตหมัด",
+    "druid": "ผู้พิทักษ์ธรรมชาติ", "paladin": "อัศวินศักดิ์สิทธิ์",
 }
 
 # Deterministic fallback when the AI proposes an unsupported class: map concept

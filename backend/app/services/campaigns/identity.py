@@ -57,16 +57,14 @@ BUNDLED_SPECIES: frozenset[str] = frozenset({
 # the fiction is preserved and the closest supported chassis is proposed. (Sorcerer
 # and Warlock were unlocked once their end-to-end path passed, so they are no longer
 # here; `resolve_class_intention` keys off the live SUPPORTED_CLASSES regardless.)
-UNSUPPORTED_CLASSES: frozenset[str] = frozenset({
-    "paladin", "druid", "artificer",
-})
+# All twelve core classes are now playable; only classes outside the SRD content
+# (e.g. Artificer) remain unsupported and fall back to a chassis.
+UNSUPPORTED_CLASSES: frozenset[str] = frozenset({"artificer"})
 
 # Closest supported mechanical chassis for an unsupported stated class. Transparent,
 # engine-side; the player still chooses in Stage B (this only orders the pitch).
 CHASSIS_FOR_UNSUPPORTED: dict[str, str] = {
-    "paladin": "fighter",     # armored oathbound warrior
-    "artificer": "wizard",    # arcane caster
-    "druid": "cleric",        # nature/divine caster
+    "artificer": "wizard",    # arcane half-caster
 }
 
 # English → canonical class key, so "I'm a Paladin" / "พาลาดิน" both resolve.

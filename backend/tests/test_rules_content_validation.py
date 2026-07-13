@@ -110,7 +110,7 @@ def test_valid_rules_content_passes_and_exposes_only_backend_supported_classes()
     registry = RulesRegistry()
     assert set(registry.selectable_classes) == {
         "fighter", "rogue", "wizard", "cleric", "ranger", "bard", "sorcerer", "warlock",
-        "barbarian", "monk",
+        "barbarian", "monk", "druid", "paladin",
     }
     assert [cls.name for cls in registry.selectable_class_defs()] == list(
         registry.selectable_classes
@@ -119,8 +119,8 @@ def test_valid_rules_content_passes_and_exposes_only_backend_supported_classes()
 
 
 def test_every_class_declares_an_explicit_support_status():
-    """Selectable ⇔ FULLY_SUPPORTED; unfinished classes stay in the pack as
-    UNSUPPORTED (retained content, never offered as playable)."""
+    """Selectable ⇔ FULLY_SUPPORTED. All twelve core classes cleared their
+    end-to-end gate, so every class in the pack is now FULLY_SUPPORTED."""
     registry = RulesRegistry()
     statuses = {name: cls.support_status for name, cls in registry.classes.items()}
     assert set(statuses.values()) <= {
@@ -128,18 +128,18 @@ def test_every_class_declares_an_explicit_support_status():
     }
     fully = {n for n, s in statuses.items() if s == "FULLY_SUPPORTED"}
     assert fully == set(registry.selectable_classes)
-    # Still-unfinished classes are retained, not deleted, and not FULLY_SUPPORTED.
-    assert {"druid", "paladin"} <= set(statuses)
-    assert all(statuses[n] != "FULLY_SUPPORTED"
-               for n in ("druid", "paladin"))
+    assert len(fully) == 12
 
 
-def test_fully_supported_flag_on_unselectable_class_fails(tmp_path: Path):
+def test_support_status_must_match_the_selectable_set(tmp_path: Path):
+    """The invariant is enforced both ways: a selectable class that is NOT
+    FULLY_SUPPORTED breaks validation just as a FULLY_SUPPORTED-but-unselectable one
+    would. Flip a live class to UNSUPPORTED while it stays selectable."""
     content = _copy_content(tmp_path)
     classes = _read(content, "classes.json")
     for cls in classes:
-        if cls["name"] == "paladin":          # a still-locked class
-            cls["support_status"] = "FULLY_SUPPORTED"
+        if cls["name"] == "paladin":          # still selectable, but now understated
+            cls["support_status"] = "UNSUPPORTED"
     _write(content, "classes.json", classes)
 
     with pytest.raises(RulesViolation) as exc_info:

@@ -302,7 +302,15 @@
       "ป่า",
       "ปลดปล่อย"
     ],
-    "features": [],
+    "features": [
+      {
+        "key": "combat_wild_shape",
+        "name_th": "แปลงร่างรบ (Combat Wild Shape)",
+        "summary_th": "แปลงร่างได้ด้วยโบนัสแอ็กชัน และใช้ Wild Shape ฟื้น HP ฟอร์มได้",
+        "level": 3,
+        "activation": "bonus_action"
+      }
+    ],
     "implementation_status": "planned",
     "source_id": "srd521-chapter-3",
     "source_kind": "srd",
@@ -538,7 +546,16 @@
       "ชอบธรรม",
       "อัศวิน"
     ],
-    "features": [],
+    "features": [
+      {
+        "key": "sacred_weapon",
+        "name_th": "อาวุธศักดิ์สิทธิ์ (Sacred Weapon)",
+        "summary_th": "ใช้ Channel Divinity เสกอาวุธให้เปล่งแสง + โบนัสโจมตี",
+        "level": 3,
+        "activation": "action",
+        "resource_id": "resource:channel_divinity"
+      }
+    ],
     "implementation_status": "planned",
     "source_id": "srd521-chapter-3",
     "source_kind": "srd",

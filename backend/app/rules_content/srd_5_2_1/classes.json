@@ -213,6 +213,16 @@
         "level": 1,
         "activation": "passive",
         "execution": "narrative"
+      },
+      {
+        "key": "channel_divinity",
+        "name_th": "ศักดิ์สิทธิ์ (Channel Divinity)",
+        "summary_th": "ใช้พลังศักดิ์สิทธิ์ (Turn Undead ฯลฯ) ฟื้นเมื่อพักสั้น",
+        "level": 2,
+        "activation": "action",
+        "execution": "supported",
+        "resource_id": "resource:channel_divinity",
+        "recovery": "short_rest"
       }
     ],
     "spellcasting": {
@@ -246,7 +256,7 @@
     "definition_id": "class:druid",
     "definition_version": 1,
     "name": "druid",
-    "support_status": "UNSUPPORTED",
+    "support_status": "FULLY_SUPPORTED",
     "name_th": "ดรูอิด",
     "pitch_th": "ผู้คุยกับธรรมชาติและรับเอาพลังจากพืชพรรณ และสัตว์ป่า",
     "hit_die": 8,
@@ -294,6 +304,16 @@
         "level": 1,
         "activation": "passive",
         "execution": "narrative"
+      },
+      {
+        "key": "wild_shape",
+        "name_th": "แปลงร่างสัตว์ (Wild Shape)",
+        "summary_th": "แปลงเป็นสัตว์ที่รู้จัก ใช้สถิติของฟอร์มนั้น",
+        "level": 2,
+        "activation": "bonus_action",
+        "execution": "supported",
+        "resource_id": "resource:wild_shape",
+        "recovery": "short_rest"
       }
     ],
     "spellcasting": {
@@ -548,7 +568,7 @@
     "definition_id": "class:paladin",
     "definition_version": 1,
     "name": "paladin",
-    "support_status": "UNSUPPORTED",
+    "support_status": "FULLY_SUPPORTED",
     "name_th": "อัศวินผู้ศักดิ์สิทธิ์",
     "pitch_th": "ผู้ผูกคำปฏิญาณไว้กับพลังศักดิ์สิทธิ์และความถูกต้อง",
     "hit_die": 10,
@@ -593,9 +613,45 @@
         "key": "spellcasting",
         "name_th": "เวทแห่งคำปฏิญาณ",
         "summary_th": "ร่ายคาถาผ่านคำมั่นสัญญา",
-        "level": 1,
+        "level": 2,
         "activation": "action",
         "execution": "supported"
+      },
+      {
+        "key": "lay_on_hands",
+        "name_th": "วางมือรักษา (Lay on Hands)",
+        "summary_th": "บ่อพลังรักษา = 5×เลเวล จ่ายฟื้น HP ให้ผู้อื่น (ไม่ใช่คาถา)",
+        "level": 1,
+        "activation": "action",
+        "execution": "supported",
+        "resource_id": "resource:lay_on_hands",
+        "recovery": "long_rest"
+      },
+      {
+        "key": "fighting_style",
+        "name_th": "สไตล์การต่อสู้ (Fighting Style)",
+        "summary_th": "ความชำนาญการรบที่เลือกไว้",
+        "level": 2,
+        "activation": "passive",
+        "execution": "narrative"
+      },
+      {
+        "key": "divine_smite",
+        "name_th": "ตวัดศักดิ์สิทธิ์ (Divine Smite)",
+        "summary_th": "จ่ายช่องเวทตอนโจมตีโดน เพิ่มดาเมจ radiant",
+        "level": 2,
+        "activation": "free",
+        "execution": "supported"
+      },
+      {
+        "key": "channel_divinity",
+        "name_th": "ศักดิ์สิทธิ์ (Channel Divinity)",
+        "summary_th": "พลังจากคำสาบาน ฟื้นเมื่อพักสั้น",
+        "level": 3,
+        "activation": "action",
+        "execution": "supported",
+        "resource_id": "resource:channel_divinity",
+        "recovery": "short_rest"
       }
     ],
     "spellcasting": {
@@ -671,6 +727,22 @@
         "key": "favored_enemy",
         "name_th": "เหยื่อในสายตา",
         "summary_th": "ตราเป้าหมายด้วย Hunter's Mark",
+        "level": 1,
+        "activation": "passive",
+        "execution": "narrative"
+      },
+      {
+        "key": "fighting_style",
+        "name_th": "สไตล์การต่อสู้ (Fighting Style)",
+        "summary_th": "ความชำนาญการรบที่เลือกไว้",
+        "level": 2,
+        "activation": "passive",
+        "execution": "narrative"
+      },
+      {
+        "key": "deft_explorer",
+        "name_th": "นักสำรวจเชี่ยวชาญ (Deft Explorer)",
+        "summary_th": "ความเชี่ยวชาญทักษะ + ภาษาเพิ่ม",
         "level": 1,
         "activation": "passive",
         "execution": "narrative"

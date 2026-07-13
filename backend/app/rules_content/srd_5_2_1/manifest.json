@@ -12,7 +12,9 @@
     "sorcerer",
     "warlock",
     "barbarian",
-    "monk"
+    "monk",
+    "druid",
+    "paladin"
   ],
   "rules_edition": "D&D 2024 (SRD 5.2.1)"
 }

@@ -30,6 +30,10 @@ from app.tabletop.resources import ResourceEngine
 # Physical damage types Rage grants resistance to (SRD 5.2.1).
 RAGE_RESISTANCES = ("bludgeoning", "piercing", "slashing")
 
+# Features whose handler draws its own resource cost (a point pool, a spell slot,
+# or a Wild Shape use inside a sub-service) instead of the generic single-use spend.
+_SELF_MANAGED_RESOURCE = frozenset({"lay_on_hands", "divine_smite", "wild_shape"})
+
 
 def rage_damage_bonus(level: int) -> int:
     """+2 (1-8), +3 (9-15), +4 (16+)."""
@@ -78,7 +82,10 @@ class ClassFeatureService:
                 f"{feat.name_th} ทำงานอัตโนมัติ/ตอบโต้ ไม่ต้องสั่งใช้เอง")
         out = FeatureOutcome(feature=feature_key, name_th=feat.name_th,
                              spent=feat.resource_id)
-        if feat.resource_id:
+        # Most features spend ONE use of their resource generically; a few draw
+        # their own amount (Lay on Hands draws HP points) or spend a spell slot
+        # (Divine Smite) — those handlers manage the cost themselves.
+        if feat.resource_id and feature_key not in _SELF_MANAGED_RESOURCE:
             await ResourceEngine(self.session).spend(character.id, feat.resource_id, 1)
         await handler(character, out)
         await self._record(character, out)
@@ -143,6 +150,59 @@ class ClassFeatureService:
 
     async def _do_step_of_the_wind(self, character: Character, out: FeatureOutcome) -> None:
         out.line_th = "ย่างลม — จ่าย 1 Focus พุ่งตัวออกไปอย่างว่องไว (Dash + Disengage)"
+
+    async def _do_channel_divinity(self, character: Character, out: FeatureOutcome) -> None:
+        out.line_th = "ศักดิ์สิทธิ์ — เปล่งพลังจากศรัทธา (Channel Divinity)"
+
+    # --- paladin ---------------------------------------------------------------
+    async def _do_lay_on_hands(self, character: Character, out: FeatureOutcome,
+                               *, amount: int = 5, target: Character | None = None) -> None:
+        """Heal from the Lay on Hands POOL — a class feature, NOT a spell. Draws
+        `amount` points (capped by the pool + the target's missing HP) and restores
+        that many HP. Nothing here ever touches the spell system."""
+        eng = ResourceEngine(self.session)
+        state = await eng.get(character.id, "resource:lay_on_hands")
+        if state is None or state.current <= 0:
+            raise RulesViolation("บ่อพลังวางมือรักษาหมดแล้ว")
+        tgt = target or character
+        draw = max(1, min(amount, state.current, max(1, tgt.max_hp - tgt.hp)))
+        await eng.spend(character.id, "resource:lay_on_hands", draw)
+        before = tgt.hp
+        tgt.hp = min(tgt.max_hp, tgt.hp + draw)
+        out.healing = tgt.hp - before
+        out.spent = "resource:lay_on_hands"
+        out.line_th = f"วางมือรักษา — ฟื้น {out.healing} HP (จ่ายจากบ่อพลัง {draw})"
+
+    async def _do_divine_smite(self, character: Character, out: FeatureOutcome) -> None:
+        """Spend a spell SLOT (not a class resource) to add radiant damage. The
+        slot is the cost; the 2d8 radiant is the effect (applied to the struck
+        target by the combat caller)."""
+        if self.dice is None:
+            raise RulesViolation("divine smite ต้องใช้ dice engine")
+        slot_rid = self.reg.slot_resource_for(character.char_class, 1)
+        if slot_rid is None:
+            raise RulesViolation("ไม่มีช่องเวทให้ตวัดศักดิ์สิทธิ์")
+        await ResourceEngine(self.session).spend(character.id, slot_rid, 1)
+        radiant, _ = self.dice.resolve_damage(dice=[8, 8])   # 2d8 at 1st level
+        out.spent = slot_rid
+        out.notes.append(f"radiant_damage={radiant}")
+        out.line_th = f"ตวัดศักดิ์สิทธิ์! เพิ่มดาเมจ radiant {radiant} (จ่ายช่องเวท 1)"
+
+    # --- druid -----------------------------------------------------------------
+    async def _do_wild_shape(self, character: Character, out: FeatureOutcome,
+                             *, form_key: str | None = None) -> None:
+        from app.tabletop.classes.druid import WildShapeService
+
+        svc = WildShapeService(self.session)
+        legal = svc.legal_forms(character.level)
+        chosen = form_key or (legal[0].key if legal else None)
+        if chosen is None:
+            raise RulesViolation("ยังไม่มีร่างสัตว์ที่แปลงได้ในเลเวลนี้")
+        # The resource is spent inside transform(); mark it non-generic here.
+        result = await svc.transform(character, chosen)
+        out.spent = "resource:wild_shape"
+        out.effect_started = "Wild Shape"
+        out.line_th = result.line_th
 
     # --- helpers ---------------------------------------------------------------
     async def _end_effect(self, character: Character, name: str) -> None:

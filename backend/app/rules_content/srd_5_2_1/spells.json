@@ -175,7 +175,8 @@
     "ux_category": "ฟื้นฟู",
     "mech_summary_th": "เพื่อนที่แตะได้ +d4 ในการเช็คครั้งถัดไป (ต้องเพ่งสมาธิ)",
     "classes": [
-      "cleric"
+      "cleric",
+      "druid"
     ]
   },
   {
@@ -264,7 +265,8 @@
     "classes": [
       "wizard",
       "bard",
-      "sorcerer"
+      "sorcerer",
+      "druid"
     ],
     "save_ability": "con",
     "half_on_save": true,
@@ -371,7 +373,9 @@
       "wizard",
       "bard",
       "sorcerer",
-      "warlock"
+      "warlock",
+      "druid",
+      "paladin"
     ],
     "save_ability": "wis",
     "save_effect": "ต้านทานเสน่ห์"
@@ -408,7 +412,9 @@
     "classes": [
       "cleric",
       "bard",
-      "ranger"
+      "ranger",
+      "druid",
+      "paladin"
     ]
   },
   {
@@ -425,7 +431,8 @@
     "mech_summary_th": "Bonus Action รักษาระยะไกล 2d4 + ค่าร่ายเวท",
     "classes": [
       "cleric",
-      "bard"
+      "bard",
+      "druid"
     ]
   },
   {
@@ -441,7 +448,8 @@
     "ux_category": "ฟื้นฟู",
     "mech_summary_th": "เพื่อนสามคน +d4 การโจมตีและเซฟ (ต้องเพ่งสมาธิ)",
     "classes": [
-      "cleric"
+      "cleric",
+      "paladin"
     ]
   },
   {
@@ -479,7 +487,8 @@
     "ux_category": "ป้องกัน",
     "mech_summary_th": "+2 AC ให้หนึ่งชีวิต (ต้องเพ่งสมาธิ)",
     "classes": [
-      "cleric"
+      "cleric",
+      "paladin"
     ]
   },
   {
@@ -514,7 +523,8 @@
     "ux_category": "ฟื้นฟู",
     "mech_summary_th": "เสกเบอร์รีสิบลูก ลูกละ 1 HP และอิ่มหนึ่งวัน",
     "classes": [
-      "ranger"
+      "ranger",
+      "druid"
     ]
   },
   {
@@ -532,7 +542,8 @@
     "classes": [
       "wizard",
       "ranger",
-      "sorcerer"
+      "sorcerer",
+      "druid"
     ]
   },
   {
@@ -622,6 +633,93 @@
       "warlock",
       "wizard",
       "sorcerer"
+    ]
+  },
+  {
+    "ruleset_id": "srd521",
+    "definition_id": "spell:druidcraft",
+    "aliases": [],
+    "concentration": false,
+    "ritual": false,
+    "damage": null,
+    "healing": null,
+    "attack": "none",
+    "save_ability": null,
+    "save_effect": "",
+    "half_on_save": false,
+    "scales_with_slot": false,
+    "display_classes": null,
+    "content_type": "spell",
+    "name": "druidcraft",
+    "name_en": "Druidcraft",
+    "name_th_hint": "เวทป่า",
+    "level": 0,
+    "school": "transmutation",
+    "casting_time": "action",
+    "range": "30 ft",
+    "duration": "instant",
+    "ux_category": "ใช้งาน",
+    "mech_summary_th": "เล่นกลธรรมชาติเล็กๆ ทำนายอากาศ/บานดอกไม้",
+    "classes": [
+      "druid"
+    ]
+  },
+  {
+    "ruleset_id": "srd521",
+    "definition_id": "spell:produce_flame",
+    "aliases": [],
+    "concentration": false,
+    "ritual": false,
+    "damage": "1d8 fire",
+    "healing": null,
+    "attack": "ranged",
+    "save_ability": null,
+    "save_effect": "",
+    "half_on_save": false,
+    "scales_with_slot": false,
+    "display_classes": null,
+    "content_type": "spell",
+    "name": "produce_flame",
+    "name_en": "Produce Flame",
+    "name_th_hint": "เปลวในมือ",
+    "level": 0,
+    "school": "conjuration",
+    "casting_time": "action",
+    "range": "30 ft",
+    "duration": "10 minutes",
+    "ux_category": "โจมตี",
+    "mech_summary_th": "เปลวไฟในมือ ให้แสง หรือขว้างโจมตีเวท 1d8 fire",
+    "classes": [
+      "druid"
+    ]
+  },
+  {
+    "ruleset_id": "srd521",
+    "definition_id": "spell:searing_smite",
+    "aliases": [],
+    "concentration": true,
+    "ritual": false,
+    "damage": "1d6 fire",
+    "healing": null,
+    "attack": "none",
+    "save_ability": null,
+    "save_effect": "",
+    "half_on_save": false,
+    "scales_with_slot": false,
+    "display_classes": null,
+    "content_type": "spell",
+    "name": "searing_smite",
+    "name_en": "Searing Smite",
+    "name_th_hint": "ดาบเพลิง",
+    "level": 1,
+    "school": "evocation",
+    "casting_time": "bonus_action",
+    "range": "self",
+    "duration": "concentration, up to 1 minute",
+    "ux_category": "โจมตี",
+    "mech_summary_th": "การโจมตีครั้งถัดไปเพิ่มไฟ 1d6 และเผาต่อเนื่อง",
+    "classes": [
+      "paladin"
     ]
   }
 ]

@@ -87,6 +87,10 @@ _FEATURE_PHRASES = {
     "flurry_of_blows": ("หมัดรัว", "flurry"),
     "patient_defense": ("ตั้งรับ", "patient defense"),
     "step_of_the_wind": ("ย่างลม", "step of the wind"),
+    "lay_on_hands": ("วางมือ", "lay on hands"),
+    "divine_smite": ("ตวัดศักดิ์สิทธิ์", "divine smite", "สมิท"),
+    "channel_divinity": ("channel divinity", "ศักดิ์สิทธิ์"),
+    "wild_shape": ("แปลงร่าง", "wild shape"),
 }
 
 
