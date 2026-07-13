@@ -114,9 +114,11 @@ async def finalize_character(db, *, draft: CharacterDraft, data: dict,
                       "darkvision": trait.darkvision} if (trait.resistances or trait.darkvision) else {},
             ))
 
-        # Class features (+ their resources) and the background's Origin feat.
+        # Class features AT THIS LEVEL (+ their resources) and the Origin feat.
+        # Only level-appropriate features are granted — a level-1 caster does not
+        # get a level-2 resource (e.g. sorcerer Font of Magic); level_up grants the rest.
         engine = ResourceEngine(s)
-        for feat in cls.features:
+        for feat in cls.features_at(char.level):
             grants.append(CharacterGrant(
                 character_id=char.id, grant_type="feature", key=feat.key,
                 name_th=feat.name_th, source_type="CLASS", source_key=cls.definition_id,
@@ -149,7 +151,12 @@ async def finalize_character(db, *, draft: CharacterDraft, data: dict,
                     s.add(CharacterSpell(character_id=char.id, spell_key=spell,
                                          kind="known", prepared=True,
                                          source_type="CLASS", source_key=cls.definition_id))
-            await engine.grant(char, "resource:spell_slots_1")
+            # Grant the slot pools THIS class declares (wizard/bard/etc. →
+            # spell_slots_1; warlock → pact_slots), not a hardcoded pool. Only slot
+            # levels the character can actually use at their level are granted.
+            for slot_level_str, rid in (sc.slot_resources or {}).items():
+                if int(slot_level_str) <= (char.level + 1) // 2:   # 1st-level slots from L1
+                    await engine.grant(char, rid)
 
         gear = await InventoryService(s).grant_starting_gear(character=char)
         for item in bg.equipment_th:

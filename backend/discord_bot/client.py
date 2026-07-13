@@ -7,6 +7,10 @@ re-enter the same routing path as if the label had been typed.
 """
 from __future__ import annotations
 
+import json
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+
 import discord
 
 from app.core.logging import get_logger
@@ -17,16 +21,53 @@ from discord_bot.render import ChoiceView, _chunks, build_embed
 log = get_logger(__name__)
 
 
+@dataclass(frozen=True)
+class BotInstanceInfo:
+    pid: int
+    hostname: str
+    instance_id: str
+    git_sha: str
+    database_url: str
+    process_started_at: str
+
+
 class ReverieClient(discord.Client):
-    def __init__(self, bridge: DiscordBridge, admin: AdminBridge, **kwargs) -> None:
+    def __init__(
+        self,
+        bridge: DiscordBridge,
+        admin: AdminBridge,
+        *,
+        instance_info: BotInstanceInfo | None = None,
+        **kwargs,
+    ) -> None:
         intents = kwargs.pop("intents", None) or discord.Intents.default()
         intents.message_content = True  # required to read message text
         super().__init__(intents=intents, **kwargs)
         self.bridge = bridge
         self.admin = admin
+        self.instance_info = instance_info
+        self._startup_identity_logged = False
 
     async def on_ready(self) -> None:  # pragma: no cover - requires a live gateway
-        log.info("Reverie bot connected as %s", self.user)
+        if self.instance_info is None:
+            log.info("Reverie bot connected as %s", self.user)
+            return
+        bot_user_id = str(getattr(self.user, "id", "unknown"))
+        if self._startup_identity_logged:
+            log.info(
+                "Discord gateway reconnected instance=%s bot_user=%s",
+                self.instance_info.instance_id,
+                bot_user_id,
+            )
+            return
+        identity = {
+            "event": "bot_instance_started",
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            **asdict(self.instance_info),
+            "bot_user_id": bot_user_id,
+        }
+        log.info("Bot instance started %s", json.dumps(identity, sort_keys=True))
+        self._startup_identity_logged = True
 
     # --- routing --------------------------------------------------------------
     async def _route(self, inbound: InboundMessage) -> BridgeResult:

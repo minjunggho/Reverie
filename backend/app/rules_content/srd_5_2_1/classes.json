@@ -745,6 +745,24 @@
         "level": 1,
         "activation": "passive",
         "execution": "narrative"
+      },
+      {
+        "key": "font_of_magic",
+        "name_th": "บ่อเกิดเวท (Font of Magic)",
+        "summary_th": "ได้ Sorcery Points เท่าเลเวล แปลงช่องเวท↔แต้มพลังเวทได้",
+        "level": 2,
+        "activation": "free",
+        "execution": "supported",
+        "resource_id": "resource:sorcery_points",
+        "recovery": "long_rest"
+      },
+      {
+        "key": "metamagic",
+        "name_th": "เวทพลิกแพลง (Metamagic)",
+        "summary_th": "ดัดแปลงคาถาโดยจ่าย Sorcery Points (เช่น Quickened, Twinned, Careful)",
+        "level": 2,
+        "activation": "free",
+        "execution": "supported"
       }
     ],
     "spellcasting": {
@@ -821,6 +839,22 @@
         "summary_th": "พลังสัญญาแผ่ขยายผ่านผู้คุ้มครอง",
         "level": 1,
         "activation": "action",
+        "execution": "supported"
+      },
+      {
+        "key": "pact_boon",
+        "name_th": "พันธะสัญญา (Pact Boon)",
+        "summary_th": "เลือกพันธะ: Pact of the Blade / Tome / Chain",
+        "level": 3,
+        "activation": "passive",
+        "execution": "supported"
+      },
+      {
+        "key": "eldritch_invocations",
+        "name_th": "พรจากผู้อุปถัมภ์ (Eldritch Invocations)",
+        "summary_th": "เลือกพรพิเศษตามคุณสมบัติ (เริ่มมีตั้งแต่เลเวล 1)",
+        "level": 1,
+        "activation": "passive",
         "execution": "supported"
       }
     ],

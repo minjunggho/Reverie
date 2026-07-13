@@ -38,6 +38,8 @@ def save_bonus(char: Character, ability: str) -> Breakdown:
 
 
 def skill_bonus(char: Character, skill: str) -> Breakdown:
+    from app.tabletop.classes.bard import jack_of_all_trades_bonus
+
     s = validate_skill(skill)
     a = SKILL_TO_ABILITY[s]
     parts = [(a.upper(), ability_modifier(char.ability_score(a)))]
@@ -46,6 +48,12 @@ def skill_bonus(char: Character, skill: str) -> Breakdown:
         parts.append(("Expertise", pb * 2))
     elif s in (char.proficiencies or []):
         parts.append(("Proficiency", pb))
+    else:
+        # Jack of All Trades: a bard (L2+) adds half proficiency to checks it is
+        # NOT proficient in. 0 (and so no part) for everyone else.
+        joat = jack_of_all_trades_bonus(char.char_class, char.level, pb)
+        if joat:
+            parts.append(("Jack of All Trades", joat))
     return Breakdown(total=sum(v for _, v in parts), parts=parts)
 
 

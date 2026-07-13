@@ -12,7 +12,8 @@
     "ux_category": "โจมตี",
     "mech_summary_th": "ยิงเปลวไฟใส่เป้าหมาย — โจมตีเวทระยะไกล ดาเมจไฟ 1d10",
     "classes": [
-      "wizard"
+      "wizard",
+      "sorcerer"
     ],
     "attack": "ranged"
   },
@@ -29,7 +30,8 @@
     "ux_category": "โจมตี",
     "mech_summary_th": "ลำแสงเยือกแข็ง ดาเมจเย็น 1d8 และลดความเร็วเป้าหมาย",
     "classes": [
-      "wizard"
+      "wizard",
+      "sorcerer"
     ],
     "attack": "ranged"
   },
@@ -46,7 +48,8 @@
     "ux_category": "โจมตี",
     "mech_summary_th": "แตะช็อตด้วยไฟฟ้า ดาเมจ 1d8 และตัดจังหวะ Opportunity Attack",
     "classes": [
-      "wizard"
+      "wizard",
+      "sorcerer"
     ],
     "attack": "melee"
   },
@@ -63,7 +66,9 @@
     "mech_summary_th": "มือวิญญาณหยิบจับของเบาๆ จากระยะไกล",
     "classes": [
       "wizard",
-      "bard"
+      "bard",
+      "sorcerer",
+      "warlock"
     ]
   },
   {
@@ -80,7 +85,8 @@
     "classes": [
       "wizard",
       "cleric",
-      "bard"
+      "bard",
+      "sorcerer"
     ]
   },
   {
@@ -96,7 +102,9 @@
     "mech_summary_th": "ลูกเล่นเวทเล็กๆ สารพัดอย่าง — จุดเทียน ทำความสะอาด แต่งกลิ่น",
     "classes": [
       "wizard",
-      "bard"
+      "bard",
+      "sorcerer",
+      "warlock"
     ]
   },
   {
@@ -112,7 +120,9 @@
     "mech_summary_th": "สร้างเสียงหรือภาพนิ่งลวงตาขนาดเล็ก",
     "classes": [
       "wizard",
-      "bard"
+      "bard",
+      "sorcerer",
+      "warlock"
     ]
   },
   {
@@ -129,7 +139,8 @@
     "mech_summary_th": "ดวงไฟลอยได้สี่ดวง บังคับให้เคลื่อนที่ได้ (ต้องเพ่งสมาธิ)",
     "classes": [
       "wizard",
-      "bard"
+      "bard",
+      "sorcerer"
     ]
   },
   {
@@ -214,7 +225,8 @@
     "ux_category": "โจมตี",
     "mech_summary_th": "ศรพลังสามดอกที่ไม่มีวันพลาดเป้า",
     "classes": [
-      "wizard"
+      "wizard",
+      "sorcerer"
     ]
   },
   {
@@ -230,7 +242,8 @@
     "ux_category": "โจมตี",
     "mech_summary_th": "พ่นเปลวไฟเป็นรูปพัด — เซฟ DEX ลดครึ่ง",
     "classes": [
-      "wizard"
+      "wizard",
+      "sorcerer"
     ],
     "save_ability": "dex",
     "half_on_save": true,
@@ -250,7 +263,8 @@
     "mech_summary_th": "คลื่นเสียงระเบิดผลักทุกอย่างรอบตัว",
     "classes": [
       "wizard",
-      "bard"
+      "bard",
+      "sorcerer"
     ],
     "save_ability": "con",
     "half_on_save": true,
@@ -268,7 +282,8 @@
     "ux_category": "ป้องกัน",
     "mech_summary_th": "Reaction: +5 AC จนถึงเทิร์นหน้า และกัน Magic Missile",
     "classes": [
-      "wizard"
+      "wizard",
+      "sorcerer"
     ]
   },
   {
@@ -283,7 +298,8 @@
     "ux_category": "ป้องกัน",
     "mech_summary_th": "AC พื้นฐานกลายเป็น 13 + DEX นาน 8 ชั่วโมง",
     "classes": [
-      "wizard"
+      "wizard",
+      "sorcerer"
     ]
   },
   {
@@ -336,7 +352,8 @@
     "mech_summary_th": "กล่อมเป้าหมายให้ง่วงงุน — เซฟ WIS ไม่ผ่านหลับ (ต้องเพ่งสมาธิ)",
     "classes": [
       "wizard",
-      "bard"
+      "bard",
+      "sorcerer"
     ]
   },
   {
@@ -352,7 +369,9 @@
     "mech_summary_th": "ทำให้คนหนึ่งมองเจ้าเป็นมิตร — เซฟ WIS ต้าน",
     "classes": [
       "wizard",
-      "bard"
+      "bard",
+      "sorcerer",
+      "warlock"
     ],
     "save_ability": "wis",
     "save_effect": "ต้านทานเสน่ห์"
@@ -370,7 +389,8 @@
     "mech_summary_th": "Reaction: ห้าชีวิตร่วงช้าลง ไม่รับดาเมจตก",
     "classes": [
       "wizard",
-      "bard"
+      "bard",
+      "sorcerer"
     ]
   },
   {
@@ -511,7 +531,97 @@
     "mech_summary_th": "หมอกทึบรัศมี 20 ฟุต บังสายตาทุกฝ่าย (ต้องเพ่งสมาธิ)",
     "classes": [
       "wizard",
-      "ranger"
+      "ranger",
+      "sorcerer"
+    ]
+  },
+  {
+    "ruleset_id": "srd521",
+    "definition_id": "spell:eldritch_blast",
+    "aliases": [],
+    "concentration": false,
+    "ritual": false,
+    "damage": "1d10 force",
+    "healing": null,
+    "attack": "ranged",
+    "save_ability": null,
+    "save_effect": "",
+    "half_on_save": false,
+    "scales_with_slot": false,
+    "display_classes": null,
+    "content_type": "spell",
+    "name": "eldritch_blast",
+    "name_en": "Eldritch Blast",
+    "name_th_hint": "ลำแสงมนตรา",
+    "level": 0,
+    "school": "evocation",
+    "casting_time": "action",
+    "range": "120 ft",
+    "duration": "instant",
+    "ux_category": "โจมตี",
+    "mech_summary_th": "ลำแสงพลังมนตรา โจมตีเวทระยะไกล ดาเมจ 1d10 force",
+    "classes": [
+      "warlock"
+    ]
+  },
+  {
+    "ruleset_id": "srd521",
+    "definition_id": "spell:hex",
+    "aliases": [],
+    "concentration": true,
+    "ritual": false,
+    "damage": null,
+    "healing": null,
+    "attack": "none",
+    "save_ability": null,
+    "save_effect": "",
+    "half_on_save": false,
+    "scales_with_slot": false,
+    "display_classes": null,
+    "content_type": "spell",
+    "name": "hex",
+    "name_en": "Hex",
+    "name_th_hint": "คำสาปเลือกเหยื่อ",
+    "level": 1,
+    "school": "enchantment",
+    "casting_time": "bonus_action",
+    "range": "90 ft",
+    "duration": "concentration, up to 1 hour",
+    "ux_category": "ควบคุม",
+    "mech_summary_th": "สาปเป้าหมายหนึ่ง เพิ่มดาเมจ necrotic 1d6 ต่อการโจมตีของเจ้า (ต้องเพ่งสมาธิ)",
+    "classes": [
+      "warlock"
+    ]
+  },
+  {
+    "ruleset_id": "srd521",
+    "definition_id": "spell:witch_bolt",
+    "aliases": [],
+    "concentration": true,
+    "ritual": false,
+    "damage": "1d12 lightning",
+    "healing": null,
+    "attack": "ranged",
+    "save_ability": null,
+    "save_effect": "",
+    "half_on_save": false,
+    "scales_with_slot": false,
+    "display_classes": null,
+    "content_type": "spell",
+    "name": "witch_bolt",
+    "name_en": "Witch Bolt",
+    "name_th_hint": "สายฟ้าแม่มด",
+    "level": 1,
+    "school": "evocation",
+    "casting_time": "action",
+    "range": "30 ft",
+    "duration": "concentration, up to 1 minute",
+    "ux_category": "โจมตี",
+    "mech_summary_th": "สายฟ้าเชื่อมเป้าหมาย ดาเมจ 1d12 lightning ต่อเนื่อง (ต้องเพ่งสมาธิ)",
+    "classes": [
+      "warlock",
+      "wizard",
+      "sorcerer"
     ]
   }
 ]

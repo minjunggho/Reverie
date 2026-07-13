@@ -61,27 +61,58 @@ composition, level-up scaling, and the **locked-class discipline** (barbarian/
 warlock/sorcerer/paladin/druid/monk are represented in the framework but not
 selectable, and creation rejects them).
 
+## Caster mechanics (Phase 4A) — `app/tabletop/classes/`
+
+Class-specific kit built ON the shared systems (no parallel resource/spell/
+persistence code), with tests in `tests/test_caster_classes.py`:
+
+- **Bard** (`bard.py`): Bardic Inspiration die scaling (d6→d12), Jack of All Trades
+  (folded into `derive.skill_bonus`, guarded to bard L2+), Song of Rest die. Bardic
+  Inspiration is a ResourceState pool.
+- **Sorcerer** (`sorcerer.py`): Sorcery Points (level-scaled, from L2), Font of
+  Magic slot⇄point conversion (SRD table, atomic, rejects insufficient), Metamagic
+  catalog + `apply_metamagic` (spends SP, returns an effect descriptor).
+- **Warlock** (`warlock.py`): Pact slots (short-rest recharge via the shared rest
+  engine), Eldritch Invocations catalog with typed prerequisites (level / known
+  cantrip / pact), Pact Boon grants.
+- **Wizard** (`wizard.py`): spellbook `learn`/`prepare`, ritual casting (slot-free
+  path in `SpellEngine.cast(ritual=True)`), Arcane Recovery (resource + rest
+  special recharge).
+
+`finalize.py` now grants slot pools from the class's declared `slot_resources`
+(warlock → pact slots, arcane casters → the arcane pool) — the earlier hardcoded
+`spell_slots_1` is gone — and only grants features/resources at the character's
+level.
+
 ## What is done vs. remaining, per class
 
 **Fully supported & selectable (6):** fighter, rogue, wizard, cleric, ranger, bard.
 Creation, finalize, derived stats, resources, spell selection + honest cast, rest,
-restart persistence, and sheet all work through the shared systems.
+restart persistence, and sheet all work through the shared systems. Wizard and Bard
+gained their distinctive mechanics (above) this phase.
 
-**Locked — represented in the framework, not yet playable:**
+**Locked — represented in the framework, mechanics partially/fully built:**
 
-| Class | Model piece present | Remaining before unlock |
+| Class | Model + mechanics present | Remaining before unlock |
 |---|---|---|
-| barbarian | Rage resource (level-scaled), Unarmored Defense | Rage damage/resistance execution in combat; class-specific tests |
+| sorcerer | KNOWN model, spell pool, Sorcery Points, slot⇄SP conversion, Metamagic — all tested | subclass (Origin) L3 progression; Discord cast path; end-to-end creation test (gated on unlock) |
+| warlock | PACT_MAGIC + pact slots (short-rest), spell pool, Invocations + prereqs, Pact Boon — all tested | subclass (Patron) L3 progression; Discord cast path; end-to-end creation test |
+| barbarian | Rage resource (level-scaled), Unarmored Defense | Rage damage/resistance execution in combat; tests |
 | monk | Focus/Ki resource, Martial Arts feature | unarmed strike + ki-fueled actions execution; tests |
 | paladin | Lay on Hands + Channel Divinity resources, PREPARED model | smite/aura execution; spell list content; tests |
-| sorcerer | KNOWN model | Sorcery Points + Metamagic; spell list content; tests |
-| warlock | PACT_MAGIC model + pact slots | Pact Boon / invocations; short-rest slot recharge wiring; spell list; tests |
 | druid | PREPARED model | Wild Shape statblocks; nature spell list; tests |
 
-Unlock criterion (unchanged from the mandate): a class becomes `FULLY_SUPPORTED`
-and selectable **only when its class-specific mechanics are implemented and its own
-tests pass** — never by editing the selectable list alone (startup validation
-forbids that).
+## Why the six-class restriction was NOT removed this phase
+
+The acceptance matrix for each class includes **subclass-level progression** and the
+**actual Discord gameplay (natural-language cast) path**. Neither is implemented for
+*any* class yet — including the already-live wizard/bard — so per the mandate ("do
+not claim full support if any official class fails its acceptance matrix") sorcerer
+and warlock stay `UNSUPPORTED` and non-selectable. Their distinctive mechanics and
+resources are implemented and tested; unlocking is a deliberate later step once the
+two framework-wide gaps close. Unlock criterion (unchanged): a class becomes
+`FULLY_SUPPORTED` and selectable **only when its full acceptance matrix passes** —
+never by editing the selectable list alone (startup validation forbids that).
 
 ## Known integration gaps (framework built, wiring pending)
 

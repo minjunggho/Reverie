@@ -109,12 +109,14 @@ class SpellEngine:
     async def cast(
         self, *, character: Character, spell_key: str, slot_level: int | None = None,
         target_acs: dict[str, int] | None = None, target_save_mods: dict[str, int] | None = None,
+        ritual: bool = False,
         session_id: str | None = None, scene_id: str | None = None,
         campaign_id: str | None = None,
     ) -> SpellCastOutcome:
         """Cast `spell_key` at `slot_level` (defaults to the spell's own level).
         `target_acs`/`target_save_mods` map a target entity_ref to its AC / save
-        modifier; targets without the needed number are skipped for that step."""
+        modifier; targets without the needed number are skipped for that step.
+        `ritual=True` casts a ritual-tagged spell without spending a slot."""
         spell = self.reg.get_spell(spell_key)
         profile = await spellcasting_profile(self.session, character)
         if not profile.is_caster:
@@ -124,8 +126,11 @@ class SpellEngine:
                 f"{character.name} ยังไม่ได้เตรียม/รู้คาถา {spell.name_th_hint}")
 
         level = slot_level if slot_level is not None else spell.level
-        # 2) pay: cantrips free; leveled spells spend a slot of >= their own level.
-        if not spell.is_cantrip:
+        # 2) pay: cantrips free; a RITUAL cast is slot-free (10 minutes longer, no
+        #    slot spent) when the spell has the ritual tag and the caster is not
+        #    forcing a specific slot; a leveled spell otherwise spends a slot.
+        ritual_cast = ritual and spell.ritual and slot_level is None
+        if not spell.is_cantrip and not ritual_cast:
             if level < spell.level:
                 raise ValidationError(
                     f"ต้องใช้ช่องเวทระดับ {spell.level} ขึ้นไป (ขอ {level})")

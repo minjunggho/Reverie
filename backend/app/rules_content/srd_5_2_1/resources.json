@@ -137,5 +137,21 @@
       "kind": "flat",
       "value": 1
     }
+  },
+  {
+    "definition_id": "resource:sorcery_points",
+    "ruleset_id": "srd521",
+    "name": "sorcery_points",
+    "name_th": "แต้มพลังเวท (Sorcery Points)",
+    "recharge": "long_rest",
+    "max_formula": {
+      "kind": "by_class_level",
+      "table": {
+        "2": 2,
+        "3": 3,
+        "4": 4,
+        "5": 5
+      }
+    }
   }
 ]

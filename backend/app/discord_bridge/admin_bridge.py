@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 
 from app.core.errors import ReverieError
+from app.core.logging import get_logger
 from app.discord_bridge.dto import BridgeResult, InboundMessage, OutboundMessage
 from app.entities.directory import normalize_name
 from app.models.campaign import CampaignMember
@@ -26,6 +27,7 @@ from app.presentation import MessageKind
 from app.services.campaigns import CampaignService, CharacterService
 from app.services.campaigns.inventory_service import InventoryService
 from app.services.campaigns.presets import CLASS_PRESETS, CLASS_TH
+from app.services.messages import ProcessedMessageService
 from app.services.sessions.closing_service import SessionClosingService
 from app.services.sessions.opening_service import SessionOpeningService
 from app.services.sessions.post_session_service import PostSessionService
@@ -41,6 +43,8 @@ from app.services.views import (
 from app.world import LocationService, PositionService
 
 ADMIN_PREFIX = "!rv"
+
+log = get_logger(__name__)
 
 HELP_LINES = (
     "`!rv campaign new <ชื่อ>` — เปิดโต๊ะใหม่ในห้องนี้",
@@ -82,7 +86,7 @@ class AdminBridge:
         except ValueError:
             args = inbound.content.strip()[len(ADMIN_PREFIX):].strip().split()
         if not args or args[0] in ("help", "?"):
-            return await self._welcome(inbound)
+            return await self._welcome_once(inbound)
 
         cmd, rest = args[0].lower(), args[1:]
         ctx = _Ctx(inbound=inbound, args=rest)
@@ -114,6 +118,25 @@ class AdminBridge:
             return self._notice(inbound, f"⚠️ {exc}")
 
     # --- welcome (context-aware onboarding) -----------------------------------
+    async def _welcome_once(self, inbound: InboundMessage) -> BridgeResult:
+        """Render help only for the process that atomically claims this event."""
+        async with self.db.unit_of_work() as session:
+            claimed = await ProcessedMessageService(session).claim_once(
+                discord_message_id=inbound.discord_message_id,
+            )
+        if not claimed:
+            log.info(
+                "Duplicate admin help suppressed message_id=%s",
+                inbound.discord_message_id,
+            )
+            return BridgeResult(
+                handled=True,
+                duplicate=True,
+                responses=[],
+                note="duplicate admin help discord_message_id",
+            )
+        return await self._welcome(inbound)
+
     async def _welcome(self, inbound: InboundMessage) -> BridgeResult:
         async with self.db.session() as s:
             camp = CampaignService(s)

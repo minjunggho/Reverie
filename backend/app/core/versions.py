@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import hashlib
 import os
+import socket
 import subprocess
+import uuid
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -25,6 +27,10 @@ MEMORY_SYSTEM_VERSION = 1
 
 # Process start (UTC) — the "build/boot" timestamp diagnostics reports.
 PROCESS_STARTED_AT = datetime.now(timezone.utc).isoformat(timespec="seconds")
+# Process identity — stable for this interpreter and different after every restart.
+PROCESS_INSTANCE_ID = uuid.uuid4().hex
+PROCESS_PID = os.getpid()
+PROCESS_HOSTNAME = socket.gethostname() or "unknown"
 
 
 @lru_cache(maxsize=1)
