@@ -527,6 +527,12 @@ class CanonImportService:
                 # Canonical anchor: explicit imported starting location (E7).
                 campaign.starting_location_id = by_key[proposal.starting_location].id
             campaign.session_prep = prep
+            # Seed main-story continuity so the central storyline is remembered and
+            # keeps reacting across turns/restarts (never lost, never railroaded).
+            from app.services.campaigns.main_story import MainStoryService
+
+            await MainStoryService(self.session).initialize_from_proposal(
+                campaign_id, proposal)
 
         row.status = "APPROVED"
         review = _validate(proposal)

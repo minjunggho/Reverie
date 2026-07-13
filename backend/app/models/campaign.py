@@ -54,6 +54,11 @@ class Campaign(Base, TimestampMixin):
     brief: Mapped[str] = mapped_column(Text, default="")
     central_question: Mapped[str] = mapped_column(Text, default="")
     session_prep: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # Main-story continuity (imported campaigns): the dramatic question, current
+    # state, known leads, hidden truth, deadlines, and the branches/goal outcomes
+    # players have caused. Lets the main story keep reacting across many turns and
+    # restarts without being lost or railroaded. See MainStoryService.
+    main_story: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     status: Mapped[str] = mapped_column(String(16), default=CampaignStatus.SETUP.value)
     # Monotonic event sequence counter for this campaign (assigned under lock).
     event_seq: Mapped[int] = mapped_column(Integer, default=0)

@@ -73,6 +73,7 @@ class Database:
             ("current_party_anchor_id", "VARCHAR(32)"),
             ("default_session_opening", "TEXT NOT NULL DEFAULT ''"),
             ("world_model_version", "INTEGER NOT NULL DEFAULT 2"),
+            ("main_story", "JSON NOT NULL DEFAULT '{}'"),
         ],
         "characters": [
             ("planned_subclass", "VARCHAR(80)"),
