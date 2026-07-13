@@ -77,6 +77,8 @@ class Database:
         "characters": [
             ("planned_subclass", "VARCHAR(80)"),
             ("following_character_id", "VARCHAR(32)"),
+            ("origin_text", "TEXT NOT NULL DEFAULT ''"),
+            ("identity", "JSON NOT NULL DEFAULT '{}'"),
         ],
         "character_drafts": [
             ("version", "INTEGER NOT NULL DEFAULT 0"),

@@ -63,6 +63,23 @@ async def finalize_character(db, *, draft: CharacterDraft, data: dict,
         char.hooks = {k: v for k, v in data.items() if k in HOOK_KEYS and v}
         char.appearance = data.get("appearance", "")
         char.languages = ["Common"]
+
+        # Preserve the COMPLETE player-authored text verbatim, plus the structured
+        # identity extracted from it — never one at the expense of the other.
+        from app.services.campaigns.identity import generate_seeds, merge_identity
+
+        identity = merge_identity(data.get("identity") or {}, {})
+        # Record narrative-vs-mechanical facts the build captured.
+        if data.get("_narrative_class"):
+            identity["class_intention"] = data["_narrative_class"]
+        identity["mechanical_class"] = cls.name
+        if b.get("narrative_ancestry"):
+            identity["ancestry"] = b["narrative_ancestry"]
+        identity["mechanical_ancestry"] = b.get("mechanical_ancestry") or sp.name
+        # Reviewable evolution seeds: proposed, PENDING until campaign validates them.
+        identity["seeds"] = [s.as_dict() for s in generate_seeds(identity)]
+        char.origin_text = data.get("_origin_text", "") or data.get("appearance", "")
+        char.identity = identity
         char.tool_proficiencies = [bg.tool_proficiency]
         char.expertise = list(b.get("expertise", []))
 
@@ -148,8 +165,15 @@ async def finalize_character(db, *, draft: CharacterDraft, data: dict,
         score_line = "  ".join(
             f"{a.upper()} {scores[a]} ({ability_modifier(scores[a]):+d})" for a in ABILITIES
         )
+        # Identity line keeps the fiction visible: a narrative class/ancestry shows
+        # alongside the mechanical chassis it resolved to.
+        identity_line = f"{sp.name_th} · {cls.name_th} · {bg.name_th}"
+        if identity.get("class_intention") and identity["class_intention"] != cls.name:
+            identity_line = f"{identity['class_intention']} ({cls.name_th}) · {sp.name_th} · {bg.name_th}"
+        if b.get("narrative_ancestry"):
+            identity_line = f"{b['narrative_ancestry']} · {cls.name_th} · {bg.name_th} · กลไก {sp.name_th}"
         fields = [
-            {"name": "ตัวตน", "value": f"{sp.name_th} · {cls.name_th} · {bg.name_th}", "inline": False},
+            {"name": "ตัวตน", "value": identity_line, "inline": False},
             {"name": "❤️ HP / 🛡️ AC", "value": f"{char.max_hp} / {char.ac}", "inline": True},
             {"name": "ความเร็ว", "value": f"{char.speed} ฟุต", "inline": True},
             {"name": "ความสามารถ", "value": score_line, "inline": False},
@@ -174,6 +198,12 @@ async def finalize_character(db, *, draft: CharacterDraft, data: dict,
         if hook_lines:
             fields.append({"name": "สิ่งที่ติดตัวมา", "value": "\n".join(hook_lines),
                            "inline": False})
+        # Reviewable evolution seeds — proposed, not yet canon; the DM may weave
+        # them in as the campaign confirms them.
+        seed_lines = [f"• {sd['text']}" for sd in (identity.get("seeds") or [])]
+        if seed_lines:
+            fields.append({"name": "🌱 เมล็ดพันธุ์เรื่องราว (ข้อเสนอ)",
+                           "value": "\n".join(seed_lines), "inline": False})
 
     summary = data.get("_summary") or data.get("concept", "")
     return BridgeResult(handled=True, state_mutated=True, responses=[OutboundMessage(

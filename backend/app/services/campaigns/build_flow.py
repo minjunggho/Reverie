@@ -67,6 +67,14 @@ class BuildFlow:
         await self._save(draft, data)
         intro = ("ต่อไปเป็นส่วนกฎเกม — ข้าจะอธิบายตัวเลือกที่เข้ากับตัวละคร "
                  "แต่เจ้าจะเป็นคนเลือกทั้งหมด\n\n")
+        # Honor a stated-but-unsupported class in the fiction; propose the closest
+        # supported chassis (still the player's explicit choice).
+        narrative = data.get("_narrative_class")
+        if narrative:
+            hint_th = CLASS_TH.get(data.get("_class_hint", ""), data.get("_class_hint", ""))
+            intro += (f"เจ้าอยากเล่นเป็น **{narrative}** — ในเนื้อเรื่องเป็นแบบนั้นได้เต็มที่ "
+                      f"ตอนนี้กลไกยังไม่รองรับคลาสนั้นตรงๆ ข้าเลยเสนอ **{hint_th}** ที่ใกล้ที่สุด "
+                      "เป็นตัวเลือกแรก — หรือเลือกอย่างอื่นก็ได้\n\n")
         return self._class_step(data, channel_id, intro=intro)
 
     async def handle(self, draft: CharacterDraft, data: dict, text: str,
@@ -94,6 +102,8 @@ class BuildFlow:
                 )
             if step == "subclass":
                 return self._subclass_step(data, channel_id)
+            if step == "ancestry_package":
+                return self._ancestry_package_step(data, channel_id)
             if step == "species":
                 return self._species_step(data, channel_id)
             if step == "background":
@@ -137,7 +147,14 @@ class BuildFlow:
             hits = sum(1 for kw in cls.concept_keywords if kw in blob)
             scored.append((-hits, name))
         scored.sort()
-        return [name for _, name in scored]
+        ranked = [name for _, name in scored]
+        # An explicit class intention (stated by the player, or the proposed chassis
+        # for an unsupported class) leads the recommendations — never buried.
+        hint = data.get("_class_hint")
+        if hint in ranked:
+            ranked.remove(hint)
+            ranked.insert(0, hint)
+        return ranked
 
     def _class_step(self, data: dict, channel_id: str, intro: str = "",
                     show_all: bool = False) -> BridgeResult:
@@ -170,9 +187,54 @@ class BuildFlow:
             data["_build"].update({"step": "subclass", "class": picked})
             await self._save(draft, data)
             return self._subclass_step(data, channel_id)
-        data["_build"].update({"step": "species", "class": picked})
+        data["_build"]["class"] = picked
+        return await self._begin_ancestry(draft, data, channel_id)
+
+    async def _begin_ancestry(self, draft, data, channel_id) -> BridgeResult:
+        """A custom ancestry (Catfolk, a winged variant, …) can't just be a bundled
+        species: its NARRATIVE appearance is preserved, but its MECHANICAL package
+        must be chosen and owner-approved so an appearance never silently grants
+        flight/resistance/etc. Everyone else goes straight to the species menu."""
+        if data.get("_custom_ancestry"):
+            data["_build"]["step"] = "ancestry_package"
+            await self._save(draft, data)
+            return self._ancestry_package_step(data, channel_id)
+        data["_build"]["step"] = "species"
         await self._save(draft, data)
         return self._species_step(data, channel_id)
+
+    # ---------- step: custom-ancestry mechanical package ----------------------------
+    def _ancestry_package_step(self, data: dict, channel_id: str) -> BridgeResult:
+        from app.services.campaigns.identity import suggested_base_for_custom
+
+        ancestry = data.get("_custom_ancestry", "เผ่าพิเศษ")
+        suggested = suggested_base_for_custom(ancestry)
+        lines, choices = [], []
+        for name, sp in self.reg.species.items():
+            tag = " ⭐ ใกล้ที่สุด" if name == suggested else ""
+            traits = " · ".join(t.name_th for t in sp.traits)
+            lines.append(f"**{sp.name_th}**{tag}\n-# ชุดกลไก: {traits}")
+            choices.append(f"{sp.name_th} ({sp.name})")
+        body = (
+            f"**{ancestry}** เป็นเผ่าที่เจ้าคิดขึ้นเอง — รูปลักษณ์และเรื่องราวของมันข้าเก็บไว้ครบ "
+            "และจะปรากฏในเนื้อเรื่อง\n\n"
+            "แต่ 'พลังตามกฎ' ต้องมาจากชุดสำเร็จที่ระบบรันได้ — เลือกชุดกลไกที่ใกล้กับภาพในหัวที่สุด "
+            "(เช่น ปีกในรูปลักษณ์ไม่ได้แปลว่าบินได้ทันที เว้นแต่เจ้าของโต๊ะอนุมัติภายหลัง)\n\n"
+            + "\n\n".join(lines)
+        )
+        return _card(channel_id, f"เผ่าที่ออกแบบเอง: {ancestry}", body, choices)
+
+    async def _on_ancestry_package(self, draft, data, text, channel_id) -> BridgeResult:
+        picked = _match(text, self.reg.species)
+        if picked is None:
+            return self._ancestry_package_step(data, channel_id)
+        # Keep the narrative ancestry; the picked bundled species is only the
+        # MECHANICAL chassis. Both are recorded for the review + finalize.
+        data["_build"].update({"step": "background", "species": picked,
+                               "mechanical_ancestry": picked,
+                               "narrative_ancestry": data.get("_custom_ancestry")})
+        await self._save(draft, data)
+        return self._background_step(data, channel_id)
 
     # ---------- step: subclass ---------------------------------------------------
     def _subclass_step(self, data: dict, channel_id: str) -> BridgeResult:
@@ -188,21 +250,24 @@ class BuildFlow:
 
     async def _on_subclass(self, draft, data, text, channel_id) -> BridgeResult:
         if any(word in text.lower() for word in ("ยังไม่เลือก", "later", "ไม่เลือก", "skip")):
-            data["_build"].update({"step": "species", "planned_subclass": None})
-            await self._save(draft, data)
-            return self._species_step(data, channel_id)
+            data["_build"]["planned_subclass"] = None
+            return await self._begin_ancestry(draft, data, channel_id)
         picked = _match(text, {s.name: s for s in self.reg.subclasses_for_class(data["_build"]["class"])})
         if picked is None:
             return self._subclass_step(data, channel_id)
-        data["_build"].update({"step": "species", "planned_subclass": picked})
-        await self._save(draft, data)
-        return self._species_step(data, channel_id)
+        data["_build"]["planned_subclass"] = picked
+        return await self._begin_ancestry(draft, data, channel_id)
 
     # ---------- step: species ----------------------------------------------------
     def _species_step(self, data: dict, channel_id: str) -> BridgeResult:
+        # An explicitly stated ancestry leads the recommendations — the flow never
+        # falls back to Human just because nothing was inferred from prose.
         blob = " ".join(str(v) for v in data.values() if isinstance(v, str))
-        hinted = next((n for n, th in (("elf", "เอลฟ์"), ("dwarf", "แคระ"),
-                                       ("halfling", "ฮาล์ฟลิง")) if th in blob), "human")
+        hinted = data.get("_species_hint") or next(
+            (n for n, th in (("elf", "เอลฟ์"), ("dwarf", "แคระ"),
+                             ("halfling", "ฮาล์ฟลิง")) if th in blob), "human")
+        if hinted not in self.reg.species:
+            hinted = "human"
         lines, choices = [], []
         for name, sp in self.reg.species.items():
             tag = " ⭐ แนะนำ" if name == hinted else ""
@@ -960,22 +1025,62 @@ class BuildFlow:
             f"{a.upper()} {scores[a]} ({ability_modifier(scores[a]):+d})" for a in ABILITIES
         )
         skills = self._all_skills_so_far(data)
-        lines = [
-            f"**{data.get('name', 'นักผจญภัย')}** — {sp.name_th} · {cls.name_th} · {bg.name_th}",
-            score_line,
-            f"ทักษะถนัด: {', '.join(self.reg.skills[s].name_th for s in skills)}",
-        ]
+        identity = data.get("identity") or {}
+
+        # A sectioned review keeps identity (fiction) and mechanics visibly separate,
+        # so the player sees that their writing was kept AND what the rules resolved to.
+        lines: list[str] = [f"**{data.get('name', 'นักผจญภัย')}**"]
+
+        # 1) mechanical ancestry — with narrative ancestry shown when they differ.
+        ancestry_line = sp.name_th
+        if b.get("narrative_ancestry"):
+            ancestry_line = f"{b['narrative_ancestry']} (กลไก: {sp.name_th})"
+        klass_line = cls.name_th
+        if data.get("_narrative_class"):
+            klass_line = f"{data['_narrative_class']} (กลไก: {cls.name_th})"
+        lines.append(f"เผ่า · คลาส · ภูมิหลัง: {ancestry_line} · {klass_line} · {bg.name_th}")
+
+        # 2) identity / appearance sections (only what the player supplied).
+        appearance = identity.get("appearance") or data.get("appearance")
+        if appearance:
+            lines.append(f"\n__รูปลักษณ์__\n{appearance}")
+        relationship_bits = [f"{lbl}: {identity[k]}" for k, lbl in
+                             (("family", "ครอบครัว"), ("mentors", "ผู้ชี้ทาง"),
+                              ("rivals", "คู่ปรับ"), ("connections", "คนสำคัญ"))
+                             if identity.get(k)]
+        if relationship_bits:
+            lines.append("\n__ความสัมพันธ์__\n" + " · ".join(relationship_bits))
+        drive_bits = [f"{lbl}: {identity[k]}" for k, lbl in
+                      (("goals", "เป้าหมาย"), ("fears", "ความกลัว"),
+                       ("ideals", "อุดมคติ"), ("bonds", "พันธะ"),
+                       ("flaws", "จุดอ่อน"), ("secrets", "ความลับ"))
+                      if identity.get(k)]
+        if drive_bits:
+            lines.append("\n__แรงขับ / ปม__\n" + " · ".join(drive_bits))
+
+        # 3) mechanics section.
+        mech = [f"\n__กลไก__", score_line,
+                f"ทักษะถนัด: {', '.join(self.reg.skills[s].name_th for s in skills)}"]
         if b.get("expertise"):
-            lines.append(f"เชี่ยวชาญพิเศษ: {', '.join(self.reg.skills[s].name_th for s in b['expertise'])}")
+            mech.append(f"เชี่ยวชาญพิเศษ: {', '.join(self.reg.skills[s].name_th for s in b['expertise'])}")
         if b.get("planned_subclass"):
-            sub = self.reg.get_subclass(b["planned_subclass"])
-            lines.append(f"Subclass แผนไว้: {sub.name_th}")
+            mech.append(f"Subclass แผนไว้: {self.reg.get_subclass(b['planned_subclass']).name_th}")
         if b.get("cantrips"):
-            lines.append(f"Cantrips: {', '.join(self.reg.get_spell(s).name_th_hint for s in b['cantrips'])}")
+            mech.append(f"Cantrips: {', '.join(self.reg.get_spell(s).name_th_hint for s in b['cantrips'])}")
         if b.get("book"):
-            lines.append(f"ตำราคาถา: {', '.join(self.reg.get_spell(s).name_th_hint for s in b['book'])}")
+            mech.append(f"ตำราคาถา: {', '.join(self.reg.get_spell(s).name_th_hint for s in b['book'])}")
         if b.get("prepared"):
-            lines.append(f"เตรียมไว้: {', '.join(self.reg.get_spell(s).name_th_hint for s in b['prepared'])}")
+            mech.append(f"เตรียมไว้: {', '.join(self.reg.get_spell(s).name_th_hint for s in b['prepared'])}")
+        lines.extend(mech)
+
+        # 4) reviewable story seeds — proposed, pending campaign validation.
+        from app.services.campaigns.identity import generate_seeds
+
+        seeds = generate_seeds(identity)
+        if seeds:
+            lines.append("\n__เมล็ดพันธุ์เรื่องราว (ข้อเสนอ — ยังไม่ผูกมัด)__")
+            lines.extend(f"• {s.text}" for s in seeds)
+
         return _card(channel_id, "ตรวจทานครั้งสุดท้าย", "\n".join(lines),
                      [CONFIRM_BUILD, RESTART_BUILD])
 

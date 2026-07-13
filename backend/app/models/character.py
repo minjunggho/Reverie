@@ -84,6 +84,17 @@ class Character(Base, TimestampMixin):
     hooks: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     appearance: Mapped[str] = mapped_column(Text, default="")
 
+    # The COMPLETE player-authored creation text, verbatim, never summarized away.
+    # Everything the player wrote during creation is preserved here so the DM can
+    # always return to the source, not just the extracted structure.
+    origin_text: Mapped[str] = mapped_column(Text, default="")
+    # Structured character identity extracted from origin_text: pronouns, ancestry,
+    # appearance breakdown, culture, family/mentors/rivals, goals/fears/ideals/bonds/
+    # flaws/secrets, narrative class/ancestry (which may exceed the mechanical
+    # chassis), and reviewable evolution `seeds`. The extraction NEVER replaces
+    # origin_text; both are kept. See app/services/campaigns/identity.py.
+    identity: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
     # Explicit alternate names for entity resolution (e.g. Thai transliteration
     # "อาเรีย" for "Aria"). The player's Discord display name is NOT an alias.
     aliases: Mapped[list[str]] = mapped_column(JSON, default=list)

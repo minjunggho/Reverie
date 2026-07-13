@@ -184,12 +184,77 @@ def _post_session(messages, _model) -> PostSessionReport:
     )
 
 
+# Explicit class/species keyword tables for the deterministic "rich concept" fake.
+_FAKE_CLASS_WORDS = {
+    "paladin": "paladin", "sorcerer": "sorcerer", "warlock": "warlock",
+    "barbarian": "barbarian", "druid": "druid", "monk": "monk",
+    "fighter": "fighter", "rogue": "rogue", "wizard": "wizard",
+    "cleric": "cleric", "ranger": "ranger", "bard": "bard",
+}
+_FAKE_SPECIES_WORDS = {
+    "catfolk": "Catfolk", "dragonborn": "Dragonborn", "elf": "elf",
+    "dwarf": "dwarf", "human": "human", "tiefling": "tiefling", "aasimar": "aasimar",
+}
+
+
+def _rich_concept_guidance(msg: str, known: str):
+    """If one message supplies an explicit class + ancestry (and some identity),
+    extract it all at once and go to reveal — proving the flow does not re-ask for
+    what was already given. Returns None to fall through to the 3-turn path."""
+    from app.services.campaigns.creation_flow import extract_name
+
+    low = (msg or "").lower()
+    stated_class = next((canon for kw, canon in _FAKE_CLASS_WORDS.items() if kw in low), None)
+    stated_species = next((canon for kw, canon in _FAKE_SPECIES_WORDS.items() if kw in low), None)
+    if stated_class is None or stated_species is None or "concept=" in known:
+        return None
+
+    fields = {"concept": msg.strip()}
+    # Extract a few structured aspects when their cue words appear.
+    for cue, key in (("temple", "religion"), ("วิหาร", "religion"), ("โบสถ์", "religion"),
+                     ("mentor", "mentors"), ("อาจารย์", "mentors"),
+                     ("rival", "rivals"), ("คู่ปรับ", "rivals"),
+                     ("family", "family"), ("ครอบครัว", "family"),
+                     ("wing", "distinctive_marks"), ("ปีก", "distinctive_marks")):
+        if cue in low:
+            fields[key] = msg.strip()
+    name = extract_name(msg) or _FIRST_CAP(msg) or "นักผจญภัย"
+    fields["name"] = name
+    fields.setdefault("origin", msg.strip())
+    fields.setdefault("desire", "ตามหาความหมายของคำสาบานที่ให้ไว้")
+    return CreationGuidance(
+        updated_fields=fields,
+        proposed_class=stated_class,
+        proposed_species=stated_species,
+        reaction="ภาพชัดมากตั้งแต่ประโยคแรก",
+        ready_to_reveal=True,
+        reveal_summary=f"{name} — {msg.strip()[:80]}",
+    )
+
+
+def _FIRST_CAP(text: str) -> str | None:
+    """First capitalized word (a rough English name grab for the fake)."""
+    import re as _re
+
+    m = _re.search(r"\b([A-Z][a-z]{2,})\b", text or "")
+    return m.group(1) if m else None
+
+
 def _creation_guide(messages, _model) -> CreationGuidance:
-    """Deterministic 3-turn creation conversation keyed off KNOWN fields."""
+    """Deterministic creation conversation.
+
+    Two modes: a RICH one-message concept (explicit class/species + several identity
+    aspects) is recognized immediately and goes straight to reveal; otherwise the
+    original 3-turn minimal-concept path runs. Keyed off KNOWN/MESSAGE markers."""
     from app.services.campaigns.creation_flow import extract_name
 
     known = _marker(messages, "KNOWN")
     msg = _marker(messages, "MESSAGE")
+
+    # --- rich one-message concept (adaptive: recognize what's supplied) ----------
+    rich = _rich_concept_guidance(msg, known)
+    if rich is not None:
+        return rich
 
     if "concept=" not in known:
         return CreationGuidance(

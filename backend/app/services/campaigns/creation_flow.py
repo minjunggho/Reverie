@@ -28,6 +28,13 @@ from app.schemas.llm_io import CreationGuidance
 from app.services.campaigns.campaign_service import CampaignService
 from app.services.campaigns.character_service import CharacterService
 from app.services.campaigns.draft_store import DraftConflict, close_draft, save_draft
+from app.services.campaigns.identity import (
+    IDENTITY_FIELDS,
+    is_custom_ancestry,
+    merge_identity,
+    normalize_species_intention,
+    resolve_class_intention,
+)
 from app.services.campaigns.inventory_service import InventoryService
 from app.services.campaigns.presets import CLASS_PRESETS, CLASS_TH, infer_class_from_concept
 from app.tabletop.rules import SUPPORTED_CLASSES
@@ -36,6 +43,8 @@ log = get_logger(__name__)
 
 MAX_STEPS = 6
 HOOK_KEYS = ("concept", "origin", "desire", "fear", "flaw", "connection", "appearance", "name")
+# Fields the conversation may fill: legacy hooks + the full structured identity.
+_KNOWN_FIELD_KEYS = frozenset(HOOK_KEYS) | frozenset(IDENTITY_FIELDS)
 CONFIRM_YES = "✅ ใช่ นี่แหละตัวข้า"
 CONFIRM_EDIT = "✏️ ขอปรับอีกนิด"
 _CANCEL_WORDS = ("ยกเลิก", "cancel", "เลิก")
@@ -250,17 +259,31 @@ class CreationFlowService:
             # Anything else = an adjustment in prose; fall through to the guide.
             data["_awaiting_confirm"] = False
 
+        # Preserve the COMPLETE player-authored text, verbatim — never discarded,
+        # even after we extract structure from it.
+        data["_origin_text"] = (f"{data.get('_origin_text', '')}\n{text}").strip()
+
         # Ask the guide to extract fields + pose the next question.
         guidance = await self._guide(draft, data, text)
+
+        # Fold extracted fields into BOTH the legacy hook keys (back-compat with the
+        # reveal card + older drafts) and the richer structured identity.
+        identity_updates: dict[str, str] = {}
         for key, value in (guidance.updated_fields or {}).items():
-            if key in HOOK_KEYS and isinstance(value, str) and value.strip():
-                data[key] = value.strip()
-        if guidance.proposed_class:
-            # Stage A never fixes the class — it becomes the Stage-B recommendation.
-            cls = guidance.proposed_class.strip().lower()
-            data["_class_hint"] = cls if cls in SUPPORTED_CLASSES else infer_class_from_concept(
-                data.get("concept", "") + " " + text
-            )
+            if key in _KNOWN_FIELD_KEYS and isinstance(value, str) and value.strip():
+                clean = value.strip()
+                if key in HOOK_KEYS:
+                    data[key] = clean
+                if key in IDENTITY_FIELDS:
+                    identity_updates[key] = clean
+        # Map the legacy hooks the player just gave into their identity homes too,
+        # so the structured record is complete even when the model only fills hooks.
+        for hook_key, id_key in (("appearance", "appearance"), ("name", "name")):
+            if data.get(hook_key):
+                identity_updates.setdefault(id_key, data[hook_key])
+        data["identity"] = merge_identity(data.get("identity") or {}, identity_updates)
+
+        self._absorb_intentions(data, guidance, text)
 
         step = draft.step + 1
         forced = step >= MAX_STEPS
@@ -271,16 +294,89 @@ class CreationFlowService:
             await self._save(draft, data)
             return self._reflection_card(channel_id, data)
 
-        question = guidance.next_question or "เล่าเพิ่มอีกนิดได้ไหม?"
+        # Adaptive: never re-ask something already supplied. If the model returned a
+        # question about a field we already have, fall back to the next real gap.
+        question = self._next_question(data, guidance)
         data["_last_prompt"] = question
         # Persist the exact adaptive prompt so a restart can reproduce this step.
         await self._save(draft, data)
-        return self._ask(channel_id, question)
+        return self._ask(channel_id, question, reaction=guidance.reaction)
+
+    def _absorb_intentions(self, data: dict, guidance, text: str) -> None:
+        """Turn a stated class/species into engine hints WITHOUT deciding for the
+        player. Explicit statements outrank recommendations; a stated ancestry is
+        never forced to Human; an unsupported class keeps its fiction."""
+        blob = " ".join(str(data.get(k, "")) for k in ("concept", "origin")) + " " + text
+        # --- class intention ---
+        stated_class = (guidance.proposed_class or "").strip()
+        resolution = resolve_class_intention(stated_class or blob)
+        if resolution.stated is not None:
+            data["identity"]["class_intention"] = resolution.stated
+            if resolution.is_unsupported:
+                # Preserve the fiction; propose the closest supported chassis. The
+                # player still explicitly chooses in Stage B.
+                data["_narrative_class"] = resolution.stated
+                data["_class_hint"] = resolution.chassis
+            else:
+                data.pop("_narrative_class", None)
+                data["_class_hint"] = resolution.supported
+        elif guidance.proposed_class:
+            # Model proposed something unrecognized — infer a supported chassis.
+            data["_class_hint"] = infer_class_from_concept(blob)
+        if guidance.proposed_subclass:
+            data["identity"]["subclass_intention"] = guidance.proposed_subclass.strip()
+
+        # --- ancestry / species intention (never defaults to Human) ---
+        stated_species = (guidance.proposed_species or "").strip()
+        if stated_species:
+            data["identity"]["ancestry"] = stated_species
+            bundled = normalize_species_intention(stated_species)
+            if bundled is not None:
+                data["_species_hint"] = bundled
+                data.pop("_custom_ancestry", None)
+            elif is_custom_ancestry(stated_species):
+                # Custom ancestry: narrative kept here; the MECHANICAL base package
+                # is chosen + owner-approved in Stage B (no auto powers).
+                data["_custom_ancestry"] = stated_species
+
+    @staticmethod
+    def _next_question(data: dict, guidance) -> str:
+        """The next USEFUL question — skip anything already answered. Falls back
+        through a natural order of still-missing identity aspects."""
+        identity = data.get("identity") or {}
+
+        def known(*keys: str) -> bool:
+            return any((data.get(k) or identity.get(k)) for k in keys)
+
+        proposed = (guidance.next_question or "").strip()
+        # Adaptive gaps in a warm, natural order.
+        gaps = [
+            (("origin", "homeland", "culture"),
+             "เล่าถึงที่มาของเขาหน่อย — โตที่ไหน ในโลกแบบไหน?"),
+            (("desire", "goals", "reason_for_adventuring", "short_term_goal"),
+             "อะไรผลักให้เขาออกเดินทางตอนนี้ — เขาต้องการอะไรที่สุด?"),
+            (("fear", "fears"), "แล้วอะไรที่เขากลัวจริงๆ ลึกในใจ?"),
+            (("flaw", "flaws", "bonds"),
+             "จุดอ่อนหรือความขัดแย้งในใจของเขาคืออะไร?"),
+            (("name",), "สุดท้าย — เขาชื่ออะไร?"),
+        ]
+        # If the model asked about a still-missing field, honor it.
+        if proposed and not _question_targets_known(proposed, data, identity):
+            return proposed
+        for keys, q in gaps:
+            if not known(*keys):
+                return q
+        return proposed or "อยากเพิ่มเติมอะไรเกี่ยวกับตัวเขาอีกไหม?"
 
     # --- internals ---------------------------------------------------------------
     async def _guide(self, draft: CharacterDraft, data: dict, text: str) -> CreationGuidance:
-        known = "; ".join(f"{k}={v}" for k, v in data.items()
-                          if k in HOOK_KEYS or k == "class") or "-"
+        # Give the model EVERYTHING already known (hooks + structured identity +
+        # class/ancestry intent) so it never asks for what the player already said.
+        known_parts = [f"{k}={v}" for k, v in data.items() if k in HOOK_KEYS and v]
+        for k, v in (data.get("identity") or {}).items():
+            if v:
+                known_parts.append(f"{k}={v}")
+        known = "; ".join(known_parts) or "-"
         messages: list[LLMMessage] = [
             {"role": "system", "content": CREATION_GUIDE_SYSTEM},
             {"role": "user", "content": f"DRAFT_STEP: {draft.step + 1}\nKNOWN: {known}\nMESSAGE: {text}"},
@@ -309,9 +405,13 @@ class CreationFlowService:
         # Compare-and-update on draft.version — never a blind overwrite.
         await save_draft(self.db, draft, data, step_inc=step_inc)
 
-    def _ask(self, channel_id: str, question: str) -> BridgeResult:
+    def _ask(self, channel_id: str, question: str, *, reaction: str = "") -> BridgeResult:
+        # A short, specific reaction before the question makes creation feel like a
+        # conversation, not a form — but never at the cost of clarity.
+        body = f"{reaction.strip()}\n\n{question}".strip() if reaction.strip() else question
         return BridgeResult(handled=True, responses=[OutboundMessage(
-            channel_id, question, kind=MessageKind.CHARACTER_CREATION, title="สร้างตัวละคร",
+            channel_id, body, kind=MessageKind.CHARACTER_CREATION, title="สร้างตัวละคร",
+            data={"footer": "พิมพ์ 'ยกเลิก' ได้ทุกเมื่อ · อยากแก้อะไรก่อนหน้า บอกได้เลย"},
         )])
 
     _REFLECT_LABEL = {
@@ -321,18 +421,43 @@ class CreationFlowService:
     }
 
     def _reflection_card(self, channel_id: str, data: dict) -> BridgeResult:
-        """Mirror back what the DM heard — facts only, no mechanics, no class."""
+        """Mirror back what the DM heard — facts the player gave, in their own
+        words. No mechanics yet; the fiction comes first. A stated class/ancestry
+        is echoed as INTENTION (honored in the rules step), never silently fixed."""
+        identity = data.get("identity") or {}
         lines = []
         if data.get("concept"):
-            lines.append(f"*{data['concept']}*")
+            lines.append(f"*{data['concept']}*\n")
         for key, label in self._REFLECT_LABEL.items():
             if label and data.get(key):
                 lines.append(f"• {label}: {data[key]}")
+        # Richer identity aspects the conversation may have captured.
+        extra = [
+            ("ancestry", "เผ่าพันธุ์ (ในเรื่อง)"), ("homeland", "บ้านเกิด"),
+            ("culture", "วัฒนธรรม"), ("religion", "ความเชื่อ"),
+            ("family", "ครอบครัว"), ("mentors", "ผู้ชี้ทาง"), ("rivals", "คู่ปรับ"),
+            ("ideals", "อุดมคติ"), ("bonds", "พันธะ"), ("secrets", "ความลับ"),
+        ]
+        for key, label in extra:
+            if identity.get(key) and key not in self._REFLECT_LABEL:
+                lines.append(f"• {label}: {identity[key]}")
+        # Honor a stated class/ancestry as intention, transparently.
+        if data.get("_narrative_class"):
+            supported = CLASS_TH.get(data.get("_class_hint", ""), data.get("_class_hint", ""))
+            lines.append(
+                f"\n-# เจ้าอยากเล่นเป็น **{data['_narrative_class']}** — ในเนื้อเรื่องได้เต็มที่ "
+                f"ส่วนกลไกตอนนี้ข้าจะเสนอ **{supported}** ที่ใกล้ที่สุด (เจ้าเลือกเองในขั้นถัดไป)")
+        elif data.get("_custom_ancestry"):
+            lines.append(
+                f"\n-# **{data['_custom_ancestry']}** เป็นเผ่าที่ไม่มีในชุดสำเร็จ — รูปลักษณ์เก็บไว้ครบ "
+                "ส่วน 'ชุดกลไก' จะให้เจ้ากับเจ้าของโต๊ะเลือกและอนุมัติในขั้นถัดไป")
+
         return BridgeResult(handled=True, responses=[OutboundMessage(
             channel_id, "\n".join(lines),
             kind=MessageKind.CHARACTER_CREATION,
             title=f"สิ่งที่ข้าได้ยินจากเรื่องของ {data.get('name', 'เจ้า')}",
-            data={"footer": "ถ้าถูกต้อง เดี๋ยวไปต่อส่วนกฎเกม — เจ้าเป็นคนเลือกทุกอย่างเอง"},
+            data={"footer": "ถูกไหม? ถ้าใช่ ไปต่อส่วนกฎเกม — เจ้าเป็นคนเลือกทุกอย่างเอง · "
+                            "อยากปรับตรงไหนกดแก้ได้"},
             choices=[CONFIRM_YES, CONFIRM_EDIT],
         )])
 
@@ -345,6 +470,26 @@ class CreationFlowService:
 
 
 _NAME_RE = re.compile(r"ชื่อ(?:ว่า)?\s*[:：]?\s*(\S+)")
+
+# Keyword families a proposed question might be probing — used to avoid re-asking.
+_QUESTION_FIELD_HINTS: dict[str, tuple[str, ...]] = {
+    "origin": ("โตที่ไหน", "ที่มา", "มาจากไหน", "โตมา"),
+    "desire": ("ต้องการอะไร", "อยากได้", "เป้าหมาย", "ผลักให้"),
+    "fear": ("กลัว",),
+    "flaw": ("จุดอ่อน", "ข้อเสีย", "ความขัดแย้ง"),
+    "name": ("ชื่ออะไร", "ชื่อว่า"),
+    "appearance": ("หน้าตา", "รูปร่าง", "แต่งตัว"),
+}
+
+
+def _question_targets_known(question: str, data: dict, identity: dict) -> bool:
+    """True if a proposed follow-up asks about a field the player already gave —
+    so the flow can skip it instead of repeating a question."""
+    q = question or ""
+    for field, phrases in _QUESTION_FIELD_HINTS.items():
+        if any(p in q for p in phrases) and (data.get(field) or identity.get(field)):
+            return True
+    return False
 
 
 def extract_name(text: str) -> str | None:

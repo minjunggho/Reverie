@@ -156,14 +156,24 @@ class PostSessionReport(BaseModel):
 
 # --- Guided character creation -------------------------------------------------
 class CreationGuidance(BaseModel):
-    """One turn of the guided creation conversation. The AI extracts hook fields
-    from what the player just said and asks AT MOST one focused next question.
-    The engine owns mechanics: `proposed_class` is validated against the supported
-    subset and mapped to a preset — the AI never emits stats."""
+    """One turn of the guided creation conversation. The AI extracts identity fields
+    from what the player just said and asks AT MOST one focused next question — and
+    only about something NOT already supplied. The engine owns mechanics: proposed
+    class/species are validated and the AI never emits stats.
+
+    Backward compatible: `updated_fields` still accepts the legacy hook keys
+    (concept/origin/desire/fear/flaw/connection/appearance/name); it now ALSO
+    accepts the richer identity fields (pronouns, ancestry, age, eyes, hair, culture,
+    homeland, family, mentors, rivals, goals, ideals, bonds, secrets, boundaries, …
+    — see app/services/campaigns/identity.IDENTITY_FIELDS)."""
     updated_fields: dict[str, str] = Field(default_factory=dict)
-    # keys allowed: concept, origin, desire, fear, flaw, connection, appearance, name
-    proposed_class: Optional[str] = None
-    next_question: Optional[str] = None      # Thai, ONE question, or None
+    proposed_class: Optional[str] = None     # canonical class the player implied/stated
+    proposed_species: Optional[str] = None   # stated ancestry (may be custom/unbundled)
+    proposed_subclass: Optional[str] = None
+    # A short, warm, SPECIFIC reaction to what the player just shared (Thai). Not a
+    # question — the human touch that makes creation feel like a conversation.
+    reaction: str = ""
+    next_question: Optional[str] = None      # Thai, ONE question about something MISSING, or None
     ready_to_reveal: bool = False
     reveal_summary: str = ""                 # Thai identity paragraph for the reveal
 
