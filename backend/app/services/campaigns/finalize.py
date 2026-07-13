@@ -56,7 +56,8 @@ async def finalize_character(db, *, draft: CharacterDraft, data: dict,
             species=sp.name, char_class=cls.name,
             abilities=scores, proficiencies=[], set_active=True,
             max_hp=max_hp_level_1(cls.name, scores["con"], sp.name),
-            ac=armor_class(cls.name, scores["dex"]),
+            ac=armor_class(cls.name, scores["dex"],
+                           con_score=scores["con"], wis_score=scores["wis"]),
         )
         char.background = bg.name
         # A subclass chosen in Stage B is a NARRATIVE plan by default; it only

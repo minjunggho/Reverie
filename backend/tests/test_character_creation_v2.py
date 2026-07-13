@@ -54,15 +54,15 @@ async def _draft_for(db, member_id):
 # --- identity module (pure logic) ----------------------------------------------
 
 def test_unsupported_class_keeps_fiction_and_proposes_chassis():
-    for stated, chassis in (("paladin", "fighter"), ("druid", "cleric"),
-                            ("barbarian", "fighter"), ("monk", "fighter")):
+    # Only Paladin + Druid remain locked; a stated one keeps its fiction + chassis.
+    for stated, chassis in (("paladin", "fighter"), ("druid", "cleric")):
         r = idmod.resolve_class_intention(f"I am a {stated} of legend")
         assert r.stated == stated and r.is_unsupported and r.chassis == chassis
         assert r.recommended == chassis
     supported = idmod.resolve_class_intention("a cunning rogue")
     assert supported.is_supported and supported.recommended == "rogue"
-    # Sorcerer + Warlock were unlocked — a stated one now maps to ITSELF, no chassis.
-    for now_supported in ("sorcerer", "warlock"):
+    # Classes unlocked over the phases now map to THEMSELVES, no chassis.
+    for now_supported in ("sorcerer", "warlock", "barbarian", "monk"):
         r = idmod.resolve_class_intention(f"I am a {now_supported}")
         assert r.is_supported and r.recommended == now_supported
 

@@ -43,6 +43,7 @@ SUPPORTED_SKILLS = frozenset(SKILL_TO_ABILITY)
 
 SUPPORTED_CLASSES = frozenset({
     "fighter", "rogue", "wizard", "cleric", "ranger", "bard", "sorcerer", "warlock",
+    "barbarian", "monk",
 })
 SUPPORTED_ANCESTRIES = frozenset(
     {"human", "elf", "dwarf", "halfling", "half-orc", "tiefling", "gnome"}

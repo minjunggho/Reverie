@@ -310,7 +310,7 @@ def test_unsupported_classes_stay_locked_until_proven():
     assert set(reg.selectable_classes) == set(SUPPORTED_CLASSES)
     # Still locked (their class-specific mechanics/tests aren't done); sorcerer and
     # warlock were unlocked in Part 3 after their end-to-end path passed.
-    for locked in ("barbarian", "paladin", "druid", "monk"):
+    for locked in ("paladin", "druid"):
         assert locked in reg.classes                          # represented in the framework
         assert locked not in reg.selectable_classes           # but NOT selectable
         assert reg.get_class(locked).support_status != "FULLY_SUPPORTED"
@@ -320,4 +320,4 @@ def test_creation_rejects_a_locked_class():
     from app.tabletop.rules.core import validate_class
 
     with pytest.raises(RulesViolation):
-        validate_class("barbarian")
+        validate_class("paladin")

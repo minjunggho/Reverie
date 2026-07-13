@@ -120,6 +120,11 @@ class ActionInterpretation(BaseModel):
     spell_reference: str = ""
     slot_level: int | None = None
     metamagic: str = ""
+    # Activating a CLASS FEATURE ("ใช้ Second Wind", "เข้าโหมดเกรี้ยวกราด"). The engine
+    # resolves the feature against the character's granted features + spends its
+    # resource; the LLM only names the feature. `feature_reference` is that name.
+    activate_intent: bool = False
+    feature_reference: str = ""
     # Natural following (reuses the consent/follow system): "ฉันตาม Kael ไป" sets
     # follow_intent + follow_reference; "ฉันหยุดตาม"/"ฉันอยู่ที่นี่" sets stop_following.
     # The engine resolves the leader + enforces co-location consent; the LLM only

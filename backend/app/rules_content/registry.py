@@ -184,7 +184,9 @@ class SpellcastingDef(BaseModel):
 
 
 class BaseAC(BaseModel):
-    kind: Literal["unarmored", "flat", "light", "medium"]
+    # unarmored_con = Barbarian Unarmored Defense (10 + DEX + CON);
+    # unarmored_wis = Monk Unarmored Defense (10 + DEX + WIS).
+    kind: Literal["unarmored", "flat", "light", "medium", "unarmored_con", "unarmored_wis"]
     value: int = 10          # flat AC, or armor base for light/medium
     dex_cap: int | None = None
     shield: bool = False

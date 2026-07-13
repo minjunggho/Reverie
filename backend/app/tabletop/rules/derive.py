@@ -91,12 +91,18 @@ def max_hp_level_1(char_class: str, con_score: int, species: str) -> int:
     return max(1, hp)
 
 
-def armor_class(char_class: str, dex_score: int) -> int:
-    """From the class's starting-equipment armor formula (SRD armor rules)."""
+def armor_class(char_class: str, dex_score: int, *, con_score: int = 10,
+                wis_score: int = 10) -> int:
+    """From the class's starting-equipment armor formula (SRD armor rules).
+    Barbarian/Monk Unarmored Defense add a second ability (CON / WIS)."""
     base = get_registry().get_class(char_class).base_ac
     dex = ability_modifier(dex_score)
     if base.kind == "unarmored":
         ac = 10 + dex
+    elif base.kind == "unarmored_con":              # Barbarian Unarmored Defense
+        ac = 10 + dex + ability_modifier(con_score)
+    elif base.kind == "unarmored_wis":              # Monk Unarmored Defense
+        ac = 10 + dex + ability_modifier(wis_score)
     elif base.kind == "flat":
         ac = base.value
     elif base.kind == "light":

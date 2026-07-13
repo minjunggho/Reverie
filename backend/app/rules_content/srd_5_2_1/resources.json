@@ -153,5 +153,20 @@
         "5": 5
       }
     }
+  },
+  {
+    "definition_id": "resource:indomitable",
+    "ruleset_id": "srd521",
+    "name": "indomitable",
+    "name_th": "ไม่ยอมแพ้ (Indomitable)",
+    "recharge": "long_rest",
+    "max_formula": {
+      "kind": "by_class_level",
+      "table": {
+        "9": 1,
+        "13": 2,
+        "17": 3
+      }
+    }
   }
 ]

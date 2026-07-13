@@ -134,8 +134,23 @@ finalize with the correct spells + the class-declared slot pool, then a real cas
 through the committed pipeline committing damage to a combatant). Selectable classes
 are now: fighter, rogue, wizard, cleric, ranger, bard, **sorcerer, warlock**.
 
+**Martial classes fully built + unlocked** (`tests/test_martial_classes.py`, 15):
+Fighter (Second Wind heal + Action Surge through the feature-activation pipeline,
+Extra Attack L5, Indomitable L9), Rogue (Sneak Attack with *validated eligibility*
+— finesse/ranged + advantage-or-ally + not disadvantage, never vibes; Cunning
+Action L2, Uncanny Dodge L5, Evasion L7), Barbarian (Rage as a non-concentration
+ActiveEffect with physical resistance + a level-scaled damage bonus applied in
+combat, Reckless Attack, Danger Sense, Extra Attack L5, Unarmored Defense = CON),
+Monk (Martial Arts die, Ki/Focus abilities spending Focus with short-rest recovery,
+Unarmored Defense = WIS, Stunning Strike L5). New primitive:
+`_handle_activate` + `ClassFeatureService` (app/tabletop/classes/features.py) —
+"ใช้ <feature>" spends the feature's resource via ResourceEngine and applies its
+committed effect; combat-integrated pieces (Rage, Sneak Attack, Extra Attack) live
+in `martial_combat.py`. Barbarian/Monk unlocked (10 selectable) only after the
+end-to-end gate passed.
+
 **Still locked** (represented in the framework, not yet playable — their
-class-specific execution + tests are incomplete): barbarian, monk, paladin, druid.
+class-specific execution + tests are incomplete): paladin, druid.
 Unlock criterion unchanged: `FULLY_SUPPORTED` + selectable **only when the full
 end-to-end acceptance path passes** — never by editing the selectable list alone
 (startup validation forbids it).

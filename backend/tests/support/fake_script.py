@@ -78,6 +78,29 @@ def _grab_target(clause: str, verbs) -> str:
     return rest.strip().split()[0].strip("“”\"") if rest.strip() else ""
 
 
+# Feature phrases → canonical feature key for the FAKE interpreter.
+_FEATURE_PHRASES = {
+    "second_wind": ("second wind", "ลมหายใจที่สอง"),
+    "action_surge": ("action surge", "ระเบิดพลัง"),
+    "rage": ("เกรี้ยวกราด", "rage", "โหมดเดือด", "คลั่ง"),
+    "reckless_attack": ("บ้าระห่ำ", "reckless"),
+    "flurry_of_blows": ("หมัดรัว", "flurry"),
+    "patient_defense": ("ตั้งรับ", "patient defense"),
+    "step_of_the_wind": ("ย่างลม", "step of the wind"),
+}
+
+
+def _feature_reference(text: str):
+    low = text.lower()
+    if not (text.startswith("ใช้") or "โหมด" in text or "เข้าสู่" in text
+            or any(p in low for fam in _FEATURE_PHRASES.values() for p in fam)):
+        return None
+    for key, phrases in _FEATURE_PHRASES.items():
+        if any(p in low for p in phrases):
+            return key
+    return None
+
+
 def _compound_steps(text: str):
     import re as _re
 
@@ -129,6 +152,13 @@ def _interpret(messages, _model) -> ActionInterpretation:
             or "stay here" in low or "stop following" in low:
         return ActionInterpretation(goal="หยุดตาม", method="อยู่กับที่",
                                     intent_confidence=0.9, stop_following=True)
+
+    # Class-feature activation: "ใช้ <feature>" / "เข้าโหมดเกรี้ยวกราด" / feature name.
+    feat = _feature_reference(text)
+    if feat is not None:
+        return ActionInterpretation(
+            goal=f"ใช้ {feat}", method="ใช้ความสามารถ", intent_confidence=0.9,
+            activate_intent=True, feature_reference=feat)
 
     # Ordered compound action: split on Thai/English connectives into steps.
     compound = _compound_steps(text)

@@ -10,7 +10,9 @@
     "ranger",
     "bard",
     "sorcerer",
-    "warlock"
+    "warlock",
+    "barbarian",
+    "monk"
   ],
   "rules_edition": "D&D 2024 (SRD 5.2.1)"
 }

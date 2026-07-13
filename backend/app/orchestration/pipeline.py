@@ -174,6 +174,12 @@ class CommittedActionPipeline:
                 ctx, action_text=action_text, interpretation=interpretation,
                 resolved_targets=resolution.resolved)
 
+        # Class-feature activation ("ใช้ Second Wind", "เข้าโหมดเกรี้ยวกราด") — the
+        # engine resolves the feature against the character's granted features and
+        # spends its resource via ResourceEngine; numbers come from the dice engine.
+        if interpretation.activate_intent and ctx.character_id and ctx.session_id:
+            return await self._handle_activate(ctx, interpretation=interpretation)
+
         async with self.db.session() as read:
             scene = await SceneService(read).get_active_scene(ctx.session_id) if ctx.session_id else None
             character = await read.get(Character, ctx.character_id) if ctx.character_id else None
@@ -524,6 +530,64 @@ class CommittedActionPipeline:
             state_mutated=executed > 0, responses=responses,
             note=f"ordered plan: {executed}/{len(plan.executable_steps)} steps"
                  + (f", halted at {halted_at}" if halted_at else ""))
+
+    # --- class-feature activation: engine-resolved, shared systems -------------
+    async def _handle_activate(self, ctx: ResolvedContext, *, interpretation) -> BridgeResult:
+        """Activate a class feature the character HAS. The feature name resolves
+        against the granted features by an exact/normalized match; its resource is
+        spent atomically; its committed effect (heal / stance / extra action) is
+        applied with the shared systems. Invalid or exhausted → nothing spent, a
+        Thai diagnostic."""
+        from app.entities.directory import normalize_name
+        from app.tabletop.classes.features import ClassFeatureService
+
+        reference = (interpretation.feature_reference or "").strip()
+        async with self.db.session() as read:
+            character = await read.get(Character, ctx.character_id)
+            svc = ClassFeatureService(read, self.dice)
+            available = await svc.granted_feature_keys(character.id)
+        # Resolve the reference to a granted feature key (exact key, or normalized
+        # display-name match) — never activate a feature the character lacks.
+        key = reference.lower().replace(" ", "_")
+        if key not in available:
+            norm = normalize_name(reference)
+            key = next((k for k in available
+                        if norm in normalize_name(k.replace("_", " "))
+                        or norm in normalize_name(self.reg_feature_name(character.char_class, k))),
+                       None) if reference else None
+        if key is None or key not in available:
+            return self._table_note(
+                ctx, f"{character.name} ไม่มีความสามารถ “{reference}” ที่ใช้ได้ตอนนี้")
+        try:
+            async with self.db.unit_of_work() as s:
+                char = await s.get(Character, ctx.character_id)
+                outcome = await ClassFeatureService(s, self.dice).activate(char, key)
+                pm = await s.get(ProcessedMessage, ctx.processed_message_id) if ctx.processed_message_id else None
+                if pm is not None:
+                    pm.stage = ProcessingStage.SENT.value
+                    pm.category = MessageCategory.COMMITTED_ACTION.value
+                    pm.result = {"response": outcome.line_th, "feature": key}
+                session_row = await s.get(Session, ctx.session_id) if ctx.session_id else None
+                if session_row is not None:
+                    session_row.active_play_state = ActivePlayState.TABLE_OPEN.value
+                    session_row.version += 1
+        except (RulesViolation, ValidationError) as exc:
+            return self._table_note(ctx, f"ใช้ความสามารถนั้นไม่ได้: {exc}")
+        return BridgeResult(
+            handled=True, category=MessageCategory.COMMITTED_ACTION, state_mutated=True,
+            responses=[OutboundMessage(
+                ctx.channel_id, outcome.line_th, kind=MessageKind.CHECK_RESOLUTION,
+                title=outcome.name_th,
+                data={"roll_line": outcome.line_th, "decision_prompt": "จะทำอะไรต่อ?",
+                      "outcome": "success"})],
+            note=f"activate {key}")
+
+    def reg_feature_name(self, char_class: str, key: str) -> str:
+        from app.rules_content import get_registry
+
+        cls = get_registry().get_class(char_class)
+        f = next((x for x in cls.features if x.key == key), None)
+        return f.name_th if f else key
 
     # --- natural following: reuse the consent/follow system --------------------
     async def _handle_follow(self, ctx: ResolvedContext, interpretation) -> BridgeResult:

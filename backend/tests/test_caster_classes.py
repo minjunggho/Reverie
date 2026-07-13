@@ -299,7 +299,7 @@ def test_sorcerer_and_warlock_unlocked_after_end_to_end_gate():
         assert unlocked in reg.selectable_classes and unlocked in SUPPORTED_CLASSES
         assert reg.get_class(unlocked).support_status == "FULLY_SUPPORTED"
         assert validate_class(unlocked) == unlocked
-    for locked in ("barbarian", "monk", "paladin", "druid"):
+    for locked in ("paladin", "druid"):
         assert locked not in reg.selectable_classes
         with pytest.raises(RulesViolation):
             validate_class(locked)

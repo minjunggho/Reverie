@@ -3,7 +3,7 @@
     "definition_id": "class:barbarian",
     "definition_version": 1,
     "name": "barbarian",
-    "support_status": "UNSUPPORTED",
+    "support_status": "FULLY_SUPPORTED",
     "name_th": "บาร์บาเรียน",
     "pitch_th": "ผู้ทนทานและโหดเหี้ยมในสนามรบ — พลังคลั่งกัดกร่อนทุกขีดจำกัด",
     "hit_die": 12,
@@ -25,9 +25,8 @@
     "armor_training_th": "เกราะเบา เกราะกลาง และโล่",
     "weapon_training_th": "อาวุธพื้นฐานและอาวุธสงคราม",
     "base_ac": {
-      "kind": "medium",
-      "value": 12,
-      "dex_cap": 2
+      "kind": "unarmored_con",
+      "value": 10
     },
     "primary_abilities": [
       "str",
@@ -51,6 +50,30 @@
         "level": 1,
         "activation": "passive",
         "execution": "narrative"
+      },
+      {
+        "key": "reckless_attack",
+        "name_th": "บ้าระห่ำ (Reckless Attack)",
+        "summary_th": "โจมตีด้วยความได้เปรียบ แต่ศัตรูก็ได้เปรียบใส่เจ้า",
+        "level": 2,
+        "activation": "free",
+        "execution": "supported"
+      },
+      {
+        "key": "danger_sense",
+        "name_th": "สังหรณ์ภัย (Danger Sense)",
+        "summary_th": "ได้เปรียบในการเซฟ DEX ที่มองเห็น",
+        "level": 2,
+        "activation": "passive",
+        "execution": "supported"
+      },
+      {
+        "key": "extra_attack",
+        "name_th": "โจมตีเพิ่ม (Extra Attack)",
+        "summary_th": "โจมตีสองครั้งเมื่อใช้แอ็กชันโจมตี",
+        "level": 5,
+        "activation": "passive",
+        "execution": "supported"
       }
     ],
     "spellcasting": null,
@@ -364,6 +387,24 @@
         "execution": "supported",
         "resource_id": "resource:action_surge",
         "recovery": "short_rest"
+      },
+      {
+        "key": "extra_attack",
+        "name_th": "โจมตีเพิ่ม (Extra Attack)",
+        "summary_th": "โจมตีสองครั้งเมื่อใช้แอ็กชันโจมตี",
+        "level": 5,
+        "activation": "passive",
+        "execution": "supported"
+      },
+      {
+        "key": "indomitable",
+        "name_th": "ไม่ยอมแพ้ (Indomitable)",
+        "summary_th": "ทอยเซฟใหม่ที่ล้มเหลวได้ ฟื้นเมื่อพักยาว",
+        "level": 9,
+        "activation": "free",
+        "execution": "supported",
+        "resource_id": "resource:indomitable",
+        "recovery": "long_rest"
       }
     ],
     "spellcasting": null,
@@ -387,7 +428,7 @@
     "definition_id": "class:monk",
     "definition_version": 1,
     "name": "monk",
-    "support_status": "UNSUPPORTED",
+    "support_status": "FULLY_SUPPORTED",
     "name_th": "นักพรต",
     "pitch_th": "ผู้ใช้ร่างกายและใจเป็นอาวุธ — ความสงบกลายเป็นพลัง",
     "hit_die": 8,
@@ -409,7 +450,7 @@
     "armor_training_th": "เกราะไม่มี",
     "weapon_training_th": "อาวุธพื้นฐานและอาวุธพก",
     "base_ac": {
-      "kind": "unarmored",
+      "kind": "unarmored_wis",
       "value": 10
     },
     "primary_abilities": [
@@ -431,6 +472,58 @@
         "name_th": "พลังจิต",
         "summary_th": "ใช้พลังจิตสะท้อนความสงบ",
         "level": 2,
+        "activation": "free",
+        "execution": "supported",
+        "resource_id": "resource:focus"
+      },
+      {
+        "key": "flurry_of_blows",
+        "name_th": "หมัดรัว (Flurry of Blows)",
+        "summary_th": "จ่าย 1 Focus โจมตีมือเปล่าเพิ่มสองครั้ง",
+        "level": 2,
+        "activation": "bonus_action",
+        "execution": "supported",
+        "resource_id": "resource:focus"
+      },
+      {
+        "key": "patient_defense",
+        "name_th": "ตั้งรับ (Patient Defense)",
+        "summary_th": "จ่าย 1 Focus เพื่อ Disengage+Dodge",
+        "level": 2,
+        "activation": "bonus_action",
+        "execution": "supported",
+        "resource_id": "resource:focus"
+      },
+      {
+        "key": "step_of_the_wind",
+        "name_th": "ย่างลม (Step of the Wind)",
+        "summary_th": "จ่าย 1 Focus เพื่อ Dash+Disengage",
+        "level": 2,
+        "activation": "bonus_action",
+        "execution": "supported",
+        "resource_id": "resource:focus"
+      },
+      {
+        "key": "unarmored_movement",
+        "name_th": "เคลื่อนไหวไร้เกราะ (Unarmored Movement)",
+        "summary_th": "ความเร็ว +10 ฟุตเมื่อไม่สวมเกราะ",
+        "level": 2,
+        "activation": "passive",
+        "execution": "supported"
+      },
+      {
+        "key": "deflect_attacks",
+        "name_th": "ปัดป้อง (Deflect Attacks)",
+        "summary_th": "ใช้รีแอ็กชันลดดาเมจการโจมตี",
+        "level": 2,
+        "activation": "reaction",
+        "execution": "supported"
+      },
+      {
+        "key": "stunning_strike",
+        "name_th": "หมัดสะกด (Stunning Strike)",
+        "summary_th": "จ่าย 1 Focus เมื่อโดน บังคับเซฟ CON ไม่งั้นถูกสตัน",
+        "level": 5,
         "activation": "free",
         "execution": "supported",
         "resource_id": "resource:focus"
@@ -675,6 +768,30 @@
         "level": 1,
         "activation": "passive",
         "execution": "narrative"
+      },
+      {
+        "key": "cunning_action",
+        "name_th": "ไหวพริบ (Cunning Action)",
+        "summary_th": "ใช้โบนัสแอ็กชัน Dash/Disengage/Hide",
+        "level": 2,
+        "activation": "bonus_action",
+        "execution": "supported"
+      },
+      {
+        "key": "uncanny_dodge",
+        "name_th": "หลบสัญชาตญาณ (Uncanny Dodge)",
+        "summary_th": "ใช้รีแอ็กชันลดดาเมจการโจมตีที่เห็นครึ่งหนึ่ง",
+        "level": 5,
+        "activation": "reaction",
+        "execution": "supported"
+      },
+      {
+        "key": "evasion",
+        "name_th": "หลบหลีก (Evasion)",
+        "summary_th": "เซฟ DEX สำเร็จ = ไม่โดนเลย, ล้มเหลว = ครึ่งเดียว",
+        "level": 7,
+        "activation": "passive",
+        "execution": "supported"
       }
     ],
     "spellcasting": null,

@@ -58,15 +58,13 @@ BUNDLED_SPECIES: frozenset[str] = frozenset({
 # and Warlock were unlocked once their end-to-end path passed, so they are no longer
 # here; `resolve_class_intention` keys off the live SUPPORTED_CLASSES regardless.)
 UNSUPPORTED_CLASSES: frozenset[str] = frozenset({
-    "paladin", "barbarian", "druid", "monk", "artificer",
+    "paladin", "druid", "artificer",
 })
 
 # Closest supported mechanical chassis for an unsupported stated class. Transparent,
 # engine-side; the player still chooses in Stage B (this only orders the pitch).
 CHASSIS_FOR_UNSUPPORTED: dict[str, str] = {
     "paladin": "fighter",     # armored oathbound warrior
-    "barbarian": "fighter",   # martial powerhouse
-    "monk": "fighter",        # martial (unarmed flavor narrative-only for now)
     "artificer": "wizard",    # arcane caster
     "druid": "cleric",        # nature/divine caster
 }

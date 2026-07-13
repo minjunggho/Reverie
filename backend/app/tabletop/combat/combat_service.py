@@ -176,6 +176,11 @@ class CombatService:
         if roll.outcome == "success":
             damage, _ = self.dice.resolve_damage(dice=[attacker.damage_die],
                                                  flat_modifier=attacker.damage_bonus)
+            # Class features that modify committed damage (engine-owned, not the LLM):
+            # a raging attacker hits harder with a melee weapon; a raging target
+            # resists physical damage.
+            damage += await self._rage_attack_bonus(attacker)
+            damage = await self._apply_target_rage_resistance(target, damage)
             target.hp = max(0, target.hp - damage)
             await self.events.record(
                 campaign_id=encounter.campaign_id, session_id=encounter.session_id,
@@ -195,6 +200,30 @@ class CombatService:
             hit=roll.outcome == "success", damage=damage, hp_before=hp_before,
             hp_after=target.hp, target_down=target_down, interrupt=interrupt,
         )
+
+    async def _combatant_rage(self, combatant: Combatant) -> dict | None:
+        """The active Rage effect data for a character-backed combatant, or None."""
+        from app.core.ids import parse_entity_ref
+        from app.tabletop.classes.features import active_rage
+
+        kind, cid = parse_entity_ref(combatant.entity_ref)
+        if kind != "character" or not cid:
+            return None
+        effect = await active_rage(self.session, cid)
+        return effect.data if effect is not None else None
+
+    async def _rage_attack_bonus(self, attacker: Combatant) -> int:
+        from app.tabletop.classes.martial_combat import rage_attack_bonus
+
+        rage = await self._combatant_rage(attacker)
+        # Combatants model a melee STR attacker by default (the martial case).
+        return rage_attack_bonus(rage, "slashing", is_melee_strength=True)
+
+    async def _apply_target_rage_resistance(self, target: Combatant, damage: int) -> int:
+        from app.tabletop.classes.martial_combat import rage_damage_after_resistance
+
+        raging = await self._combatant_rage(target) is not None
+        return rage_damage_after_resistance(damage, "slashing", raging)
 
     async def end_turn(self, encounter: CombatEncounter) -> Combatant:
         n = len(encounter.initiative_order)
