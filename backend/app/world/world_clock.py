@@ -101,7 +101,7 @@ class WorldClockService:
             )
         ).scalars().all()
         for ev in due:
-            ev.resolved = True
+            ev.resolved = True  # exactly-once: a fired event is never selected again
             visibility = Visibility.PARTY if ev.perceivable else Visibility.DM_ONLY
             await self.events.record(
                 campaign_id=campaign_id, session_id=session_id,
@@ -114,3 +114,54 @@ class WorldClockService:
             if ev.perceivable:
                 note = (ev.payload or {}).get("summary", ev.kind)
                 result.perceivable_notes.append(note)
+            # A due delayed consequence performs its concrete world write now — exactly
+            # once, on this same authoritative time-advance path. Unknown kinds remain
+            # plain scheduled markers (back-compat).
+            await self._dispatch_consequence(campaign_id, ev, now, session_id)
+
+    async def _dispatch_consequence(self, campaign_id, ev, now, session_id) -> None:
+        """Turn a fired ScheduledWorldEvent into the real consequence it stands for.
+
+        Kept additive and gated on a known-kind set so an arbitrary scheduled event
+        (a storm, a spy report) still fires as a generic marker. All dispatches reuse
+        ConsequenceService — no parallel consequence engine lives here."""
+        payload = ev.payload or {}
+        kind = ev.kind
+        known = {"rumor_spread", "faction_action", "threat_action",
+                 "npc_availability", "guard_response"}
+        if kind not in known:
+            return
+        from app.world.consequence_service import ConsequenceService
+
+        cs = ConsequenceService(
+            self.session, campaign_id=campaign_id, session_id=session_id,
+            actor_entity="system",
+        )
+        if kind == "rumor_spread" and payload.get("rumor_id"):
+            await cs.widen_rumor(rumor_id=payload["rumor_id"])
+        elif kind == "faction_action" and payload.get("faction_id"):
+            await cs.advance_faction(
+                faction_id=payload["faction_id"],
+                progress_delta=int(payload.get("progress_delta", 0)),
+                disposition_delta=int(payload.get("disposition_delta", 0)),
+                next_in_minutes=payload.get("next_in_minutes"),
+                current_game_time=now, note=payload.get("note", ""),
+            )
+        elif kind == "threat_action" and payload.get("threat_id"):
+            await cs.update_threat(
+                threat_id=payload["threat_id"],
+                progress_delta=int(payload.get("progress_delta", 0)),
+                next_in_minutes=payload.get("next_in_minutes"),
+                current_game_time=now, note=payload.get("note", ""),
+            )
+        elif kind == "npc_availability" and payload.get("npc_id"):
+            await cs.set_npc_available(
+                npc_id=payload["npc_id"],
+                available=bool(payload.get("available", False)),
+                reason=payload.get("reason", ""),
+            )
+        elif kind == "guard_response" and payload.get("npc_id"):
+            await cs.move_npc(
+                npc_id=payload["npc_id"], to_location_id=payload.get("to_location_id"),
+                reason=payload.get("reason", "guard response"),
+            )

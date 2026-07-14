@@ -86,6 +86,10 @@ class Database:
         "character_drafts": [
             ("version", "INTEGER NOT NULL DEFAULT 0"),
         ],
+        "npcs": [
+            ("physical_state", "VARCHAR(40) NOT NULL DEFAULT 'healthy'"),
+            ("available", "BOOLEAN NOT NULL DEFAULT 1"),
+        ],
         "npc_relationships": [
             ("familiarity", "INTEGER NOT NULL DEFAULT 0"),
             ("affection", "INTEGER NOT NULL DEFAULT 0"),
