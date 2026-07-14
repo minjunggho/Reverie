@@ -25,7 +25,7 @@ from app.schemas.belief import (
     ReligiousRole,
 )
 from app.services.beliefs import BeliefService
-from app.services.campaigns.build_flow import BELIEF_FINISH, BELIEF_SKIP
+from app.services.campaigns.build_flow import BELIEF_CHOOSE, BELIEF_FINISH, BELIEF_SKIP
 from app.services.campaigns.canon_import import CanonImportService
 from app.services.faith import FaithService
 from app.services.views import build_belief_fields
@@ -211,7 +211,13 @@ async def test_creation_resolves_english_thai_and_resumes_belief_step(db, provid
         discord_message_id="faith-resume", guild_id="guild-1", channel_id="chan-1",
         author_discord_id="disc-p1", author_display_name="Nara", content="!rv resume",
     ))
-    assert "ความเชื่อ" in (resume.responses[0].title or "")
+    assert "ความเชื่อ" in (resume.responses[0].title or "")   # the STANCE card
+    # Believer stance -> explicit PRIMARY_DEITY, where an ENGLISH deity name resolves.
+    deity_card = await game.creation_flow.handle_message(
+        campaign_id=world.campaign_id, member_id=world.p1_member_id,
+        channel_id="chan-1", text=BELIEF_CHOOSE,
+    )
+    assert "เลือกเทพ" in (deity_card.responses[0].title or "")
     result = await game.creation_flow.handle_message(
         campaign_id=world.campaign_id, member_id=world.p1_member_id,
         channel_id="chan-1", text="Tyr",

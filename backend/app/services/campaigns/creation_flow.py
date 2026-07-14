@@ -153,9 +153,17 @@ class CreationFlowService:
 
         data = dict(draft.data or {})
         if data.get("_build"):
-            if not data["_build"].get("component_token"):
+            build = data["_build"]
+            dirty = False
+            if not build.get("component_token"):
                 # Older drafts predate component tokens — mint one (safe default).
-                data["_build"]["component_token"] = secrets.token_urlsafe(12)
+                build["component_token"] = secrets.token_urlsafe(12)
+                dirty = True
+            # Resume repairs a broken belief transition: a Believer left without a
+            # resolved Primary Deity is returned to PRIMARY_DEITY (prior writing kept).
+            if self.build.repair_belief_state(build):
+                dirty = True
+            if dirty:
                 try:
                     await self._save(draft, data, step_inc=0)
                 except DraftConflict:
