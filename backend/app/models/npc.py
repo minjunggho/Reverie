@@ -35,3 +35,11 @@ class NPC(Base, TimestampMixin):
     belief_profile: Mapped[dict[str, Any] | None] = mapped_column(
         JSON, nullable=True, default=None
     )
+    # Innate predispositions toward a group — distinct from EARNED per-character
+    # feeling in npc_relationships. Each entry: {kind, target, polarity, strength?,
+    # reason?} where kind ∈ ancestry|class|faction|culture|religion, polarity ∈
+    # negative|positive. Only expressed when the campaign's bias level allows it; not
+    # every NPC has any. A list, or None for the (common) unbiased NPC.
+    biases: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSON, nullable=True, default=None
+    )

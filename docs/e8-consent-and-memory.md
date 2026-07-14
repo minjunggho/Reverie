@@ -82,6 +82,52 @@ prompt** (fresh DB session = restart); uninvolved NPC has empty recall; through 
 real `NPCSocialService`, help records a memory about the exact helper and raises
 obligation/trust.
 
+## Decision before dialogue (NPC intelligence)
+
+On top of that substrate, the engine now makes a **private structured decision BEFORE
+any dialogue** (`app/npcs/decision_service.py`), so the model renders a reaction it
+does not get to invent:
+
+```
+recall (relationship + episodic memories, per listener)
+  → NPCDecision: recognized_listener, recalled_memory_ids, current_stance,
+    emotional_response, immediate_goal, willingness, intended_action,
+    information_to_share / information_to_hide, relationship_deltas, belief_deltas,
+    requires_mechanical_resolution, bias_applied, reason
+  → validate_decision (willingness in range; deltas bounded; share ∩ hide = ∅; a
+    refusing/hostile NPC volunteers nothing)
+  → generation renders the decision (build_npc_response_context DECISION block)
+```
+
+- **Willingness ladder** (`hostile … eager`) is derived deterministically from the
+  earned dimensions (warmth vs. hostility, fear-driven compliance) plus repeated-
+  pressure **escalation** (each prior THREAT/INSULT/ASSAULT/LIE/PRESSURE memory
+  lowers it a notch — a hard request gets *harder*, never reset to a fresh DC).
+- **Disclosure separates truth from willingness**: `information_to_share` is drawn
+  ONLY from `facts_npc_may_use` (what the NPC actually learned), so it can never
+  share objective truth it never learned; secrets/guesses are always in
+  `information_to_hide` even for an eager NPC. Persuasion moves willingness and
+  claims — never a `Secret`/`KnowledgeRecord` (objective canon is structurally
+  untouched: social only writes `npc_facts`/`npc_relationships`).
+- **`requires_mechanical_resolution`** marks a request whose outcome is genuinely
+  uncertain (a check is warranted) vs. one the fiction already settles (eager grant /
+  hostile refusal).
+- **Campaign-controlled bias** (`campaign.config.bias_level` ∈
+  `OFF/LIGHT/MODERATE/CENTRAL_THEME`, `bias_forbidden_kinds` for Session-Zero
+  boundaries) modulates willingness against a listener's ancestry/class/culture — but
+  ONLY for an NPC with matching innate `NPC.biases` data (migration
+  `20260720_npc_biases`), and never at `OFF`. No NPC gains prejudice from the level
+  alone; bias is an innate predisposition applied at decision time, never persisted
+  as an earned relationship.
+
+Tests (`test_npc_decision.py`, 13): recognizes a helper vs. a stranger; unwilling +
+afraid toward a threatener; the same NPC decides differently for two players;
+repeated pressure lowers willingness; an old ASSAULT outranks recent greetings; bias
+follows the campaign setting (and an unbiased NPC never gains prejudice); never shares
+an unlearned fact; a willing NPC shares a known fact but guards its secret; persuasion
+leaves canon intact; the decision survives restart; `validate_decision` rejects
+incoherent decisions.
+
 ## Migrations (run `alembic upgrade head`, then restart, then `!rv diagnostics`)
 
 - `20260711_campaign_anchors` — campaign anchor columns; backfills

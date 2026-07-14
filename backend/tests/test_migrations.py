@@ -27,7 +27,7 @@ from pathlib import Path
 import pytest
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
-HEAD_REVISION = "20260719_geography"
+HEAD_REVISION = "20260720_npc_biases"
 PRE_REVAMP_REVISION = "20260710_canon"
 
 

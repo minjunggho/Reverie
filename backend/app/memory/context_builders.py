@@ -218,6 +218,7 @@ async def build_narration_context(
 async def build_npc_response_context(
     session: AsyncSession, *, npc, listener_ref: str, utterance: str,
     listener_name: str | None = None, game_time: int = 0,
+    decision_block: str | None = None,
 ) -> list[LLMMessage]:
     """Assemble an NPC prompt from ONLY that NPC's own epistemic records + the
     campaign protocols it is authorized to know + how it feels about and what it
@@ -264,6 +265,9 @@ async def build_npc_response_context(
         f"การสื่อสาร={npc.communication_mode}"
     )
     listener_line = f"LISTENER: {listener_name or listener_ref} ({listener_ref})"
+    # The engine's pre-computed decision (recognition/stance/willingness/what may be
+    # disclosed) is authoritative — the model renders it into words, never overrides.
+    decision_section = f"{decision_block}\n" if decision_block else ""
     return [
         {"role": "system", "content": NPC_RESPONSE_SYSTEM},
         {
@@ -274,6 +278,7 @@ async def build_npc_response_context(
                 f"{proto_block}"
                 f"{memory_section}"
                 f"{religious_section}"
+                f"{decision_section}"
                 f"{listener_line}\n"
                 f"UTTERANCE: {utterance}"
             ),

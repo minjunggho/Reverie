@@ -32,6 +32,9 @@ class SocialResult:
     stance: str | None = None
     memory_type: str | None = None
     religious_disclosure: bool = False
+    # The private, engine-computed decision made BEFORE dialogue (recognition,
+    # willingness, what was shared/hidden, whether a roll is warranted).
+    decision: "NPCDecision | None" = None
 
 
 class NPCSocialService:
@@ -73,17 +76,30 @@ class NPCSocialService:
                         source_event_id=disclosure_event_id,
                     )
 
-        # 1. generate (read-only, epistemic-scoped context — now including this NPC's
-        #    relationship with + memories of THIS specific listener).
+        # 1. DECIDE before speaking (§10): the ENGINE computes + validates a private
+        #    structured decision (recognition/stance/willingness/what may be disclosed)
+        #    from committed state, then generation renders THAT decision into words —
+        #    the model never invents the reaction.
         async with self.db.session() as read:
+            from app.models.campaign import Campaign
             from app.models.npc import NPC
+            from app.npcs.decision_service import NPCDecisionService
 
             npc = await read.get(NPC, npc_id)
             listener_name = await _listener_name(read, listener_ref)
             game_time, _ = await _campaign_time_and_loc(read, campaign_id, npc_id)
+            campaign = await read.get(Campaign, campaign_id)
+            config = (campaign.config or {}) if campaign else {}
+            forbidden = frozenset(config.get("bias_forbidden_kinds") or ())
+            decision = await NPCDecisionService(read).decide(
+                npc=npc, listener_ref=listener_ref, utterance=utterance,
+                game_time=game_time, bias_level=str(config.get("bias_level", "OFF")),
+                forbidden_bias_kinds=forbidden,
+            )
             response: NPCResponse = await self.generator.run(
                 read, npc=npc, listener_ref=listener_ref, utterance=utterance,
                 listener_name=listener_name, game_time=game_time,
+                decision_block=decision.as_prompt_block(listener_name),
             )
         display = _compose_display(npc, response)
 
@@ -148,7 +164,7 @@ class NPCSocialService:
             npc_id=npc_id, utterance=display,
             committed_belief_changes=committed, attitude_change=attitude_change,
             stance=stance, memory_type=memory_type,
-            religious_disclosure=religious_disclosure,
+            religious_disclosure=religious_disclosure, decision=decision,
         )
 
 

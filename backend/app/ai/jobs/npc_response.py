@@ -25,10 +25,12 @@ class NPCResponseGenerator:
     async def run(
         self, session: AsyncSession, *, npc, listener_ref: str, utterance: str,
         listener_name: str | None = None, game_time: int = 0,
+        decision_block: str | None = None,
     ) -> NPCResponse:
         messages = await build_npc_response_context(
             session, npc=npc, listener_ref=listener_ref, utterance=utterance,
             listener_name=listener_name, game_time=game_time,
+            decision_block=decision_block,
         )
         try:
             return await self.provider.generate_npc_response(messages)
