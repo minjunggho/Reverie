@@ -21,7 +21,6 @@ never a fabricated place chosen "because it was the only edge".
 from __future__ import annotations
 
 import heapq
-import unicodedata
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -33,14 +32,6 @@ from app.models.world_graph import LocationConnection
 
 # Location types that are "inside" — the outside rule governs movement between these.
 _INTERIOR_TYPES = frozenset({"LOCATION", "BUILDING", "ROOM"})
-# Location types that count as exterior / connective space you pass THROUGH.
-_EXTERIOR_TYPES = frozenset(
-    {"STREET", "DISTRICT", "SETTLEMENT", "REGION", "WORLD", "WILDERNESS", "ROAD", "OUTSKIRTS"}
-)
-
-
-def _norm(s: str) -> str:
-    return " ".join(unicodedata.normalize("NFC", (s or "")).casefold().split())
 
 
 class DestinationClass(Enum):
@@ -150,49 +141,33 @@ class RouteService:
         self, *, campaign_id: str, from_location_id: str, reference: str,
     ) -> DestinationResolution:
         """Resolve a movement reference against the WHOLE reachable world, not just
-        adjacent edges. A named authored destination outranks a generic verb; a place
-        that exists but has no open route is UNREACHABLE (a locked gate, not a lie).
-        """
-        ref = _norm(reference)
-        if not ref:
+        adjacent edges. Multilingual + alias + NPC-directed resolution is delegated to
+        the one authoritative `LocationResolver`; a named authored destination outranks
+        a generic verb; a place that exists but has no open route is UNREACHABLE (a
+        locked gate, not a lie); two equally-good matches ask instead of guessing."""
+        from app.world.location_resolver import LocationResolver
+
+        result = await LocationResolver(self.session).resolve(
+            campaign_id=campaign_id, reference=reference, exclude_id=from_location_id)
+
+        if result.is_ambiguous or result.npc_location_unknown:
+            # Several places answer to the name, or the named NPC's whereabouts are
+            # unknown — the caller asks one focused question, never a coin-flip.
             return DestinationResolution(DestinationClass.AMBIGUOUS)
-
-        # Candidate authored locations in this campaign whose name matches the
-        # reference. Name match is conservative (substring either way), never fuzzy.
-        locs = (await self.session.execute(select(Location).where(
-            Location.campaign_id == campaign_id))).scalars()
-        named: list[Location] = []
-        for loc in locs:
-            n = _norm(loc.name)
-            if n and (n in ref or ref in n) and loc.id != from_location_id:
-                named.append(loc)
-
-        if not named:
-            # No authored place by that name → the caller decides expansion vs. a
-            # focused question. We only report the class, never invent a location.
+        if not result.resolved:
+            # No authored/known place by that name → the caller decides expansion vs.
+            # a focused question. We only report the class, never invent a location.
             return DestinationResolution(DestinationClass.ORDINARY_EXPANDABLE)
 
-        # Prefer the closest reachable named match; longer names (more specific) win
-        # ties before route cost is even considered.
-        named.sort(key=lambda l: -len(_norm(l.name)))
-        unreachable: Location | None = None
-        best: tuple[RoutePlan, Location] | None = None
-        for loc in named:
-            route = await self.find_route(
-                campaign_id=campaign_id, from_location_id=from_location_id,
-                to_location_id=loc.id)
-            if route is None:
-                unreachable = unreachable or loc
-                continue
-            if best is None or route.total_minutes < best[0].total_minutes:
-                best = (route, loc)
-        if best is None:
-            # The place is real but no OPEN route reaches it right now.
-            return DestinationResolution(DestinationClass.UNREACHABLE, target=unreachable)
-        route, loc = best
+        target = result.match.location
+        route = await self.find_route(
+            campaign_id=campaign_id, from_location_id=from_location_id,
+            to_location_id=target.id)
+        if route is None:
+            return DestinationResolution(DestinationClass.UNREACHABLE, target=target)
         klass = (DestinationClass.EXISTING_ADJACENT if not route.is_multi_hop
                  else DestinationClass.EXISTING_ROUTED)
-        return DestinationResolution(klass, target=loc, route=route)
+        return DestinationResolution(klass, target=target, route=route)
 
     # --- the outside rule -------------------------------------------------------
 
@@ -248,5 +223,5 @@ class RouteService:
         return await WorldGraphService(self.session).add_connection(
             campaign_id=campaign_id, from_location_id=location_id,
             to_location_id=loc.parent_id, label="ออกไปข้างนอก", direction="outside",
-            travel_minutes=0, obvious=True,
+            travel_minutes=0, obvious=True, provenance="AI_INFERRED_CONNECTOR",
             bidirectional_label=f"เข้า{loc.name}")

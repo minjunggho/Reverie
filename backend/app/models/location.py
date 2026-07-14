@@ -20,6 +20,14 @@ class Location(Base, TimestampMixin):
     id: Mapped[str] = pk_column()
     campaign_id: Mapped[str] = fk_id("campaigns.id")
     name: Mapped[str] = mapped_column(String(160))
+    # Localized display names + owner/import aliases, so a Thai reference reaches an
+    # English-named place (and vice versa) without a second, divergent location.
+    name_th: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    name_en: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    aliases: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # KNOWN (routable) | DISCOVERABLE | HIDDEN | SECRET. Non-KNOWN places are not
+    # offered as navigation targets until discovered — no free path to a villain lair.
+    discovery_state: Mapped[str] = mapped_column(String(20), default="KNOWN")
     description_obvious: Mapped[str] = mapped_column(Text, default="")
     description_focused: Mapped[str] = mapped_column(Text, default="")
     description_hidden: Mapped[str] = mapped_column(Text, default="")

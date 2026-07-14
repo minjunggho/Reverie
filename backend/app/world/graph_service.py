@@ -44,12 +44,13 @@ class WorldGraphService:
         label: str = "", direction: str = "", travel_minutes: int = 0,
         obvious: bool = True, one_way: bool = False, access_state: str = "open",
         bidirectional_label: str | None = None,
+        provenance: str = "IMPORTED_EXPLICIT", traversal_mode: str = "walk",
     ) -> LocationConnection:
         conn = LocationConnection(
             campaign_id=campaign_id, from_location_id=from_location_id,
             to_location_id=to_location_id, label=label, direction=direction,
             travel_minutes=travel_minutes, obvious=obvious, one_way=one_way,
-            access_state=access_state,
+            access_state=access_state, provenance=provenance, traversal_mode=traversal_mode,
         )
         self.session.add(conn)
         await self.session.flush()
@@ -59,6 +60,7 @@ class WorldGraphService:
                 to_location_id=from_location_id,
                 label=bidirectional_label or "กลับ", direction=_reverse(direction),
                 travel_minutes=travel_minutes, obvious=obvious, access_state=access_state,
+                provenance=provenance, traversal_mode=traversal_mode,
             )
             self.session.add(back)
             await self.session.flush()

@@ -27,7 +27,7 @@ from pathlib import Path
 import pytest
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
-HEAD_REVISION = "20260717_pantheons"
+HEAD_REVISION = "20260719_geography"
 PRE_REVAMP_REVISION = "20260710_canon"
 
 
@@ -194,7 +194,9 @@ def test_existing_database_upgrades_with_data_intact(tmp_path):
         "SELECT name, starting_location_id, world_model_version, active_pantheon_keys "
         "FROM campaigns").fetchone()
     char = conn.execute(
-        "SELECT name, aliases, following_character_id, location_id FROM characters").fetchone()
+        "SELECT name, aliases, following_character_id, location_id, belief_profile, "
+        "cleric_deity_key, cleric_domain FROM characters").fetchone()
+    npc_belief = conn.execute("SELECT belief_profile FROM npcs").fetchone()[0]
     rel = conn.execute(
         "SELECT attitude, trust, familiarity, current_stance FROM npc_relationships").fetchone()
     sess = conn.execute("SELECT number, status FROM sessions").fetchone()
@@ -205,6 +207,8 @@ def test_existing_database_upgrades_with_data_intact(tmp_path):
     assert char[0] == "Veskan" and char[3] == "loc-tavern"
     assert json.loads(char[1]) == ["เวสกัน"]           # aliases survive
     assert char[2] is None                              # follow defaults to no consent
+    assert char[4:] == (None, None, None)               # existing character has no belief
+    assert npc_belief is None                           # existing NPC has no belief
     assert rel == ("friendly", 5, 0, "neutral")         # old fields kept, dims defaulted
     assert sess == (1, "COMPLETE")
 

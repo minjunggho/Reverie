@@ -30,6 +30,15 @@ class LocationConnection(Base, TimestampMixin):
     one_way: Mapped[bool] = mapped_column(Boolean, default=False)
     access_state: Mapped[str] = mapped_column(String(20), default="open")  # open|locked|blocked|hidden
     requirement: Mapped[str] = mapped_column(String(200), default="")
+    # Why this edge exists — explicit owner canon outranks generated connectors.
+    # IMPORTED_EXPLICIT | IMPORTED_SEMANTIC | OWNER_EDITED | AI_INFERRED_CONNECTOR |
+    # AI_RUNTIME_EXPANDED | COMMITTED_EVENT.
+    provenance: Mapped[str] = mapped_column(String(24), default="IMPORTED_EXPLICIT")
+    # How the edge is crossed: walk | climb | swim | boat | ride | fly | crawl.
+    traversal_mode: Mapped[str] = mapped_column(String(20), default="walk")
+    # KNOWN (usable) | DISCOVERABLE | RUMORED | HIDDEN — a hidden route is not shown
+    # or auto-routed until the party discovers it.
+    discovery_state: Mapped[str] = mapped_column(String(20), default="KNOWN")
 
 
 class CampaignCanonRecord(Base, TimestampMixin):

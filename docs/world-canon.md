@@ -86,12 +86,13 @@ to it through the connective geography.
 - **Pathfinding.** `find_route` is Dijkstra over `LocationConnection` by
   `travel_minutes`, ties breaking toward fewer hops (a direct authored edge always
   wins). It only crosses **open** edges — a locked/blocked/hidden gate is not a path.
-- **Destination resolution + classification.** `resolve_destination` matches a
-  reference against every authored location's name (conservative substring, never
-  fuzzy), picks the closest reachable match, and returns a `DestinationClass`:
-  `EXISTING_ADJACENT` · `EXISTING_ROUTED` · `ORDINARY_EXPANDABLE` · `UNREACHABLE` ·
-  `AMBIGUOUS`. A named place with no open route is `UNREACHABLE` (a locked vault, not
-  a lie); an unnamed request is `ORDINARY_EXPANDABLE` (the caller may expand).
+- **Destination resolution + classification.** `resolve_destination` delegates name
+  matching to the one authoritative `LocationResolver` (below), picks the closest
+  reachable match, and returns a `DestinationClass`: `EXISTING_ADJACENT` ·
+  `EXISTING_ROUTED` · `ORDINARY_EXPANDABLE` · `UNREACHABLE` · `AMBIGUOUS`. A named
+  place with no open route is `UNREACHABLE` (a locked vault, not a lie); an unnamed
+  request is `ORDINARY_EXPANDABLE` (the caller may expand); two equally-good matches
+  are `AMBIGUOUS` (ask, never coin-flip).
 - **The outside rule.** Because the graph is authoritative, a correct graph already
   routes tavern → street → … → shop through the exterior. `route_obeys_outside_rule`
   makes the invariant checkable: a hop straight from one interior location to another
@@ -104,19 +105,50 @@ to it through the connective geography.
   (bidirectional, persisted, idempotent), then re-routes. The world stays explorable
   without ever routing THROUGH an unrelated building.
 
-**TravelService** now consults `RouteService` between the adjacent-exit fast path and
-expansion: a multi-hop route traverses the whole path — the world clock advances by
-the **summed** travel time (ticking threats/events across the journey), the actor
-moves to the final destination, and the arrival frame's footer shows the compressed
-route ("· ผ่าน จัตุรัสตลาด"). Detail is compressed; time and world state still reflect
-every hop. A real-but-unreachable place is declined with a focused note — never
-fabricated. **Bug fixed:** an empty `direction` field no longer counts as "outside"
-in `resolve_exit` (§4: an empty direction must never mean outside).
+**TravelService** consults `RouteService` between the adjacent-exit fast path and
+expansion, then walks the route **segment by segment** (§7): each hop is re-validated
+as still open at execution time, its own travel-time is advanced (ticking
+threats/events at the right moment), and every consenting mover steps one location.
+If a hop is blocked midway, the party **stops at the last valid location** — completed
+segments and elapsed time are preserved and nobody is teleported to the destination.
+A named destination outranks the weak "just leave through the only door" fallback
+(§5). **Bug fixed:** an empty `direction` field no longer counts as "outside" in
+`resolve_exit`.
 
-Reachability stays enforced two ways: `campaign_validation._reachable_from` (a BFS
-over the proposal graph) blocks committing a world with stranded locations, and
-`RouteService` guarantees runtime traversal + inference so the committed world is
-always navigable. Tests: `tests/test_connective_geography.py` (11).
+## Multilingual + goal-directed destination resolution (Step 7)
+
+`LocationResolver` (`app/world/location_resolver.py`) is the one authoritative
+reference→location resolver, reusing `normalize_choice_name` (no second normalizer):
+
+- **Multilingual + aliases.** `Location` now carries `name_th`, `name_en`, and an
+  `aliases` list (migration `20260719_geography`). "ไปมหาวิหาร" reaches a place whose
+  English canonical name is "Cathedral District" via its Thai alias; hyphen /
+  underscore / case / full-width forms all normalize together. Exact normalized
+  equality wins; a conservative substring is the lower-confidence fallback; a tie is
+  ambiguous (ask, never guess).
+- **NPC-directed goals.** "ไปหายามเฝ้าประตู" resolves the NPC, then routes to where
+  that NPC is believed to be (`current_location_id`). An NPC whose whereabouts are
+  unknown is flagged (search/ask), never teleported to.
+- **Discovery gating.** `Location.discovery_state` (KNOWN / DISCOVERABLE / HIDDEN /
+  SECRET) — HIDDEN and SECRET places are never offered as navigation targets, so a
+  player gets no free path to an undiscovered villain lair. Connections gained
+  `provenance` (IMPORTED_EXPLICIT … AI_INFERRED_CONNECTOR), `traversal_mode`, and
+  `discovery_state`; inferred connectors are tagged `AI_INFERRED_CONNECTOR`.
+
+## Committed-graph validation + safe repair (Step 7)
+
+`app/world/graph_validation.py` validates the **live** graph (complementing the
+proposal-level BFS): missing/cyclic parents, cross-campaign or broken edges, negative
+travel time, duplicate edges, interior→unrelated-interior teleports (the outside
+rule), one-way traps, and missing exits. Each issue is classified `BLOCKING_ERROR` /
+`OWNER_REVIEW_REQUIRED` / `SAFE_AUTO_REPAIR` / `WARNING`. `safe_auto_repair` applies
+only the SAFE class (inferring a missing exterior link via `RouteService`),
+idempotently — it never invents canon.
+
+Reachability stays enforced both at commit (`campaign_validation._reachable_from`
+blocks stranded locations) and at runtime (`RouteService` traversal + inference).
+Tests: `tests/test_connective_geography.py` (11) + `tests/test_step7_geography.py`
+(12).
 
 ## Fact provenance (anti-hallucination)
 
