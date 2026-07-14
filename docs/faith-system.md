@@ -47,6 +47,12 @@ disclosure. A revelation also creates one idempotent
 `RELIGIOUS_REVELATION` memory. It does not make the fact ambient knowledge, and a
 different NPC receives nothing automatically.
 
+The real `NPCSocialService` recognizes a narrow set of explicit first-person
+English/Thai disclosure phrases only when the message also contains an exact
+normalized key, canonical name, Thai name, or approved alias of a deity already
+in that character's profile. It commits the learned fact before generating the
+NPC response. Merely mentioning or discussing a deity does not reveal a secret.
+
 Callers must provide the committed source event ID. The existing memory service
 uses that ID as its retry boundary; repeated Discord delivery cannot create a
 second memory or reapply relationship deltas.

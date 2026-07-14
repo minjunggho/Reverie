@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -19,6 +20,7 @@ from app.models.world_graph import CampaignCanonRecord
 from app.npcs.knowledge_service import NPCKnowledgeService
 from app.npcs.memory_service import NPCMemoryService
 from app.rules_content.faith_interactions import get_faith_interaction_registry
+from app.rules_content.faith_registry import normalize_deity_reference
 from app.schemas.belief import BeliefVisibility, ReligiousKnowledgeLevel, ReligiousRole
 from app.schemas.religious_interaction import (
     DoctrineContext,
@@ -180,6 +182,45 @@ class ReligiousInteractionService:
             relationship_deltas={"familiarity": 3},
         )
         return row
+
+    async def reveal_from_utterance(
+        self, *, campaign_id: str, npc_id: str, character_id: str,
+        utterance: str, source_event_id: str,
+    ) -> bool:
+        """Persist explicit self-disclosure, never a casual deity mention."""
+        folded = (utterance or "").casefold()
+        markers = (
+            "i follow", "i worship", "my faith", "i believe in",
+            "ฉันนับถือ", "ข้านับถือ", "ผมนับถือ", "ดิฉันนับถือ",
+            "ฉันศรัทธา", "ข้าศรัทธา", "ความเชื่อของฉัน", "ความเชื่อของข้า",
+        )
+        if not any(marker in folded for marker in markers):
+            return False
+        character = await self._character(campaign_id, character_id)
+        profile = await self.beliefs.get_character_belief(character)
+        if profile is None:
+            return False
+        normalized_text = normalize_deity_reference(utterance)
+        deity_keys = tuple(dict.fromkeys(
+            key for key in (profile.primary_deity_key, *profile.secondary_deity_keys) if key
+        ))
+        for key in deity_keys:
+            deity = await self.faith.get_deity(campaign_id, key)
+            if deity is None:
+                continue
+            references = (
+                deity.key, deity.canonical_name_en, deity.name_th,
+                *deity.aliases, *deity.titles,
+            )
+            if any(self._contains_normalized_reference(
+                normalized_text, normalize_deity_reference(reference)
+            ) for reference in references):
+                await self.reveal_belief(
+                    campaign_id=campaign_id, npc_id=npc_id,
+                    character_id=character_id, source_event_id=source_event_id,
+                )
+                return True
+        return False
 
     async def observe_religious_identity(
         self, *, campaign_id: str, npc_id: str, character_id: str,
@@ -402,6 +443,16 @@ class ReligiousInteractionService:
             "visibility": profile.visibility.value,
             "personal_interpretation": profile.personal_interpretation,
         }
+
+    @staticmethod
+    def _contains_normalized_reference(text: str, reference: str) -> bool:
+        if not reference:
+            return False
+        if re.search(r"[a-z0-9]", reference):
+            return re.search(
+                rf"(?<![a-z0-9]){re.escape(reference)}(?![a-z0-9])", text
+            ) is not None
+        return reference in text
 
     async def _learned_belief(self, npc_id: str, listener_ref: str):
         subject = _BELIEF_SUBJECT.format(listener_ref=listener_ref)

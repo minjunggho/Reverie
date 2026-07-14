@@ -11,7 +11,7 @@ from app.models.npc_epistemic import NPCMemory, NPCRelationship
 from app.models.world import Threat
 from app.models.world_graph import CampaignCanonRecord
 from app.memory.context_builders import build_npc_response_context
-from app.npcs import NPCService
+from app.npcs import NPCService, NPCSocialService
 from app.schemas.belief import (
     BeliefProfile, BeliefSource, BeliefStance, BeliefVisibility, DevotionLevel,
     ReligiousKnowledgeLevel, ReligiousRole,
@@ -126,6 +126,24 @@ async def test_hidden_belief_is_per_npc_and_revelation_is_remembered(db):
         assert known.player_known_private_belief["primary_deity_key"] == "selune"
         assert "revealed" in known.important_religious_memories[0]
         assert unknown.player_known_private_belief is None
+
+
+async def test_explicit_disclosure_flows_through_real_social_service(db, provider):
+    world = await _faith_people(db, secret=True)
+    result = await NPCSocialService(db, provider).respond(
+        campaign_id=world.campaign_id, npc_id=world.guard_npc_id,
+        listener_ref=f"character:{world.kael_id}",
+        utterance="I follow Selûne, though I keep that faith hidden.",
+        source_event_id="social-disclosure-1",
+    )
+    assert result.religious_disclosure is True
+    async with db.session() as s:
+        context = await ReligiousInteractionService(s).build_context(
+            campaign_id=world.campaign_id, npc_id=world.guard_npc_id,
+            character_id=world.kael_id,
+        )
+        assert context.player_known_private_belief["primary_deity_key"] == "selune"
+        assert any("revealed" in item for item in context.important_religious_memories)
 
 
 async def test_rival_faith_is_tension_not_automatic_combat(db):

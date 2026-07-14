@@ -10,6 +10,7 @@ this service handles the response+commit; the committed pipeline handles any rol
 """
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 
 from app.ai.jobs import NPCResponseGenerator
@@ -30,6 +31,7 @@ class SocialResult:
     # The NPC's stance toward THIS listener after recording the interaction.
     stance: str | None = None
     memory_type: str | None = None
+    religious_disclosure: bool = False
 
 
 class NPCSocialService:
@@ -48,6 +50,29 @@ class NPCSocialService:
         scene_id: str | None = None,
         source_event_id: str | None = None,
     ) -> SocialResult:
+        # Explicit first-person disclosure is authoritative player input. Commit
+        # it for this NPC before generation so this response may acknowledge it.
+        # The derived memory key stays distinct from the ordinary event memory.
+        religious_disclosure = False
+        if source_event_id:
+            from app.core.ids import parse_entity_ref
+
+            listener_kind, listener_id = parse_entity_ref(listener_ref)
+            if listener_kind == "character" and listener_id:
+                from app.services.religious_interactions import ReligiousInteractionService
+
+                disclosure_event_id = hashlib.sha256(
+                    f"religious-disclosure:{source_event_id}".encode("utf-8")
+                ).hexdigest()[:32]
+                async with self.db.unit_of_work() as disclosure_session:
+                    religious_disclosure = await ReligiousInteractionService(
+                        disclosure_session
+                    ).reveal_from_utterance(
+                        campaign_id=campaign_id, npc_id=npc_id,
+                        character_id=listener_id, utterance=utterance,
+                        source_event_id=disclosure_event_id,
+                    )
+
         # 1. generate (read-only, epistemic-scoped context — now including this NPC's
         #    relationship with + memories of THIS specific listener).
         async with self.db.session() as read:
@@ -123,6 +148,7 @@ class NPCSocialService:
             npc_id=npc_id, utterance=display,
             committed_belief_changes=committed, attitude_change=attitude_change,
             stance=stance, memory_type=memory_type,
+            religious_disclosure=religious_disclosure,
         )
 
 
