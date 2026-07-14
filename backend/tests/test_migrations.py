@@ -27,7 +27,7 @@ from pathlib import Path
 import pytest
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
-HEAD_REVISION = "20260716_mainstory"
+HEAD_REVISION = "20260717_pantheons"
 PRE_REVAMP_REVISION = "20260710_canon"
 
 
@@ -191,7 +191,8 @@ def test_existing_database_upgrades_with_data_intact(tmp_path):
 
     conn = sqlite3.connect(db)
     camp = conn.execute(
-        "SELECT name, starting_location_id, world_model_version FROM campaigns").fetchone()
+        "SELECT name, starting_location_id, world_model_version, active_pantheon_keys "
+        "FROM campaigns").fetchone()
     char = conn.execute(
         "SELECT name, aliases, following_character_id, location_id FROM characters").fetchone()
     rel = conn.execute(
@@ -199,7 +200,8 @@ def test_existing_database_upgrades_with_data_intact(tmp_path):
     sess = conn.execute("SELECT number, status FROM sessions").fetchone()
     conn.close()
 
-    assert camp == ("Last Funeral", "loc-tavern", 2)   # backfilled from session_prep
+    assert camp[:3] == ("Last Funeral", "loc-tavern", 2)  # backfilled from session_prep
+    assert json.loads(camp[3]) == []                     # faith packs are opt-in
     assert char[0] == "Veskan" and char[3] == "loc-tavern"
     assert json.loads(char[1]) == ["เวสกัน"]           # aliases survive
     assert char[2] is None                              # follow defaults to no consent
@@ -212,7 +214,7 @@ def test_recent_revisions_downgrade_and_reupgrade(tmp_path):
     _alembic(db, "upgrade", PRE_REVAMP_REVISION)
     _seed_pre_revamp(db)
     _alembic(db, "upgrade", "head")
-    _alembic(db, "downgrade", "-1")                     # drop draft concurrency
+    _alembic(db, "downgrade", "-1")                     # drop pantheon activation
     _alembic(db, "upgrade", "head")
     _alembic(db, "downgrade", "20260711_anchors")       # drop npcmem+follow+economy
     _alembic(db, "upgrade", "head")

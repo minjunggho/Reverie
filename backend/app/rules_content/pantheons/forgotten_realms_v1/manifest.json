@@ -1,0 +1,31 @@
+{
+  "key": "forgotten_realms",
+  "display_name_en": "The Forgotten Realms Pantheon",
+  "display_name_th": "ทำเนียบเทพเจ้าแห่งอาณาจักรที่ถูกลืม",
+  "setting": "Forgotten Realms (ทวีป Faerûn)",
+  "content_pack_id": "forgotten_realms_pantheon_v1",
+  "version": 1,
+  "deity_keys": [
+    "ao",
+    "mystra",
+    "lathander",
+    "selune",
+    "shar",
+    "bane",
+    "bhaal",
+    "myrkul",
+    "kelemvor",
+    "tyr",
+    "torm",
+    "oghma",
+    "tymora",
+    "beshaba",
+    "silvanus"
+  ],
+  "activation_status": "AVAILABLE",
+  "source_file": "Forgotten_Realms_Pantheon_Detailed.md",
+  "source_sha256": "1a4077681b134abf92ec4559b057f510da5053248932e7f106c1c3f44e41aa83",
+  "source_reference": "Forgotten_Realms_Pantheon_Detailed.md (owner-provided)",
+  "provenance": "OWNER_PROVIDED",
+  "content_status": "COMPLETE_SOURCE_IMPORT"
+}

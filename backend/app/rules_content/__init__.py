@@ -29,6 +29,21 @@ from app.rules_content.choice_names import (
     normalize_choice_name,
     resolve_choice_name,
 )
+from app.rules_content.faith_registry import (
+    DeityDefinition,
+    DeityRelationship,
+    DeityResolution,
+    DeityResolutionStatus,
+    DeityResolver,
+    FaithContentError,
+    FaithContentWarning,
+    FaithRegistry,
+    PantheonActivationStatus,
+    PantheonDefinition,
+    get_faith_registry,
+    normalize_deity_reference,
+    parse_pantheon_markdown,
+)
 
 __all__ = [
     "RULESET_ID",
@@ -45,4 +60,17 @@ __all__ = [
     "ChoiceResolution",
     "normalize_choice_name",
     "resolve_choice_name",
+    "PantheonDefinition",
+    "DeityDefinition",
+    "PantheonActivationStatus",
+    "DeityResolutionStatus",
+    "DeityResolution",
+    "DeityRelationship",
+    "DeityResolver",
+    "FaithContentError",
+    "FaithContentWarning",
+    "FaithRegistry",
+    "get_faith_registry",
+    "normalize_deity_reference",
+    "parse_pantheon_markdown",
 ]

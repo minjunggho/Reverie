@@ -1,0 +1,2 @@
+# Preserve owner-provided source documents verbatim, including authored trailing spaces.
+backend/app/rules_content/pantheons/*/Forgotten_Realms_Pantheon_Detailed.md -whitespace

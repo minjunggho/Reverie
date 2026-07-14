@@ -18,7 +18,8 @@ from app.core.versions import (
 )
 from app.db.session import get_database
 from app.engine import build_default_bridges
-from app.rules_content import get_registry
+from app.rules_content import get_faith_registry, get_registry
+from app.services.faith import FaithService
 from discord_bot.client import BotInstanceInfo, ReverieClient
 from discord_bot.instance_lock import BotInstanceLock, DuplicateBotInstanceError
 
@@ -30,6 +31,7 @@ async def _amain() -> None:
     configure_logging(settings.log_level)
     # Validate rules content before any other startup prerequisite can mask it.
     get_registry()
+    faith_registry = get_faith_registry()
     if not settings.discord_bot_token:
         raise SystemExit("DISCORD_BOT_TOKEN is not set; cannot start the bot.")
 
@@ -43,6 +45,8 @@ async def _amain() -> None:
         db = get_database(settings)
         if settings.is_sqlite:
             await db.create_all()
+        async with db.session() as session:
+            await FaithService(session, faith_registry).validate_all_campaign_activations()
 
         game_bridge, admin_bridge = build_default_bridges()
         client = ReverieClient(

@@ -46,6 +46,9 @@ class Campaign(Base, TimestampMixin):
     owner_user_id: Mapped[str] = fk_id("users.id")
 
     config: Mapped[dict[str, Any]] = mapped_column(JSON, default=default_campaign_config)
+    # Versioned faith content is opt-in per campaign. Static pantheon/deity lore
+    # remains in app.rules_content; this row stores only explicit activation keys.
+    active_pantheon_keys: Mapped[list[str]] = mapped_column(JSON, default=list)
     # In-world minutes since the campaign epoch. Engine-owned; never set by the LLM.
     current_game_time: Mapped[int] = mapped_column(Integer, default=0)
 

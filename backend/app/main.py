@@ -18,7 +18,8 @@ from app.api.health import router as health_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.db.session import get_database
-from app.rules_content import get_registry
+from app.rules_content import get_faith_registry, get_registry
+from app.services.faith import FaithService
 
 # Production Activity frontend build (activity/dist), served same-origin at /activity.
 _ACTIVITY_DIST = Path(__file__).resolve().parents[2] / "activity" / "dist"
@@ -31,10 +32,13 @@ async def lifespan(app: FastAPI):
     # Fail before accepting traffic if character creation cannot be completed
     # from the deployed rules/UI content.
     get_registry()
+    faith_registry = get_faith_registry()
     db = get_database(settings)
     # For local/dev SQLite convenience, ensure tables exist. Production uses Alembic.
     if settings.is_sqlite:
         await db.create_all()
+    async with db.session() as session:
+        await FaithService(session, faith_registry).validate_all_campaign_activations()
     yield
     await db.dispose()
 
