@@ -1,10 +1,17 @@
 """NPC CRUD + attitude access. Epistemic records (knowledge/belief) land in Phase 11."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import NotFoundError
 from app.models.npc import NPC
+from app.schemas.belief import BeliefProfile
+from app.services.beliefs import BeliefService
+
+if TYPE_CHECKING:
+    from app.npcs.belief_generator import NPCBeliefContext
 
 
 class NPCService:
@@ -21,6 +28,8 @@ class NPCService:
         goals: list[str] | None = None,
         current_location_id: str | None = None,
         emotional_state: str = "calm",
+        belief_profile: BeliefProfile | dict | None = None,
+        belief_context: NPCBeliefContext | None = None,
     ) -> NPC:
         npc = NPC(
             campaign_id=campaign_id,
@@ -33,6 +42,19 @@ class NPCService:
         )
         self.session.add(npc)
         await self.session.flush()
+        if belief_profile is not None:
+            await BeliefService(self.session).set_npc_belief(npc, belief_profile)
+        elif belief_context is not None:
+            from app.npcs.belief_generator import NPCBeliefGenerator
+            from app.services.faith import FaithService
+
+            proposal = await NPCBeliefGenerator(FaithService(self.session)).propose(
+                campaign_id, belief_context
+            )
+            if proposal.profile is not None:
+                await BeliefService(self.session).set_npc_belief(
+                    npc, proposal.profile
+                )
         return npc
 
     async def get_npc(self, npc_id: str) -> NPC:

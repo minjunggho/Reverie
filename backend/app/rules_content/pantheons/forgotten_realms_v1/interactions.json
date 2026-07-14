@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "source": "Phase 3 owner brief doctrine examples",
+  "doctrines": [
+    {"deity_key":"tyr","values":["justice","law","honest judgment"],"supported_event_tags":["JUST_JUDGMENT","UPHOLD_LAW"],"opposed_event_tags":["CORRUPT_JUDGMENT"],"source":"Phase 3 owner brief"},
+    {"deity_key":"torm","values":["loyalty","duty","sacrifice"],"supported_event_tags":["KEEP_PROMISE","SACRIFICE"],"opposed_event_tags":["BREAK_PROMISE"],"source":"Phase 3 owner brief"},
+    {"deity_key":"selune","values":["protection of travelers","guidance at night"],"supported_event_tags":["PROTECT_TRAVELER"],"opposed_event_tags":[],"source":"Phase 3 owner brief"},
+    {"deity_key":"shar","values":["secrecy","darkness","loss"],"supported_event_tags":["KEEP_SECRET"],"opposed_event_tags":[],"source":"Phase 3 owner brief"},
+    {"deity_key":"kelemvor","values":["natural death","opposition to undead"],"supported_event_tags":["FUNERAL_RITE","OPPOSE_UNDEAD"],"opposed_event_tags":["CREATE_UNDEAD"],"source":"Phase 3 owner brief"},
+    {"deity_key":"lathander","values":["renewal","opposition to undead"],"supported_event_tags":["RENEWAL","OPPOSE_UNDEAD"],"opposed_event_tags":["CREATE_UNDEAD"],"source":"Phase 3 owner brief"},
+    {"deity_key":"oghma","values":["preservation of knowledge"],"supported_event_tags":["PRESERVE_KNOWLEDGE"],"opposed_event_tags":["DESTROY_KNOWLEDGE"],"source":"Phase 3 owner brief"},
+    {"deity_key":"silvanus","values":["natural balance"],"supported_event_tags":["PROTECT_NATURE"],"opposed_event_tags":["DESTROY_NATURE"],"source":"Phase 3 owner brief"},
+    {"deity_key":"tymora","values":["courageous risk"],"supported_event_tags":["COURAGEOUS_RISK"],"opposed_event_tags":[],"source":"Phase 3 owner brief"},
+    {"deity_key":"bane","values":["domination","control"],"supported_event_tags":["ASSERT_CONTROL"],"opposed_event_tags":[],"source":"Phase 3 owner brief"}
+  ]
+}

@@ -87,6 +87,19 @@ async def finalize_character(db, *, draft: CharacterDraft, data: dict,
         char.tool_proficiencies = [bg.tool_proficiency]
         char.expertise = list(b.get("expertise", []))
 
+        # Belief is an independent typed profile. Newly completed Phase 2 drafts
+        # validate Cleric mechanics here inside the same finalize transaction;
+        # pre-Phase-2 drafts remain migratable with a null profile.
+        from app.services.beliefs import BeliefService
+
+        if "belief_profile" in b:
+            await BeliefService(s).set_character_belief(
+                char,
+                b.get("belief_profile"),
+                cleric_deity_key=b.get("cleric_deity_key"),
+                cleric_domain=b.get("cleric_domain"),
+            )
+
         # Skills with provenance.
         skills: list[str] = []
         grants: list[CharacterGrant] = []
@@ -213,6 +226,28 @@ async def finalize_character(db, *, draft: CharacterDraft, data: dict,
         if b.get("planned_subclass"):
             sub = reg.get_subclass(b["planned_subclass"])
             fields.append({"name": "Subclass แผนไว้", "value": sub.name_th, "inline": False})
+        if "belief_profile" in b:
+            from app.rules_content.faith_registry import get_faith_registry
+
+            profile = BeliefService.decode(char.belief_profile)
+            if profile is None:
+                belief_text = "ไม่มีศาสนาที่สำคัญกับตัวละคร"
+            else:
+                faith_registry = get_faith_registry()
+                deity = faith_registry.get_deity(profile.primary_deity_key or "")
+                belief_text = f"{profile.stance.value} · {profile.devotion.value}"
+                if deity:
+                    belief_text += f" · {deity.name_th}"
+                if profile.visibility.value != "PUBLIC":
+                    belief_text += f" · {profile.visibility.value}"
+            fields.append({"name": "ความเชื่อส่วนตัว", "value": belief_text, "inline": False})
+        if char.cleric_deity_key:
+            deity = get_faith_registry().get_deity(char.cleric_deity_key)
+            fields.append({
+                "name": "กลไก Cleric",
+                "value": f"{deity.name_th if deity else char.cleric_deity_key} · {char.cleric_domain}",
+                "inline": False,
+            })
         fields.append({"name": "🎒 สัมภาระ", "value": "\n".join(f"• {g}" for g in gear[:8]),
                        "inline": False})
         fields.append({"name": "💰 ถุงเงิน", "value": format_balances(purse), "inline": False})

@@ -44,6 +44,11 @@ from app.rules_content.faith_registry import (
     normalize_deity_reference,
     parse_pantheon_markdown,
 )
+from app.rules_content.faith_interactions import (
+    DoctrineDefinition,
+    FaithInteractionRegistry,
+    get_faith_interaction_registry,
+)
 
 __all__ = [
     "RULESET_ID",
@@ -73,4 +78,7 @@ __all__ = [
     "get_faith_registry",
     "normalize_deity_reference",
     "parse_pantheon_markdown",
+    "DoctrineDefinition",
+    "FaithInteractionRegistry",
+    "get_faith_interaction_registry",
 ]

@@ -30,6 +30,14 @@ from app.models.location import Location
 from app.models.npc import NPC
 from app.models.world import Threat
 from app.models.world_graph import CampaignCanonRecord, LocationConnection
+from app.schemas.belief import (
+    BeliefProfile,
+    BeliefSource,
+    BeliefStance,
+    BeliefVisibility,
+    DevotionLevel,
+    ReligiousRole,
+)
 
 ALLOWED_EXTENSIONS = {".json", ".md", ".txt"}
 MAX_BYTES = 1_000_000
@@ -72,6 +80,9 @@ class NPCProposal(BaseModel):
     goal: str = Field(default="", max_length=2000)
     location: str | None = Field(default=None, max_length=80)   # location key
     communication_mode: str = Field(default="SPOKEN", max_length=20)
+    deity_reference: str | None = Field(default=None, max_length=160)
+    religious_role: ReligiousRole | None = None
+    belief_profile: BeliefProfile | None = None
 
 
 class FactionProposal(BaseModel):
@@ -222,7 +233,11 @@ def _parse_markdown(text: str) -> dict:
                                  "personality": f.get("personality", ""), "voice": f.get("voice", ""),
                                  "goal": f.get("goal", ""),
                                  "location": (f.get("location") or None),
-                                 "communication_mode": (f.get("communication") or "SPOKEN").upper()})
+                                 "communication_mode": (f.get("communication") or "SPOKEN").upper(),
+                                 "deity_reference": (f.get("deity") or None),
+                                 "religious_role": (
+                                     f.get("religious role", "").strip().upper() or None
+                                 )})
         elif low.startswith("protocol:"):
             title = header.split(":", 1)[1].strip()
             f = _subfields(body)
@@ -491,11 +506,48 @@ class CanonImportService:
         # 4. NPCs at their canonical location.
         for n in proposal.npcs:
             mode = n.communication_mode if n.communication_mode in _LEGAL_COMMUNICATION_MODES else "SPOKEN"
-            self.session.add(NPC(
+            npc = NPC(
                 campaign_id=campaign_id, name=n.name, personality=n.personality,
                 voice_register=n.voice, goals=[n.goal] if n.goal else [],
                 current_location_id=by_key[n.location].id if n.location and n.location in by_key else None,
-                communication_mode=mode))
+                communication_mode=mode)
+            self.session.add(npc)
+            await self.session.flush()
+            profile = n.belief_profile
+            if profile is not None:
+                profile = profile.model_copy(update={
+                    "source": BeliefSource.IMPORTED_CANON,
+                    "provenance": f"CANON_IMPORT:{row.id}:{n.key}",
+                })
+            elif n.deity_reference or n.religious_role:
+                from app.npcs.belief_generator import knowledge_for_role
+                from app.services.faith import FaithService
+
+                deity_key = None
+                if n.deity_reference:
+                    resolution = await FaithService(self.session).resolve_deity_reference(
+                        campaign_id, n.deity_reference
+                    )
+                    if resolution.deity_key is None:
+                        raise ConflictError(
+                            f"imported NPC '{n.name}' deity {n.deity_reference!r} "
+                            "does not resolve uniquely in an active pantheon"
+                        )
+                    deity_key = resolution.deity_key
+                profile = BeliefProfile(
+                    primary_deity_key=deity_key,
+                    stance=BeliefStance.DEVOUT if n.religious_role else BeliefStance.BELIEVER,
+                    devotion=DevotionLevel.DEVOUT if n.religious_role else DevotionLevel.ORDINARY,
+                    visibility=BeliefVisibility.PUBLIC,
+                    religious_role=n.religious_role,
+                    knowledge_level=knowledge_for_role(n.religious_role),
+                    source=BeliefSource.IMPORTED_CANON,
+                    provenance=f"CANON_IMPORT:{row.id}:{n.key}",
+                )
+            if profile is not None:
+                from app.services.beliefs import BeliefService
+
+                await BeliefService(self.session).set_npc_belief(npc, profile)
 
         # 5. factions + threats → world-pressure fronts (Threat).
         for f in list(proposal.factions):

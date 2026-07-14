@@ -99,6 +99,20 @@ class Character(Base, TimestampMixin):
     # origin_text; both are kept. See app/services/campaigns/identity.py.
     identity: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
+    # Religious identity is independent from class and from the broader identity
+    # document.  It is validated/edited through BeliefService and may be NULL.
+    belief_profile: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, nullable=True, default=None
+    )
+    # Mechanical Cleric source/domain are deliberately separate from personal
+    # belief. A character may respect a deity that cannot grant Cleric powers.
+    cleric_deity_key: Mapped[str | None] = mapped_column(
+        String(80), nullable=True, default=None
+    )
+    cleric_domain: Mapped[str | None] = mapped_column(
+        String(40), nullable=True, default=None
+    )
+
     # Explicit alternate names for entity resolution (e.g. Thai transliteration
     # "อาเรีย" for "Aria"). The player's Discord display name is NOT an alias.
     aliases: Mapped[list[str]] = mapped_column(JSON, default=list)

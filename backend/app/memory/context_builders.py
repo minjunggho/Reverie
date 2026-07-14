@@ -244,6 +244,20 @@ async def build_npc_response_context(
     memory_block = recalled.as_prompt_block(listener_name or listener_ref)
     memory_section = (f"MEMORY_OF_LISTENER (ตอบให้สอดคล้องกับความรู้สึก/ความทรงจำนี้):\n"
                       f"{memory_block}\n") if memory_block else ""
+    # Campaign-active, per-NPC religious knowledge only. Secret character belief
+    # is absent until this particular NPC has legitimately learned it.
+    religious_section = ""
+    from app.core.ids import parse_entity_ref
+    listener_kind, listener_id = parse_entity_ref(listener_ref)
+    if listener_kind == "character" and listener_id:
+        from app.services.religious_interactions import ReligiousInteractionService
+
+        religious = await ReligiousInteractionService(session).build_context(
+            campaign_id=npc.campaign_id, npc_id=npc.id, character_id=listener_id,
+        )
+        block = religious.as_prompt_block()
+        if block:
+            religious_section = block + "\n"
     persona = (
         f"ชื่อ={npc.name}; บุคลิก={npc.personality or '-'}; "
         f"น้ำเสียง={npc.voice_register or '-'}; อารมณ์={npc.emotional_state}; "
@@ -259,6 +273,7 @@ async def build_npc_response_context(
                 f"KNOWN_TO_NPC:\n{known}\n"
                 f"{proto_block}"
                 f"{memory_section}"
+                f"{religious_section}"
                 f"{listener_line}\n"
                 f"UTTERANCE: {utterance}"
             ),

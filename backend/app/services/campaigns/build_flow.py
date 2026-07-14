@@ -14,7 +14,7 @@ import re
 import secrets
 from math import ceil
 
-from app.core.errors import RulesViolation
+from app.core.errors import NotFoundError, ReverieError, RulesViolation
 from app.core.logging import get_logger
 from app.discord_bridge.dto import (
     ActionButton,
@@ -46,6 +46,19 @@ SPELL_CONFIRM = "✅ ยืนยันตัวเลือก"
 SPELL_BACK = "↩ ย้อนกลับ"
 SPELL_CANCEL = "✖ ยกเลิกการสร้าง"
 _SPELL_COMPONENT_PREFIX = "rvspell"
+
+BELIEF_SKIP = "ข้าม — ไม่มีศาสนาที่สำคัญกับตัวละคร"
+BELIEF_CHOOSE = "เชื่อในเทพหรือศาสนา"
+BELIEF_AGNOSTIC = "ไม่แน่ใจว่าเทพมีอยู่จริง (Agnostic)"
+BELIEF_ATHEIST = "ไม่เชื่อในเทพ (Atheist)"
+BELIEF_FORMER = "เคยศรัทธา แต่ตอนนี้ไม่แล้ว"
+BELIEF_SECRET = "ศรัทธา แต่เก็บเป็นความลับ"
+BELIEF_MULTI = "นับถือเทพมากกว่าหนึ่งองค์"
+BELIEF_FINISH = "✅ จบส่วนความเชื่อ"
+BELIEF_ADD_SECONDARY = "เพิ่มเทพรอง / เทพตามวัฒนธรรม"
+BELIEF_MAKE_SECRET = "เก็บความเชื่อเป็นความลับ"
+BELIEF_SECONDARY_DONE = "✅ เลือกเทพรองเสร็จแล้ว"
+BELIEF_EDIT = "✏️ แก้ความเชื่อ"
 
 _AB_TH = {"str": "STR พลัง", "dex": "DEX คล่องแคล่ว", "con": "CON อึด",
           "int": "INT ปัญญา", "wis": "WIS สังเกตการณ์", "cha": "CHA เสน่ห์"}
@@ -89,7 +102,9 @@ class BuildFlow:
             )
         return await handler(draft, data, text.strip(), channel_id)
 
-    def render(self, data: dict, channel_id: str) -> BridgeResult:
+    async def render(
+        self, data: dict, channel_id: str, *, campaign_id: str | None = None
+    ) -> BridgeResult:
         """Render the exact persisted Stage-B step without mutating the draft."""
         build = data.get("_build") or {}
         step = build.get("step")
@@ -130,9 +145,24 @@ class BuildFlow:
                 return self._expertise_step(data, channel_id)
             if step in {"cantrips", "book", "prepared"}:
                 return self._spell_selection_step(data, channel_id, key=step)
+            if step == "belief":
+                if not campaign_id:
+                    return self._diagnostic(channel_id, "belief step is missing campaign scope")
+                return await self._belief_step(data, channel_id, campaign_id=campaign_id)
             if step == "review":
+                if not campaign_id:
+                    return self._diagnostic(channel_id, "review step is missing campaign scope")
+                from app.services.beliefs import BeliefService
+                from app.services.faith import FaithService
+
+                async with self.db.session() as session:
+                    await BeliefService(
+                        session, FaithService(session)
+                    ).validate_profile(
+                        campaign_id, build.get("belief_profile")
+                    )
                 return self._review_step(data, channel_id)
-        except (KeyError, RulesViolation, TypeError, ValueError) as exc:
+        except (KeyError, ReverieError, TypeError, ValueError) as exc:
             return self._diagnostic(channel_id, str(exc))
         return self._diagnostic(
             channel_id, f"ไม่รู้จักขั้นตอนที่บันทึกไว้: {step!r}"
@@ -525,9 +555,7 @@ class BuildFlow:
             return await self._begin_spell_step(draft, data, channel_id, "book")
         if sc and sc.prepared_count > 0 and "prepared" not in data["_build"]:
             return await self._begin_spell_step(draft, data, channel_id, "prepared")
-        data["_build"]["step"] = "review"
-        await self._save(draft, data)
-        return self._review_step(data, channel_id)
+        return await self._begin_belief_step(draft, data, channel_id)
 
     async def _begin_spell_step(
         self, draft, data: dict, channel_id: str, key: str
@@ -921,9 +949,7 @@ class BuildFlow:
             return await self._begin_spell_step(draft, data, channel_id, "book")
         if key in {"cantrips", "book"} and sc and sc.prepared_count > 0:
             return await self._begin_spell_step(draft, data, channel_id, "prepared")
-        build["step"] = "review"
-        await self._save(draft, data)
-        return self._review_step(data, channel_id)
+        return await self._begin_belief_step(draft, data, channel_id)
 
     async def _back_from_spell(
         self, draft, data: dict, channel_id: str, key: str
@@ -942,7 +968,9 @@ class BuildFlow:
         build["_return_spell_step"] = key
         build["step"] = previous
         await self._save(draft, data)
-        return self.render(data, channel_id)
+        return await self.render(
+            data, channel_id, campaign_id=draft.campaign_id
+        )
 
     def _pre_spell_step(self, data: dict) -> str:
         build = data["_build"]
@@ -1014,6 +1042,418 @@ class BuildFlow:
                     "expected selected_count <= required_count")
         return None
 
+    # ---------- step: optional belief + separate Cleric mechanics --------------------
+    async def _begin_belief_step(
+        self, draft: CharacterDraft, data: dict, channel_id: str
+    ) -> BridgeResult:
+        build = data["_build"]
+        build["step"] = "belief"
+        build.setdefault("belief_stage", "broad")
+        await self._save(draft, data)
+        return await self._belief_step(
+            data, channel_id, campaign_id=draft.campaign_id
+        )
+
+    async def _belief_step(
+        self,
+        data: dict,
+        channel_id: str,
+        *,
+        campaign_id: str,
+        notice: str = "",
+    ) -> BridgeResult:
+        from app.rules_content.faith_registry import get_faith_registry
+        from app.rules_content.faith_registry import FaithContentError
+        from app.services.beliefs import BeliefService
+        from app.services.faith import FaithService
+
+        build = data["_build"]
+        stage = build.get("belief_stage", "broad")
+        async with self.db.session() as session:
+            faith = FaithService(session)
+            belief = BeliefService(session, faith)
+            try:
+                profile = await belief.validate_profile(
+                    campaign_id, build.get("belief_profile")
+                )
+                selectable = await faith.list_selectable_deities(campaign_id)
+                cleric_deities = await faith.list_cleric_compatible_deities(campaign_id)
+            except (FaithContentError, NotFoundError, TypeError, ValueError) as exc:
+                return self._diagnostic(channel_id, str(exc))
+
+        prefix = f"⚠️ {notice}\n\n" if notice else ""
+        if stage == "broad":
+            body = (
+                prefix
+                + "ตัวละครของเจ้าเชื่อในเทพหรือศาสนาไหม? ความเชื่อนั้นสำคัญ "
+                  "เป็นเรื่องตามวัฒนธรรม ยังไม่แน่ใจ เป็นความลับ หรือปฏิเสธศาสนา?\n\n"
+                  "ส่วนนี้เป็นตัวตน ไม่ใช่ Class และข้ามได้"
+            )
+            return _card(channel_id, "ความเชื่อ (ไม่บังคับ)", body, [
+                BELIEF_CHOOSE, BELIEF_AGNOSTIC, BELIEF_ATHEIST,
+                BELIEF_FORMER, BELIEF_SECRET, BELIEF_MULTI, BELIEF_SKIP,
+            ])
+
+        if stage in {"deity", "secondary", "cleric_deity"}:
+            pool = cleric_deities if stage == "cleric_deity" else selectable
+            if stage == "secondary" and profile is not None:
+                excluded = {profile.primary_deity_key, *profile.secondary_deity_keys}
+                pool = [deity for deity in pool if deity.key not in excluded]
+            if not pool:
+                if stage == "secondary":
+                    return await self._belief_details_step(
+                        data, channel_id, campaign_id=campaign_id,
+                        notice=notice or "ไม่มีเทพองค์อื่นในเนื้อหาที่แคมเปญเปิดใช้",
+                    )
+                return self._diagnostic(
+                    channel_id,
+                    f"class={build.get('class')}; pool={stage}; legal_count=0; "
+                    "expected an active campaign pantheon with legal deities",
+                )
+            title = {
+                "deity": "เลือกเทพที่เกี่ยวข้องกับความเชื่อ",
+                "secondary": "เลือกเทพรอง / เทพตามวัฒนธรรม",
+                "cleric_deity": "เลือกแหล่งพลังของ Cleric",
+            }[stage]
+            body = prefix + (
+                "เลือกจากเทพที่แคมเปญนี้เปิดใช้เท่านั้น หรือพิมพ์ชื่อไทย/อังกฤษ/นามแฝง\n"
+            )
+            if stage == "cleric_deity":
+                body += "รายการนี้มีเฉพาะเทพที่ให้พลัง Cleric ได้ — Ao จะไม่ผ่านขั้นนี้"
+            choices = [
+                f"{deity.name_th} ({deity.canonical_name_en})" for deity in pool[:23]
+            ]
+            if stage == "secondary":
+                choices.append(BELIEF_SECONDARY_DONE)
+            return _card(channel_id, title, body, choices)
+
+        if stage == "details":
+            return await self._belief_details_step(
+                data, channel_id, campaign_id=campaign_id, notice=notice
+            )
+
+        if stage == "cleric_domain":
+            deity_key = build.get("cleric_deity_key")
+            deity = get_faith_registry().get_deity(deity_key or "")
+            if deity is None:
+                return self._diagnostic(
+                    channel_id, f"class=cleric; missing deity={deity_key!r}"
+                )
+            return _card(
+                channel_id,
+                "เลือก Domain ของ Cleric",
+                prefix + f"{deity.name_th} ({deity.canonical_name_en}) รองรับ Domain ต่อไปนี้",
+                list(deity.domains),
+            )
+        return self._diagnostic(channel_id, f"unknown belief stage: {stage!r}")
+
+    async def _belief_details_step(
+        self,
+        data: dict,
+        channel_id: str,
+        *,
+        campaign_id: str,
+        notice: str = "",
+    ) -> BridgeResult:
+        from app.rules_content.faith_registry import get_faith_registry
+        from app.services.beliefs import BeliefService
+
+        profile = BeliefService.decode(data["_build"].get("belief_profile"))
+        if profile is None:
+            return self._diagnostic(channel_id, "belief details missing profile")
+        registry = get_faith_registry()
+        names = []
+        if profile.primary_deity_key:
+            deity = registry.get_deity(profile.primary_deity_key)
+            names.append(deity.name_th if deity else profile.primary_deity_key)
+        for key in profile.secondary_deity_keys:
+            deity = registry.get_deity(key)
+            names.append(deity.name_th if deity else key)
+        deity_line = ", ".join(names) or "ไม่มีเทพหลัก"
+        body = (
+            (f"⚠️ {notice}\n\n" if notice else "")
+            + f"สถานะ: **{profile.stance.value}** · เทพ: **{deity_line}**\n"
+              f"การเปิดเผย: **{profile.visibility.value}**\n\n"
+              "จะพิมพ์เหตุผล ความสงสัย เครื่องหมายศักดิ์สิทธิ์ หรือสิ่งที่ยึดถือเพิ่มก็ได้ "
+              "ทุกคำถามเป็นทางเลือก"
+        )
+        choices = [BELIEF_FINISH]
+        if profile.primary_deity_key:
+            choices.append(BELIEF_ADD_SECONDARY)
+        if profile.visibility.value != "SECRET":
+            choices.append(BELIEF_MAKE_SECRET)
+        return _card(channel_id, "รายละเอียดความเชื่อ", body, choices)
+
+    async def _on_belief(
+        self, draft, data: dict, text: str, channel_id: str
+    ) -> BridgeResult:
+        from app.rules_content.choice_names import normalize_choice_name
+        from app.schemas.belief import (
+            BeliefProfile,
+            BeliefSource,
+            BeliefStance,
+            BeliefVisibility,
+            DevotionLevel,
+        )
+        from app.services.beliefs import BeliefService
+        from app.services.faith import FaithService
+
+        build = data["_build"]
+        stage = build.get("belief_stage", "broad")
+        normalized = normalize_choice_name(text)
+
+        def profile_for(
+            stance: BeliefStance,
+            *,
+            primary: str | None = None,
+            former: str | None = None,
+            visibility: BeliefVisibility = BeliefVisibility.PUBLIC,
+            reason: str | None = None,
+            doubt: str | None = None,
+            secondary: tuple[str, ...] = (),
+        ) -> BeliefProfile:
+            devotion = (
+                DevotionLevel.NONE if stance in {
+                    BeliefStance.AGNOSTIC, BeliefStance.ATHEIST,
+                    BeliefStance.FORMER_BELIEVER, BeliefStance.HOSTILE_TO_RELIGION,
+                }
+                else DevotionLevel.CASUAL if stance is BeliefStance.CULTURAL
+                else DevotionLevel.ORDINARY
+            )
+            return BeliefProfile(
+                primary_deity_key=primary,
+                secondary_deity_keys=secondary,
+                stance=stance,
+                devotion=devotion,
+                visibility=visibility,
+                personal_reason=reason,
+                doubt=doubt,
+                former_deity_key=former,
+                source=BeliefSource.PLAYER_AUTHORED,
+                provenance="CHARACTER_CREATION_V2",
+            )
+
+        async with self.db.session() as session:
+            faith = FaithService(session)
+            belief = BeliefService(session, faith)
+            if stage == "broad":
+                if text == BELIEF_SKIP or normalized in {"skip", "none", "no religion"}:
+                    build["belief_profile"] = None
+                    return await self._finish_belief(draft, data, channel_id)
+                if text == BELIEF_AGNOSTIC or "agnostic" in normalized or "ไม่แน่ใจ" in text:
+                    build["belief_profile"] = belief.encode(profile_for(BeliefStance.AGNOSTIC))
+                    build["belief_stage"] = "details"
+                elif text == BELIEF_ATHEIST or "atheist" in normalized or "ไม่เชื่อ" in text:
+                    build["belief_profile"] = belief.encode(profile_for(BeliefStance.ATHEIST))
+                    build["belief_stage"] = "details"
+                elif text == BELIEF_FORMER:
+                    build["belief_profile"] = belief.encode(profile_for(BeliefStance.FORMER_BELIEVER))
+                    build["belief_stage"] = "details"
+                elif text in {BELIEF_CHOOSE, BELIEF_SECRET, BELIEF_MULTI}:
+                    build["belief_intent"] = (
+                        "secret" if text == BELIEF_SECRET else
+                        "multi" if text == BELIEF_MULTI else "believer"
+                    )
+                    build["belief_stage"] = "deity"
+                else:
+                    keys = await self._deity_keys_in_text(faith, draft.campaign_id, text)
+                    if not keys:
+                        return await self._belief_step(
+                            data, channel_id, campaign_id=draft.campaign_id,
+                            notice="ยังจับความหมายไม่ได้ เลือกแนวทางจากปุ่ม หรือพิมพ์ชื่อเทพให้ชัดเจน",
+                        )
+                    lower = text.casefold()
+                    former = any(token in lower for token in ("no longer", "former", "left the faith"))
+                    secret = "secret" in lower or "ความลับ" in text or "ปิดบัง" in text
+                    multi = len(keys) > 1
+                    if former:
+                        profile = profile_for(
+                            BeliefStance.FORMER_BELIEVER,
+                            former=keys[0], reason=text, doubt=text,
+                        )
+                    else:
+                        profile = profile_for(
+                            BeliefStance.MULTI_FAITH if multi else (
+                                BeliefStance.SECRET_BELIEVER if secret else BeliefStance.BELIEVER
+                            ),
+                            primary=keys[0], secondary=tuple(keys[1:]), reason=text,
+                            visibility=BeliefVisibility.SECRET if secret else BeliefVisibility.PUBLIC,
+                            doubt=text if any(token in lower for token in ("doubt", "not trust", "ไม่ไว้ใจ")) else None,
+                        )
+                    build["belief_profile"] = belief.encode(profile)
+                    build["belief_stage"] = "details"
+                await self._save(draft, data)
+                return await self._belief_step(
+                    data, channel_id, campaign_id=draft.campaign_id
+                )
+
+            if stage in {"deity", "cleric_deity"}:
+                resolution = await faith.resolve_deity_reference(draft.campaign_id, text)
+                keys = (
+                    [resolution.deity_key] if resolution.deity_key
+                    else await self._deity_keys_in_text(faith, draft.campaign_id, text)
+                )
+                if len(keys) != 1:
+                    detail = (
+                        "ชื่อนี้ตรงกับหลายองค์: "
+                        + ", ".join(resolution.candidate_keys or tuple(keys))
+                        if resolution.candidate_keys or len(keys) > 1 else
+                        "ไม่พบชื่อนี้ใน pantheon ที่แคมเปญเปิดใช้"
+                    )
+                    return await self._belief_step(
+                        data, channel_id, campaign_id=draft.campaign_id, notice=detail
+                    )
+                deity = await faith.get_deity(draft.campaign_id, keys[0])
+                if stage == "cleric_deity":
+                    if deity is None or not deity.cleric_capable:
+                        return await self._belief_step(
+                            data, channel_id, campaign_id=draft.campaign_id,
+                            notice=f"{text} ไม่สามารถเป็นแหล่งพลังของ Cleric ได้",
+                        )
+                    build["cleric_deity_key"] = deity.key
+                    build["belief_stage"] = "cleric_domain"
+                else:
+                    intent = build.pop("belief_intent", "believer")
+                    stance = (
+                        BeliefStance.SECRET_BELIEVER if intent == "secret"
+                        else BeliefStance.MULTI_FAITH if intent == "multi"
+                        else BeliefStance.BELIEVER
+                    )
+                    visibility = (
+                        BeliefVisibility.SECRET if intent == "secret" else BeliefVisibility.PUBLIC
+                    )
+                    build["belief_profile"] = belief.encode(profile_for(
+                        stance, primary=deity.key, visibility=visibility
+                    ))
+                    build["belief_stage"] = "secondary" if intent == "multi" else "details"
+                await self._save(draft, data)
+                return await self._belief_step(
+                    data, channel_id, campaign_id=draft.campaign_id
+                )
+
+            if stage == "secondary":
+                if text == BELIEF_SECONDARY_DONE:
+                    build["belief_stage"] = "details"
+                else:
+                    resolution = await faith.resolve_deity_reference(draft.campaign_id, text)
+                    keys = (
+                        [resolution.deity_key] if resolution.deity_key
+                        else await self._deity_keys_in_text(
+                            faith, draft.campaign_id, text
+                        )
+                    )
+                    if len(keys) != 1:
+                        return await self._belief_step(
+                            data, channel_id, campaign_id=draft.campaign_id,
+                            notice="ไม่พบชื่อเทพรองที่ชัดเจนใน pantheon ที่เปิดใช้",
+                        )
+                    current = belief.decode(build.get("belief_profile"))
+                    deity_key = keys[0]
+                    if current is None or deity_key == current.primary_deity_key:
+                        return await self._belief_step(
+                            data, channel_id, campaign_id=draft.campaign_id,
+                            notice="เทพองค์นี้ถูกเลือกไว้แล้ว",
+                        )
+                    secondary = tuple(dict.fromkeys((
+                        *current.secondary_deity_keys, deity_key,
+                    )))
+                    current = current.model_copy(update={"secondary_deity_keys": secondary})
+                    build["belief_profile"] = belief.encode(current)
+                await self._save(draft, data)
+                return await self._belief_step(
+                    data, channel_id, campaign_id=draft.campaign_id
+                )
+
+            if stage == "details":
+                current = belief.decode(build.get("belief_profile"))
+                if current is None:
+                    return self._diagnostic(channel_id, "belief details missing profile")
+                if text == BELIEF_FINISH:
+                    return await self._finish_belief(draft, data, channel_id)
+                if text == BELIEF_ADD_SECONDARY:
+                    build["belief_stage"] = "secondary"
+                elif text == BELIEF_MAKE_SECRET:
+                    current = current.model_copy(update={
+                        "visibility": BeliefVisibility.SECRET,
+                        "stance": BeliefStance.SECRET_BELIEVER
+                        if current.primary_deity_key else current.stance,
+                    })
+                    build["belief_profile"] = belief.encode(current)
+                else:
+                    # One optional free-form answer is retained verbatim. It does
+                    # not grant lore or mechanics and can be edited later.
+                    current = current.model_copy(update={"personal_reason": text})
+                    build["belief_profile"] = belief.encode(current)
+                await self._save(draft, data)
+                return await self._belief_step(
+                    data, channel_id, campaign_id=draft.campaign_id,
+                    notice="บันทึกรายละเอียดแล้ว" if text not in {BELIEF_ADD_SECONDARY, BELIEF_MAKE_SECRET} else "",
+                )
+
+            if stage == "cleric_domain":
+                deity_key = build.get("cleric_deity_key")
+                domains = await faith.list_deity_domains(draft.campaign_id, deity_key)
+                selected = next(
+                    (domain for domain in domains if normalize_choice_name(domain) == normalized),
+                    None,
+                )
+                if selected is None:
+                    return await self._belief_step(
+                        data, channel_id, campaign_id=draft.campaign_id,
+                        notice=f"Domain นี้ใช้กับเทพองค์ที่เลือกไม่ได้ — เลือกจาก {', '.join(domains)}",
+                    )
+                await belief.validate_cleric_mechanics(
+                    draft.campaign_id,
+                    char_class=build["class"], deity_key=deity_key, domain=selected,
+                )
+                build["cleric_domain"] = selected
+                return await self._advance_to_review(draft, data, channel_id)
+
+        return self._diagnostic(channel_id, f"unknown belief stage: {stage!r}")
+
+    async def _deity_keys_in_text(self, faith, campaign_id: str, text: str) -> list[str]:
+        from app.rules_content.choice_names import normalize_choice_name
+
+        direct = await faith.resolve_deity_reference(campaign_id, text)
+        if direct.deity_key:
+            return [direct.deity_key]
+        haystack = f" {normalize_choice_name(text)} "
+        found: list[str] = []
+        for deity in await faith.list_selectable_deities(campaign_id):
+            refs = (deity.key, deity.canonical_name_en, deity.name_th, *deity.aliases)
+            if any(
+                (needle := normalize_choice_name(ref)) and f" {needle} " in haystack
+                for ref in refs
+            ):
+                found.append(deity.key)
+        return found
+
+    async def _finish_belief(
+        self, draft: CharacterDraft, data: dict, channel_id: str
+    ) -> BridgeResult:
+        from app.services.beliefs import BeliefService
+        from app.services.faith import FaithService
+
+        build = data["_build"]
+        async with self.db.session() as session:
+            await BeliefService(session, FaithService(session)).validate_profile(
+                draft.campaign_id, build.get("belief_profile")
+            )
+        if build.get("class") == "cleric":
+            build["belief_stage"] = "cleric_deity"
+            await self._save(draft, data)
+            return await self._belief_step(
+                data, channel_id, campaign_id=draft.campaign_id
+            )
+        return await self._advance_to_review(draft, data, channel_id)
+
+    async def _advance_to_review(
+        self, draft: CharacterDraft, data: dict, channel_id: str
+    ) -> BridgeResult:
+        data["_build"]["step"] = "review"
+        await self._save(draft, data)
+        return self._review_step(data, channel_id)
+
     # ---------- review + finalize --------------------------------------------------------
     def _review_step(self, data, channel_id) -> BridgeResult:
         b = data["_build"]
@@ -1073,7 +1513,44 @@ class BuildFlow:
             mech.append(f"เตรียมไว้: {', '.join(self.reg.get_spell(s).name_th_hint for s in b['prepared'])}")
         lines.extend(mech)
 
-        # 4) reviewable story seeds — proposed, pending campaign validation.
+        # 4) personal belief and Cleric mechanics are visibly separate.
+        from app.rules_content.faith_registry import get_faith_registry
+        from app.services.beliefs import BeliefService
+        profile = BeliefService.decode(b.get("belief_profile"))
+        if profile is None:
+            lines.append("\n__ความเชื่อส่วนตัว__\nไม่มีศาสนาที่สำคัญกับตัวละคร")
+        else:
+            faith_registry = get_faith_registry()
+            keys = [profile.primary_deity_key, *profile.secondary_deity_keys]
+            deity_names = [
+                faith_registry.get_deity(key).name_th
+                for key in keys if key and faith_registry.get_deity(key)
+            ]
+            belief_bits = [
+                f"ท่าที: {profile.stance.value}",
+                f"ระดับ: {profile.devotion.value}",
+                f"การเปิดเผย: {profile.visibility.value}",
+            ]
+            if deity_names:
+                belief_bits.append("เทพ: " + ", ".join(deity_names))
+            if profile.former_deity_key:
+                former = faith_registry.get_deity(profile.former_deity_key)
+                belief_bits.append(
+                    "อดีตศรัทธา: "
+                    + (former.name_th if former else profile.former_deity_key)
+                )
+            if profile.personal_reason:
+                belief_bits.append("เหตุผล: " + profile.personal_reason)
+            lines.append("\n__ความเชื่อส่วนตัว__\n" + "\n".join(belief_bits))
+        if b.get("class") == "cleric":
+            deity = get_faith_registry().get_deity(b.get("cleric_deity_key") or "")
+            lines.append(
+                "\n__กลไก Cleric__\n"
+                f"แหล่งพลัง: {deity.name_th if deity else '—'} · "
+                f"Domain: {b.get('cleric_domain') or '—'}"
+            )
+
+        # 5) reviewable story seeds — proposed, pending campaign validation.
         from app.services.campaigns.identity import generate_seeds
 
         seeds = generate_seeds(identity)
@@ -1082,9 +1559,18 @@ class BuildFlow:
             lines.extend(f"• {s.text}" for s in seeds)
 
         return _card(channel_id, "ตรวจทานครั้งสุดท้าย", "\n".join(lines),
-                     [CONFIRM_BUILD, RESTART_BUILD])
+                     [CONFIRM_BUILD, BELIEF_EDIT, RESTART_BUILD])
 
     async def _on_review(self, draft, data, text, channel_id) -> BridgeResult:
+        if BELIEF_EDIT in text:
+            data["_build"]["step"] = "belief"
+            data["_build"]["belief_stage"] = (
+                "details" if data["_build"].get("belief_profile") else "broad"
+            )
+            await self._save(draft, data)
+            return await self._belief_step(
+                data, channel_id, campaign_id=draft.campaign_id
+            )
         if RESTART_BUILD in text or text.startswith("✏"):
             return await self.start(draft, data, channel_id)
         if CONFIRM_BUILD in text or "สร้าง" in text or text.startswith("✅"):

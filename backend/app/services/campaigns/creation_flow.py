@@ -172,7 +172,9 @@ class CreationFlowService:
                             kind=MessageKind.TABLE_NOTICE,
                         )])
                     data = dict(fresh.data or {})
-            return self.build.render(data, channel_id)
+            return await self.build.render(
+                data, channel_id, campaign_id=campaign_id
+            )
         if data.get("_awaiting_confirm"):
             return self._reflection_card(channel_id, data)
         return self._ask(channel_id, data.get("_last_prompt") or OPENING_QUESTION)

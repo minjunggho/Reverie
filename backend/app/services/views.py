@@ -26,6 +26,53 @@ def _mod(n: int) -> str:
     return f"+{m}" if m >= 0 else str(m)
 
 
+def build_belief_fields(
+    character: Character, *, owner_view: bool
+) -> list[dict]:
+    """Privacy-safe identity fields; secret/private faith is absent for others."""
+    from app.rules_content.faith_registry import get_faith_registry
+    from app.services.beliefs import BeliefService
+
+    profile = BeliefService.visible_profile(
+        character.belief_profile, owner_view=owner_view
+    )
+    fields: list[dict] = []
+    if profile is not None:
+        registry = get_faith_registry()
+        keys = [profile.primary_deity_key, *profile.secondary_deity_keys]
+        names = [
+            registry.get_deity(key).name_th
+            for key in keys if key and registry.get_deity(key)
+        ]
+        bits = [profile.stance.value, profile.devotion.value]
+        if names:
+            bits.append(", ".join(names))
+        if owner_view:
+            bits.append(profile.visibility.value)
+            if profile.personal_reason:
+                bits.append(profile.personal_reason)
+        fields.append({
+            "name": "ความเชื่อส่วนตัว",
+            "value": " · ".join(bits),
+            "inline": False,
+        })
+        if owner_view and profile.owner_notes:
+            fields.append({
+                "name": "บันทึกศาสนา (เจ้าของเท่านั้น)",
+                "value": profile.owner_notes,
+                "inline": False,
+            })
+    if owner_view and character.cleric_deity_key:
+        deity = get_faith_registry().get_deity(character.cleric_deity_key)
+        fields.append({
+            "name": "กลไก Cleric",
+            "value": f"{deity.name_th if deity else character.cleric_deity_key} · "
+                     f"Domain: {character.cleric_domain}",
+            "inline": False,
+        })
+    return fields
+
+
 async def build_character_sheet(
     session: AsyncSession, *, character: Character, channel_id: str
 ) -> OutboundMessage:
@@ -106,6 +153,10 @@ async def build_character_sheet(
         fields.append({"name": "สภาวะ", "value": ", ".join(character.conditions), "inline": False})
     if character.exhaustion:
         fields.append({"name": "ความอ่อนล้า", "value": f"ระดับ {character.exhaustion}", "inline": True})
+    from app.services.beliefs import BeliefService
+
+    await BeliefService(session).get_character_belief(character)
+    fields.extend(build_belief_fields(character, owner_view=True))
     return OutboundMessage(
         channel_id, "\n".join(lines), kind=MessageKind.CHARACTER_SHEET,
         title=f"{character.name} — {character.species} · {character.char_class}"

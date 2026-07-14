@@ -30,3 +30,8 @@ class NPC(Base, TimestampMixin):
     # How this NPC communicates: SPOKEN|SLATE|SIGN|TELEPATHY|NONVERBAL|OTHER. Default
     # preserves every existing NPC's behavior unchanged (spoken dialogue).
     communication_mode: Mapped[str] = mapped_column(String(20), default="SPOKEN")
+    # Same typed BeliefProfile payload used by Character. Imported canon and
+    # generated proposals are reconciled by BeliefService, never by JSON merging.
+    belief_profile: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, nullable=True, default=None
+    )

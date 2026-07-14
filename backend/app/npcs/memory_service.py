@@ -155,7 +155,13 @@ class NPCMemoryService:
             )
             self.session.add(memory)
 
-        # Accumulate relationship dimensions (clamped). Every interaction also
+        # Accumulate relationship dimensions only for a new source event. Discord
+        # retries may refresh the memory text, but must never apply trust twice.
+        if existing is not None:
+            await self.session.flush()
+            return memory
+
+        # Every new interaction also
         # increases familiarity a little — the NPC now knows this person better.
         rel = await self._relationship(npc_id, listener_ref)
         deltas = dict(cls.deltas)
@@ -170,6 +176,43 @@ class NPCMemoryService:
         rel.attitude = rel.current_stance
         if event_id is not None:
             rel.last_interaction_event_id = event_id
+        await self.session.flush()
+        return memory
+
+    async def record_typed_memory(
+        self, *, npc_id: str, subject_ref: str, event_id: str,
+        memory_type: str, summary: str, importance: int, valence: int,
+        source_ref: str, location_id: str | None = None, game_time: int = 0,
+        witnessed_directly: bool = True,
+        relationship_deltas: dict[str, int] | None = None,
+    ) -> NPCMemory:
+        """Commit a validated domain memory through the existing memory system.
+
+        ``event_id`` is mandatory and is the idempotency boundary. Callers own the
+        domain vocabulary; this method owns relationship accumulation and clamps.
+        """
+        existing = (await self.session.execute(select(NPCMemory).where(
+            NPCMemory.npc_id == npc_id, NPCMemory.event_id == event_id
+        ))).scalars().first()
+        if existing is not None:
+            return existing
+        memory = NPCMemory(
+            npc_id=npc_id, subject_ref=subject_ref, event_id=event_id,
+            memory_type=memory_type, summary=summary, importance=max(0, min(100, importance)),
+            emotional_valence=max(-3, min(3, valence)),
+            witnessed_directly=witnessed_directly, source_ref=source_ref,
+            location_id=location_id, game_time=game_time,
+        )
+        self.session.add(memory)
+        rel = await self._relationship(npc_id, subject_ref)
+        for dim, delta in (relationship_deltas or {}).items():
+            if dim in RELATIONSHIP_DIMENSIONS:
+                current = int(getattr(rel, dim) or 0)
+                setattr(rel, dim, max(_CLAMP_LO, min(_CLAMP_HI, current + int(delta))))
+        rel.current_stance = _derive_stance(rel)
+        rel.trust = int(getattr(rel, "trust", 0))
+        rel.attitude = rel.current_stance
+        rel.last_interaction_event_id = event_id
         await self.session.flush()
         return memory
 

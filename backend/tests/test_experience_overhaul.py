@@ -157,6 +157,12 @@ async def walk_nara_creation(table, author="owner-1", name="DM"):
     assert "Expertise" in (r.responses[0].title or "")
     r = await table.send("ลวงหลอก (deception)", author=author, name=name)
     r = await table.send("มือไว (sleight_of_hand)", author=author, name=name)
+    # Belief is optional and independent from class; this legacy journey chooses
+    # no meaningful religious identity before review.
+    assert "ความเชื่อ" in (r.responses[0].title or "")
+    r = await table.send(
+        "ข้าม — ไม่มีศาสนาที่สำคัญกับตัวละคร", author=author, name=name
+    )
     # Review card, then finalize.
     assert "ตรวจทาน" in (r.responses[0].title or "")
     return await table.send("✅ สร้างเลย", author=author, name=name)

@@ -1,5 +1,179 @@
 # Faith system
 
+## Phase 3 interaction architecture decision
+
+Phase 3 adds a bounded `ReligiousInteractionService` over existing state rather
+than adding another NPC-decision, memory, relationship, faction, or canon system.
+The service reads Phase 1 deity relationships and Phase 2 `BeliefProfile` values;
+NPC discoveries are stored as that NPC's existing `NPCFact` rows, meaningful
+events as existing `NPCMemory` rows, and social effects as existing
+`NPCRelationship` dimensions. Owner-approved temples and their mutable access or
+reputation state use separately categorized `CampaignCanonRecord` documents.
+Religious organizations reuse the current campaign faction representation
+(`Threat`) by ID. Objective imported canon records are never edited by an
+interaction commit.
+
+This representation requires no Phase 3 schema migration. It avoids depending on
+the concurrently developed geography migration and keeps campaign isolation in
+every query. Static doctrine metadata is an optional `interactions.json` beside a
+pantheon's existing manifest/deity files and is validated at application and bot
+startup against the same faith registry.
+
+## Religious context builder
+
+`ReligiousInteractionService.build_context()` returns an immutable,
+campaign-scoped `ReligiousInteractionContext`. The existing NPC response context
+builder includes its compact prompt block. It contains only the interacting
+person's public belief or facts this exact NPC legitimately learned, visible
+symbols, the NPC's own profile and religious role, active-pantheon deity
+relationships, doctrine entries for the involved deities, relevant episodic
+memories, relationship state, temple access, and the current religious location
+or event. It never includes the complete pantheon or `full_owner_provided_lore`.
+
+Shared belief permits recognition and ordinary religious vocabulary. The generic
+special-interaction evaluator explicitly emits zero automatic trust and no
+mechanical effect. A configured rival relationship may produce tension or a
+warning, never automatic combat. Personality, culture, interpretation, history,
+and existing relationship state remain visible to the NPC response generator, so
+two priests of the same deity need not agree or behave alike.
+
+## NPC religious knowledge and secrecy
+
+Private and secret character profiles are structurally absent from NPC context.
+`reveal_belief()` or `observe_religious_identity()` records a compact belief fact
+for one NPC only, with a typed source: visible symbol, clothing, prior disclosure,
+public reputation, temple record, witnessed ritual, shared faction, or player
+disclosure. A revelation also creates one idempotent
+`RELIGIOUS_REVELATION` memory. It does not make the fact ambient knowledge, and a
+different NPC receives nothing automatically.
+
+Callers must provide the committed source event ID. The existing memory service
+uses that ID as its retry boundary; repeated Discord delivery cannot create a
+second memory or reapply relationship deltas.
+
+## Priest behavior and doctrine
+
+Priest-like roles retain the Phase 2 typed role and knowledge level. The context
+therefore distinguishes a priest/theologian/inquisitor from an ordinary cultural
+follower without treating either role as a Cleric class. Priests may recognize
+known symbols and use the relevant bounded doctrine values in greetings,
+questions, warnings, explanations, prayers, or refusals. These are dialogue
+affordances, not automatic friendship or service access.
+
+Doctrine is data-driven. A pack may define values plus supported and opposed
+committed-event tags in `interactions.json`. Phase 3's Forgotten Realms entries
+encode only the doctrine examples supplied by the owner for Tyr, Torm, Selûne,
+Shar, Kelemvor, Lathander, Oghma, Silvanus, Tymora, and Bane. Generic evaluation
+compares validated witnessed/reported event tags to this metadata; gameplay code
+contains no per-deity branches. NPC personal interpretation remains in
+`BeliefProfile.personal_interpretation`, allowing disagreement within one faith.
+
+## Religious memories and relationship effects
+
+`record_religious_behavior()` writes only an allowlisted meaningful type through
+the existing `NPCMemoryService`: faith revelation or lie, shared prayer, shrine
+desecration, temple protection, religious promise or breach, sacred-object
+return, priest attack, recruitment refusal, funeral rite, or opposition to
+undead. Casual mentions remain ordinary short-lived interactions. A caller may
+provide validated relationship deltas, which are clamped through the existing
+multi-dimensional relationship model and applied once per source event.
+
+Memory and relationship changes do not rewrite objective canon. Faction
+reputation changes are likewise event-idempotent and campaign-scoped, stored as
+state records linked to the existing faction entity.
+
+## Temple policies and services
+
+`TemplePolicy` is an owner-approved, typed canonical document linked to an active
+deity, an existing campaign location, and optionally an existing campaign
+faction. It supports public, member, clergy-only, restricted-archive, sacred
+inner-chamber, and emergency-sanctuary areas plus healing, funeral, education,
+ritual, donation, lodging, and religious-item-sale service declarations.
+
+Public areas follow public policy. Member and clergy areas validate the
+character's profile; archives and inner chambers require explicit persisted
+permission. Emergency sanctuary must be enabled by policy. A service must be
+declared, available, accessible, and have an owner-approved price.
+`purchase_temple_service()` debits the existing `WalletService` ledger with its
+normal idempotency key. An empty price is rejected rather than interpreted as a
+free healing, ritual, item, or room. Inventory-bearing services still require a
+separate existing inventory/shop transaction by the caller; Phase 3 does not
+invent items.
+
+## Validated special interactions
+
+The generic evaluator accepts typed trigger inputs from context and committed
+event tags. Its typed outcome vocabulary includes dialogue stance, recognition,
+proof request, warning, refusal, service availability, access change, memory,
+relationship or faction-reputation change, clue disclosure, quest proposal, and
+scheduled consequence. The evaluator currently produces only safe dialogue
+affordances. Stateful outcomes must be committed by the corresponding validated
+service; an LLM proposal is never itself a database mutation.
+
+Major temples or organizations are never generated automatically. Owner/imported
+canon must call `register_temple()` with provenance. A small local shrine may be
+proposed elsewhere, but that proposal does not become canon through this API.
+
+## Mechanical restrictions
+
+Belief, devotion, recognition, doctrine, reputation, and temple access never
+grant spells, slots, ability modifiers, advantage, damage, healing, class
+features, blessings, boons, divine intervention, or permanent effects. Paid
+"healing service" policy records availability and payment only; an actual healing
+effect would require an existing validated spell/effect pipeline. Ao remains a
+selectable personal belief and still has `cleric_capable=false`.
+
+## Custom campaign interaction content
+
+A custom pantheon gains the generic shared/rival interaction behavior from its
+existing deity relationships. To add doctrine-sensitive behavior, place an
+`interactions.json` in that pantheon's content-pack directory. Each entry names a
+deity key from the same validated registry, bounded value labels, committed-event
+tags it supports/opposes, and provenance. Unknown or duplicate keys fail startup.
+Do not place mechanics or unapproved lore in this file.
+
+Phase 3 public APIs future phases must reuse are:
+
+- `ReligiousInteractionService.build_context`
+- `reveal_belief` and `observe_religious_identity`
+- `evaluate_special_interactions`
+- `record_religious_behavior`
+- `register_temple` and `decide_temple_access`
+- `grant_temple_access`
+- `change_faction_reputation`
+- `purchase_temple_service`
+- `NPCMemoryService.record_typed_memory`
+
+Complex priest conversations, religious quest construction, miracles,
+blessings/punishments, divine intervention, religious combat, and a divine-boon
+system remain future work.
+
+## Phase 2 architecture decision
+
+Characters and NPCs share one typed `BeliefProfile` value object. The profile is
+serialized into a nullable JSON column on each entity instead of being folded into
+character identity, NPC personality, or the static rules registry. This keeps an
+edit atomic, allows existing rows to migrate as `NULL`, and avoids a second table
+whose ownership and campaign scope could drift from the entity it describes.
+
+`BeliefService` is the only write and validation boundary. It resolves every
+deity through the Phase 1 `FaithService`, verifies that all referenced pantheons
+are active for the entity's campaign, and revalidates stored profiles when they
+are read or at startup. A disabled or removed content pack therefore fails with a
+clear content error instead of leaking a deity from another campaign.
+
+Personal belief and Cleric mechanics are deliberately separate. Characters have
+nullable `cleric_deity_key` and `cleric_domain` fields validated together through
+the same service. A Fighter can believe in any active selectable deity; a Cleric's
+power source must additionally be Cleric-capable and its domain must be listed by
+that deity. Lore never grants mechanics.
+
+NPC religion generation is a bounded proposal service over the same profile. It
+uses explicit campaign context and active content, may propose no meaningful
+religious identity, and never overwrites imported canon. Religious role determines
+knowledge depth but does not assign a character class. Complex dialogue, miracles,
+quests, blessings, punishments, and religious combat remain outside Phase 2.
+
 ## Phase 1 architecture decision
 
 Faith content is a new versioned content-pack family inside the existing
@@ -117,10 +291,98 @@ must use `FaithService` for campaign-scoped access:
 
 They must not read bundled JSON directly or infer mechanics from `full_lore`.
 
+## BeliefProfile (Phase 2)
+
+`app.schemas.belief.BeliefProfile` is the shared immutable value object for a
+Character or NPC. It supports optional primary, secondary, and former deity keys;
+typed stance, devotion, visibility, religious role, and knowledge level; optional
+temple/faction linkage; personal reason and interpretation; sacred symbol,
+practices, taboo, doubt, religious conflict, conversion history, owner notes,
+source, and provenance. A profile does not require a primary deity. `NULL` means
+the person has no recorded or meaningful religious identity and remains valid.
+
+The serialized profile lives in `Character.belief_profile` or
+`NPC.belief_profile`. Edits replace only that JSON value and never replace
+character identity, NPC personality, memories, relationships, or class data.
+`BeliefService` validates every referenced deity against the entity's campaign
+and validates a temple/faction link against a same-campaign canonical entity.
+
+## Character creation behavior
+
+After ordinary class choices and spells, Character Creation 2.0 enters a persisted
+`belief` step. It first asks whether religion matters and how the character relates
+to it; it does not begin by forcing a deity menu. The player may choose a deity,
+no meaningful religion, agnostic, atheist, former believer, secret believer, or a
+multi-faith profile. Typed deity answers use the Phase 1 campaign resolver.
+
+Direct prose can capture an explicit deity plus obvious stance cues. For example,
+"raised in a temple of Tyr but I no longer trust the church" records Tyr as the
+former deity and retains the supplied doubt/reason. Follow-up detail is optional.
+The final review has an edit-belief action, and the exact substep/profile remains
+in the draft so `!rv resume` works after component expiry or restart.
+
+Only pantheons active in that campaign are offered. A campaign with no active
+pantheon can still create a non-religious character; a Cleric cannot complete
+until legal active content is available.
+
+## Cleric validation
+
+`Character.cleric_deity_key` and `Character.cleric_domain` are nullable mechanical
+fields, separate from `belief_profile`. A newly created Cleric must select an
+active deity with `cleric_capable=true`, and the selected domain must occur in that
+deity's declared domain list. Ao can be a personal/cultural belief but cannot be a
+Cleric power source. Fighters and other classes have no mechanical deity gate.
+Existing pre-Phase-2 rows migrate with all three new fields null.
+
+## NPC generation and imported canon
+
+`NPCBeliefGenerator.propose()` accepts `NPCBeliefContext` with culture, region,
+settlement, profession, class, family, faction, temple connection, personality,
+hardship, campaign tone, imported canon, and optional religious role. It returns
+a proposal, possibly with no profile. It only assigns a deity when the supplied
+context explicitly supports an active deity reference, so an evil deity is never
+randomly assigned. Ordinary NPCs are distributed among no meaningful identity,
+cultural, questioning, doubtful, agnostic, and atheist profiles rather than being
+automatically devout.
+
+Religious role is typed and remains independent from class. Priests,
+theologians, inquisitors, and religious officials receive deep knowledge;
+acolytes and similar roles receive informed knowledge. A role requiring a deity
+needs explicit deity context. `NPCService.create_npc()` accepts either an explicit
+profile or this generation context.
+
+Imported NPC belief is stored with `IMPORTED_CANON` source and import provenance.
+`BeliefService.set_npc_belief()` enforces source priority: generated proposals
+cannot overwrite imported canon, and the conflict is reported instead of silently
+changing the NPC.
+
+## Privacy and visibility
+
+`PUBLIC` belief may appear in public identity views. `PRIVATE` and `SECRET`
+profiles are omitted entirely for non-owner viewers. The owner's character sheet
+may show the full personal profile. `owner_notes` is always owner-only. Mechanical
+Cleric deity/domain is rendered separately and is not used to infer or reveal a
+secret personal belief.
+
+## APIs Phase 3 must reuse
+
+- `BeliefService.validate_profile`
+- `BeliefService.get_character_belief` / `set_character_belief`
+- `BeliefService.get_npc_belief` / `set_npc_belief`
+- `BeliefService.validate_cleric_mechanics`
+- `BeliefService.visible_profile`
+- `BeliefService.validate_all_persisted_profiles`
+- `NPCBeliefGenerator.propose`
+- `knowledge_for_role`
+- Phase 1 `FaithService` and `DeityResolver` methods listed above
+
+Phase 3 dialogue or temple systems must consume these validated values. They must
+not parse the JSON columns directly, expose private fields, overwrite imported
+canon, or infer divine powers from lore or devotion.
+
 ## Phase boundaries
 
-Phase 1 does not select or store a character belief, generate NPC religion,
-alter dialogue, create priests or temples, grant blessings, create religious
-quests, or invoke divine intervention. Those systems must add their own explicit
-state and authorization while reusing the registry, resolver, and campaign
-activation boundary above.
+Phase 2 stores beliefs, validates new Cleric selections, and provides bounded NPC
+belief proposals. It does not add priest dialogue, temples, blessings,
+punishments, miracles, divine intervention, religious quests, or religious combat
+mechanics.
