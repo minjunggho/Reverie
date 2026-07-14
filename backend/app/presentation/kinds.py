@@ -13,6 +13,7 @@ class MessageKind(StrEnum):
     CHARACTER_CREATION = "CHARACTER_CREATION"
     CHARACTER_REVEAL = "CHARACTER_REVEAL"
     SESSION_TITLE = "SESSION_TITLE"
+    CAMPAIGN_PROLOGUE = "CAMPAIGN_PROLOGUE"  # the cinematic Session-1 world-scale opening
     PLAYER_SAFE_RECAP = "PLAYER_SAFE_RECAP"
     SCENE_FRAME = "SCENE_FRAME"
     NPC_DIALOGUE = "NPC_DIALOGUE"
@@ -40,6 +41,7 @@ KIND_STYLE: dict[MessageKind, tuple[str, int]] = {
     MessageKind.CHARACTER_CREATION: ("✒️", 0x6FA8DC),
     MessageKind.CHARACTER_REVEAL: ("🎭", 0xB8860B),
     MessageKind.SESSION_TITLE: ("🎲", 0x8B6FB8),
+    MessageKind.CAMPAIGN_PROLOGUE: ("🎬", 0x8B6FB8),
     MessageKind.PLAYER_SAFE_RECAP: ("📖", 0x7A9E7E),
     MessageKind.SCENE_FRAME: ("🌄", 0x5B7C99),
     MessageKind.NPC_DIALOGUE: ("💬", 0xC0A16B),

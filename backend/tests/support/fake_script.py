@@ -21,6 +21,7 @@ from app.schemas.llm_io import (
     ActionInterpretation,
     ActionStep,
     AdjudicationDecision,
+    CampaignPrologue,
     ClassificationResult,
     ConsequenceProposal,
     CreationGuidance,
@@ -450,6 +451,46 @@ def _session_opening(messages, _model) -> OpeningScene:
     )
 
 
+def _campaign_prologue(messages, _model) -> CampaignPrologue:
+    """Fake cinematic prologue that provably threads the supplied canon: it echoes
+    the MAIN_GOAL verbatim and draws on a character hook, without inventing names."""
+    blob = _joined(messages)
+    # The MAIN_GOAL line carries a parenthetical note before the colon, so scan for
+    # it directly and keep only the goal sentence after "): ".
+    goal = "ปกป้องสิ่งที่เหลืออยู่"
+    for line in blob.splitlines():
+        if line.strip().startswith("MAIN_GOAL"):
+            goal = (line.split("):", 1)[-1] if "):" in line
+                    else line.split(":", 1)[-1]).strip() or goal
+            break
+    used = []
+    for line in blob.splitlines():
+        if line.strip().startswith("- ") and "desire=" in line:
+            frag = line.split("desire=", 1)[1].split(";", 1)[0].strip()
+            if frag:
+                used.append(f"desire:{frag}")
+            break
+    # Thread the SUPPLIED opening place into the descent so the prologue provably ends
+    # the zoom at the canon location rather than an invented one.
+    place = "ลานเล็กๆ"
+    for line in blob.splitlines():
+        if line.strip().startswith("OPENING_PLACE:"):
+            place = (line.split("OPENING_PLACE:", 1)[1].split("—", 1)[0]).strip() or place
+            break
+    return CampaignPrologue(
+        title="เถ้าถ่านแห่งยุคสุดท้าย",
+        world="โลกที่แก่เกินวัย ฟ้าสีตะกั่วแผ่คลุมแผ่นดินที่จำสงครามได้มากกว่าสันติ",
+        powers="อาณาจักรเก่ายังกุมอำนาจไว้หลวมๆ ศรัทธาเก่าเสื่อมถอย เวทมนตร์กลายเป็นทั้งพรและคำสาป",
+        crisis="ภัยกำลังคืบคลาน ผู้คนธรรมดาต้องทิ้งบ้าน ทิ้งไร่ หนีเงาที่ไม่มีใครเรียกชื่อได้",
+        approach=f"จากทุ่งกว้างสู่เมืองชายแดน จนถึง{place} ที่พวกเจ้ายืนอยู่ตอนนี้",
+        the_party="พวกเจ้าไม่ได้ถูกเลือกเพราะยิ่งใหญ่ แต่เพราะอยู่ที่นี่ ในวินาทีที่ทุกอย่างเริ่มพัง",
+        main_goal=goal,
+        first_beat="เสียงระฆังดังผิดเวลา ประตูเมืองสั่นสะเทือน มีบางอย่างมาถึงก่อนกำหนด",
+        decision_prompt="ระฆังยังดังไม่หยุด — พวกเจ้าจะทำอะไรก่อน?",
+        used_hooks=used,
+    )
+
+
 def _campaign_proposal(messages, _model) -> dict:
     """Deterministic world proposal grown from the PREMISE marker — campaign-specific
     names (never a universal tavern), a navigable 3-location graph, session prep."""
@@ -525,6 +566,7 @@ def install_default_script(fake: FakeLLMProvider) -> FakeLLMProvider:
     fake.on("generate_npc_response", _npc_response)
     fake.on("guide_character_creation", _creation_guide)
     fake.on("generate_session_opening", _session_opening)
+    fake.on("generate_campaign_prologue", _campaign_prologue)
     fake.on("frame_scene", _frame_scene)
     fake.on("generate_location_expansion", _location_expansion)
     fake.on("propose_campaign_world", _campaign_proposal)

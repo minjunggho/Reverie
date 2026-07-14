@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 
 from app.ai.jobs import SafeRecapGenerator
 from app.ai.llm.base import LLMMessage, LLMProvider
-from app.ai.prompts.system_prompts import OPENING_SYSTEM
+from app.ai.prompts.system_prompts import OPENING_SYSTEM, PROLOGUE_SYSTEM
 from app.ai.prompts.thai_dm_style import THAI_DM_STYLE
 from app.core.clock import format_game_time_th
 from app.core.errors import LLMError
@@ -31,7 +31,7 @@ from app.models.enums import ActivePlayState, EventType, SceneMode, Visibility
 from app.models.location import Location
 from app.models.session import Session
 from app.presentation import MessageKind
-from app.schemas.llm_io import OpeningScene
+from app.schemas.llm_io import CampaignPrologue, OpeningScene
 from app.services.events import EventService
 from app.services.scenes import SceneService
 from app.services.sessions.session_service import SessionService
@@ -162,11 +162,27 @@ class SessionOpeningService:
         ctx = await self._gather(campaign_id, attendance_member_ids, location_id)
         reminders = ctx["reminders"]
 
-        # 3. build the opening (session 1: generated FROM PREP when present; later:
-        #    continuity restore).
+        # 3. build the opening (session 1: a grand cinematic prologue when the
+        #    campaign has a known main goal, else the standard hook-aware opening;
+        #    later sessions: continuity restore).
+        prologue: CampaignPrologue | None = None
         if number == 1:
-            opening = await self._generate_first_opening(
-                ctx, prep.get("purpose") or scene_purpose, prep=prep)
+            world = await self._gather_world_canon(campaign_id, location_id)
+            if world["main_goal"]:
+                prologue = await self._generate_cinematic_prologue(ctx, world, prep=prep)
+            if prologue is not None:
+                # The prologue's first beat + first choice ARE the opening scene; the
+                # world-scale movements are rendered ahead of it in step 5.
+                opening = OpeningScene(
+                    title=prologue.title,
+                    situation_lines=[prologue.first_beat],
+                    pressure="",
+                    decision_prompt=prologue.decision_prompt,
+                    used_hooks=prologue.used_hooks,
+                )
+            else:
+                opening = await self._generate_first_opening(
+                    ctx, prep.get("purpose") or scene_purpose, prep=prep)
             recap_text = ""
         else:
             async with self.db.session() as read:
@@ -235,15 +251,29 @@ class SessionOpeningService:
                 channel_id, recap_text, kind=MessageKind.PLAYER_SAFE_RECAP,
                 title="ความเดิมตอนที่แล้ว",
             ))
+        # The cinematic prologue's world-scale movements are their own messages so
+        # the grand moments can breathe before the scene zooms in on the party.
+        if prologue is not None:
+            messages.extend(self._prologue_messages(channel_id, prologue))
         frame_body = "\n".join(opening.situation_lines)
         if opening.pressure:
             frame_body += f"\n\n{opening.pressure}"
         frame_data: dict = {"decision_prompt": opening.decision_prompt or None}
+        fields: list[dict] = []
+        # The main goal is the campaign's through-line — surfaced unmistakably so the
+        # players leave the opening knowing what they are ultimately trying to do.
+        if prologue is not None and prologue.main_goal:
+            fields.append({
+                "name": "🎯 เป้าหมายหลักของการเดินทาง", "value": prologue.main_goal,
+                "inline": False,
+            })
         if reminders:
-            frame_data["fields"] = [{
+            fields.append({
                 "name": "เตือนความจำ", "value": "\n".join(f"• {r}" for r in reminders),
                 "inline": False,
-            }]
+            })
+        if fields:
+            frame_data["fields"] = fields
         messages.append(OutboundMessage(
             channel_id, frame_body, kind=MessageKind.SCENE_FRAME,
             title=None, data=frame_data,
@@ -282,6 +312,7 @@ class SessionOpeningService:
             "participant_refs": [f"character:{c.id}" for c in chars],
             "location_name": location.name if location else "-",
             "location_desc": location.description_obvious if location else "",
+            "location_focused": location.description_focused if location else "",
             "game_time": campaign.current_game_time if campaign else 0,
             "reminders": reminders,
         }
@@ -343,6 +374,156 @@ class SessionOpeningService:
                                  ctx["location_desc"] or "รอบตัวยังเงียบ"],
                 pressure="", decision_prompt="จะเริ่มจากตรงไหนดี?",
             )
+
+    # --- cinematic prologue (session 1, world-scale) ---------------------------
+    async def _gather_world_canon(self, campaign_id: str, location_id: str) -> dict:
+        """Priority-ordered, PLAYER-SAFE world context for the cinematic prologue,
+        following the campaign data priority: brief → main quest → plotline/Act-I →
+        world facts → rules/tone → starting location + geography → NPCs.
+
+        Nothing DM-only ever enters: brief/central-question are player-facing by
+        construction; lore is PUBLIC canon only; powers are NAMES only (never their
+        hidden goals/next moves); the geography ladder and present NPCs are physical
+        facts a newcomer would perceive. Anything tagged SECRET is defensively dropped
+        as a second line of defence behind the visibility filter."""
+        from sqlalchemy import select
+
+        from app.models.location import Location
+        from app.models.npc import NPC
+        from app.models.world import Threat
+        from app.models.world_graph import CampaignCanonRecord
+        from app.services.campaigns.main_story import MainStoryService
+
+        _LORE = {"world_fact", "history", "religion", "magic", "politics", "culture"}
+
+        def _safe(text: str | None) -> bool:
+            return bool(text) and "SECRET_" not in text
+
+        async with self.db.session() as read:
+            campaign = await read.get(Campaign, campaign_id)
+            brief = campaign.brief if campaign else ""
+            central_q = campaign.central_question if campaign else ""
+            profile = (campaign.config or {}).get("profile", {}) if campaign else {}
+            story = await MainStoryService(read).get(campaign_id)
+            main_goal = next(
+                (g.get("text", "") for g in story.get("goals", [])
+                 if g.get("key") == "main" and g.get("text")),
+                "",
+            ) or central_q
+            lore_rows = (await read.execute(select(CampaignCanonRecord).where(
+                CampaignCanonRecord.campaign_id == campaign_id,
+                CampaignCanonRecord.visibility == Visibility.PUBLIC.value,
+            ))).scalars().all()
+            lore = [r.fact for r in sorted(lore_rows, key=lambda r: r.importance, reverse=True)
+                    if r.category in _LORE and _safe(r.fact)][:12]
+            powers = [t.name for t in (await read.execute(select(Threat).where(
+                Threat.campaign_id == campaign_id, Threat.status == "active",
+            ))).scalars().all() if _safe(t.name)][:8]
+            # Geography ladder for the cinematic descent: walk parent_id from the
+            # opening place up to the world (bounded), then reverse so it reads
+            # largest → the exact place — the path the camera follows.
+            ladder: list[tuple[str, str]] = []
+            cur = await read.get(Location, location_id) if location_id else None
+            guard = 0
+            while cur is not None and guard < 6:
+                ladder.append(((cur.location_type or "LOCATION"), cur.name))
+                cur = await read.get(Location, cur.parent_id) if cur.parent_id else None
+                guard += 1
+            ladder.reverse()
+            # NPCs a newcomer would see standing here — names + a player-safe
+            # descriptor (voice/manner) only; never their goals or beliefs.
+            npc_rows = (await read.execute(select(NPC).where(
+                NPC.campaign_id == campaign_id,
+                NPC.current_location_id == location_id,
+            ))).scalars().all()
+            npcs_present = [(n.name, (n.voice_register or "").strip())
+                            for n in npc_rows if _safe(n.name)][:6]
+        return {
+            "brief": brief, "main_goal": main_goal, "state": story.get("state", ""),
+            "lore": lore, "powers": powers,
+            "tone": profile.get("tone", ""), "balance": profile.get("balance", ""),
+            "boundaries": [b for b in (profile.get("boundaries") or []) if _safe(b)],
+            "geography": ladder, "npcs_present": npcs_present,
+        }
+
+    async def _generate_cinematic_prologue(
+        self, ctx: dict, world: dict, *, prep: dict | None = None
+    ) -> CampaignPrologue | None:
+        """Grow the grand opening from player-safe canon. Returns None (caller falls
+        back to the standard opening) if the model cannot produce a valid prologue."""
+        char_lines = []
+        for c in ctx["characters"]:
+            hooks = c.hooks or {}
+            hook_str = "; ".join(f"{k}={v}" for k, v in hooks.items() if v) or "-"
+            char_lines.append(f"- {c.name} ({c.char_class}): {hook_str}")
+        prep = prep or {}
+        lore_block = "\n".join(f"- {f}" for f in world["lore"]) or "-"
+        powers_block = ", ".join(world["powers"]) or "-"
+        # The descent path, largest → the exact place, e.g. "WORLD:… → REGION:… → LOCATION:…".
+        geo_block = " → ".join(f"{kind}:{name}" for kind, name in world["geography"]) \
+            or ctx["location_name"]
+        npc_block = "; ".join(f"{name} ({desc})" if desc else name
+                              for name, desc in world["npcs_present"]) or "-"
+        present = ", ".join(prep.get("present_npcs") or []) or npc_block
+        clues = ", ".join(prep.get("allowed_clues") or []) or "-"
+        do_not = ", ".join(prep.get("do_not_reveal") or []) or "-"
+        tone = world["tone"] or ctx["profile"].get("tone", "-")
+        boundaries = ", ".join(world["boundaries"]) or "-"
+        messages: list[LLMMessage] = [
+            {"role": "system", "content": THAI_DM_STYLE + "\n" + PROLOGUE_SYSTEM},
+            {"role": "user", "content": (
+                f"WORLD_BRIEF: {world['brief'] or '-'}\n"
+                f"MAIN_GOAL (เป้าหมายหลักหนึ่งข้อที่ผู้เล่นต้องรู้ชัด): {world['main_goal']}\n"
+                f"PLOTLINE_ACT_I (สิ่งที่กำลังเกิดตอนเปิดฉาก — ห้ามทิ้ง):\n"
+                f"- current_activity: {prep.get('current_activity') or '-'}\n"
+                f"- purpose: {prep.get('purpose') or '-'}\n"
+                f"- present_npcs: {present}\n"
+                f"- clues_allowed: {clues}\n"
+                f"- story_state: {world['state'] or '-'}\n"
+                f"WORLD_FACTS (canon ที่ผู้เล่นรู้ได้ เรียงตามสำคัญ):\n{lore_block}\n"
+                f"KNOWN_POWERS_AND_DANGERS (ใช้ชื่อเหล่านี้เท่านั้น): {powers_block}\n"
+                f"TONE: {tone}; ขอบเขตห้ามข้าม: {boundaries}\n"
+                f"GEOGRAPHY_LADDER (ซูมจากใหญ่ไปเล็กตามนี้ ให้จบที่ OPENING_PLACE): {geo_block}\n"
+                f"OPENING_PLACE: {ctx['location_name']} — {ctx['location_desc']}\n"
+                f"OPENING_PLACE_CLOSER (เมื่อมองใกล้ขึ้น): {ctx.get('location_focused') or '-'}\n"
+                f"NPCS_PRESENT (อยู่ตรงนั้นตอนนี้): {npc_block}\n"
+                f"DO_NOT_REVEAL (ห้ามเปิดเผยเด็ดขาด): {do_not}\n"
+                f"CHARACTERS:\n" + "\n".join(char_lines)
+            )},
+        ]
+        try:
+            prologue = await self.provider.generate_campaign_prologue(messages)
+        except LLMError as exc:
+            log.warning("cinematic prologue failed; using standard opening: %s", exc)
+            return None
+        # The engine, not the model, guarantees the players are told the main goal:
+        # if the model dropped it, restore the campaign's canonical objective.
+        if not prologue.main_goal.strip():
+            prologue = prologue.model_copy(update={"main_goal": world["main_goal"]})
+        return prologue
+
+    def _prologue_messages(
+        self, channel_id: str, prologue: CampaignPrologue
+    ) -> list[OutboundMessage]:
+        """Render the world-scale movements as their own frames, large to small, so
+        each grand beat LANDS before the next one arrives — the world & its powers,
+        then the conflict that changed everything, then the camera's descent to the
+        party. Splitting them (rather than one wall of text) is what lets the opening
+        breathe like a film's cold open."""
+        world_powers = "\n\n".join(part for part in (prologue.world, prologue.powers)
+                                   if part.strip())
+        descent = "\n\n".join(part for part in (prologue.approach, prologue.the_party)
+                              if part.strip())
+        beats: list[tuple[str, str | None]] = [
+            (world_powers, prologue.title),           # the world & its powers
+            (prologue.crisis, "เหตุการณ์ที่เปลี่ยนทุกอย่าง"),  # the great conflict
+            (descent, "เส้นทางสู่พวกเจ้า"),            # zoom in to the party
+        ]
+        return [
+            OutboundMessage(channel_id, body, kind=MessageKind.CAMPAIGN_PROLOGUE,
+                            title=title)
+            for body, title in beats if body.strip()
+        ]
 
     def _continuity_opening(self, ctx: dict, number: int) -> OpeningScene:
         return OpeningScene(

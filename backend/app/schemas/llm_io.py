@@ -270,3 +270,26 @@ class OpeningScene(BaseModel):
     pressure: str = ""                       # the disturbance/pressure line
     decision_prompt: str = ""                # one open question
     used_hooks: list[str] = Field(default_factory=list)        # which hooks it drew on
+
+
+# --- Cinematic campaign prologue (session 1, world-scale) ----------------------
+class CampaignPrologue(BaseModel):
+    """A grand, cinematic opening prologue for the FIRST session of a campaign.
+
+    It moves from the largest scale down to the party — world → crisis → region →
+    settlement → the exact place → the characters — and ends on a first beat that
+    hands play to the players. It is player-facing FRAMING built ONLY from the
+    supplied canon: it dramatizes atmosphere, stakes, and imagery vividly, but it
+    never commits state, never invents new named kingdoms/gods/factions/places
+    beyond those given, and never dictates what a player character feels or chooses.
+    """
+    title: str                               # Thai campaign/opening title
+    world: str                               # nature & atmosphere + age/era (layers 1-2)
+    powers: str                              # kingdoms/factions/religions + magic, gods, monsters
+    crisis: str                              # the major conflict/disaster + how ordinary folk suffer
+    approach: str                            # region → settlement/wilderness → the exact place (3-5)
+    the_party: str                           # the PCs and why THEY are drawn in (layer 6)
+    main_goal: str                           # ONE clear, specific long-term objective
+    first_beat: str                          # the immediate event/danger/mystery that starts play
+    decision_prompt: str = ""                # the players' clear first choice
+    used_hooks: list[str] = Field(default_factory=list)        # character hooks it drew on

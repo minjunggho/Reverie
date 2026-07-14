@@ -17,6 +17,7 @@ from app.schemas.llm_io import (
     ActionInterpretation,
     AdjudicationDecision,
     ClassificationResult,
+    CampaignPrologue,
     ConsequenceProposal,
     CreationGuidance,
     LocationDraft,
@@ -122,6 +123,14 @@ class LLMProvider(ABC):
         return await self.structured_complete(
             response_model=OpeningScene, messages=messages,
             task="generate_session_opening", temperature=0.8,
+        )
+
+    async def generate_campaign_prologue(
+        self, messages: list[LLMMessage]
+    ) -> CampaignPrologue:
+        return await self.structured_complete(
+            response_model=CampaignPrologue, messages=messages,
+            task="generate_campaign_prologue", temperature=0.85,
         )
 
     async def generate_location_expansion(self, messages: list[LLMMessage]) -> LocationDraft:
