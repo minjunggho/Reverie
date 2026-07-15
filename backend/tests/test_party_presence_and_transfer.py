@@ -165,6 +165,78 @@ async def test_transfer_requires_actual_possession(db, provider):
                 name="ขวดไวน์มีตรา")
 
 
+# --- F11 natural language: 'ส่ง...ให้...' through the REAL committed pipeline -----
+
+async def test_natural_language_give_commits_transfer(db, provider):
+    """'! ส่งขวดไวน์มีตรา ให้ Bront' moves real ownership — one attempt, one clear
+    resolution, no vague response, no repeat needed."""
+    from app.engine import build_bridge
+    from app.discord_bridge import InboundMessage
+
+    world = await build_world(db)
+    await start_session_with_scene(db, world)
+    await _place(db, world.kael_id, world.location_id)
+    await _place(db, world.bront_id, world.location_id)
+    await _grant_bottle(db, world)
+    bridge = build_bridge(db, provider=provider)
+
+    result = await bridge.handle_inbound(InboundMessage(
+        discord_message_id="give-nl-1", guild_id="guild-1", channel_id="chan-1",
+        author_discord_id="disc-p1", author_display_name="กี้",
+        content="! ส่งขวดไวน์มีตรา ให้ Bront"))
+
+    assert await _quantity(db, world.kael_id, "ขวดไวน์มีตรา") == 0
+    assert await _quantity(db, world.bront_id, "ขวดไวน์มีตรา") == 1
+    blob = "\n".join(m.content for m in result.responses)
+    assert "Bront" in blob and "ขวดไวน์มีตรา" in blob         # clear resolution
+    assert "?" not in blob                                    # no clarification loop
+
+
+async def test_partial_item_name_resolves_against_real_inventory(db, provider):
+    """'ส่งขวดไวน์ ให้ Bront' (short form) matches the carried 'ขวดไวน์มีตรา'."""
+    from app.engine import build_bridge
+    from app.discord_bridge import InboundMessage
+
+    world = await build_world(db)
+    await start_session_with_scene(db, world)
+    await _place(db, world.kael_id, world.location_id)
+    await _place(db, world.bront_id, world.location_id)
+    await _grant_bottle(db, world)
+    bridge = build_bridge(db, provider=provider)
+
+    await bridge.handle_inbound(InboundMessage(
+        discord_message_id="give-nl-2", guild_id="guild-1", channel_id="chan-1",
+        author_discord_id="disc-p1", author_display_name="กี้",
+        content="! ส่งขวดไวน์ ให้ Bront"))
+
+    assert await _quantity(db, world.bront_id, "ขวดไวน์มีตรา") == 1
+
+
+async def test_giving_to_absent_teammate_states_the_real_reason(db, provider):
+    from app.engine import build_bridge
+    from app.discord_bridge import InboundMessage
+
+    world = await build_world(db)
+    await start_session_with_scene(db, world)
+    await _place(db, world.kael_id, world.location_id)
+    async with db.unit_of_work() as s:
+        room = Location(campaign_id=world.campaign_id, name="โกดังท้ายซอย")
+        s.add(room)
+        await s.flush()
+        (await s.get(Character, world.bront_id)).location_id = room.id
+    await _grant_bottle(db, world)
+    bridge = build_bridge(db, provider=provider)
+
+    result = await bridge.handle_inbound(InboundMessage(
+        discord_message_id="give-nl-3", guild_id="guild-1", channel_id="chan-1",
+        author_discord_id="disc-p1", author_display_name="กี้",
+        content="! ส่งขวดไวน์มีตรา ให้ Bront"))
+
+    blob = "\n".join(m.content for m in result.responses)
+    assert "ไม่ได้อยู่ตรงนี้" in blob                          # the real in-world reason
+    assert await _quantity(db, world.kael_id, "ขวดไวน์มีตรา") == 1  # nothing moved
+
+
 async def test_take_it_back_round_trip(db, provider):
     """Give it, take it back, give it again — the ledger stays exact."""
     world = await build_world(db)

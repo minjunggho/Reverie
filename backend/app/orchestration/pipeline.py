@@ -148,6 +148,14 @@ class CommittedActionPipeline:
                 return await self._execute_plan(
                     ctx, build_plan(interpretation, actor_ref=actor), allow_clarify=allow_clarify)
 
+        # Handing an object over is a DOMAIN action: the engine validates possession
+        # + authoritative presence and commits the transfer exactly once — narration
+        # can only ever describe a hand-over that actually happened.
+        if interpretation.give_intent and ctx.character_id and ctx.session_id:
+            return await self._handle_give(
+                ctx, action_text=action_text, interpretation=interpretation,
+                directory=directory, resolution=resolution)
+
         # Resting is its own domain flow, routed BEFORE adjudication: the numbers
         # come from RestService, never from a generic ability check.
         if interpretation.rest_intent and ctx.session_id:
@@ -743,6 +751,84 @@ class CommittedActionPipeline:
                 preserve_follow=True)
         return self._table_note(
             ctx, f"ตอนนี้ไม่มีใครรู้ว่า {leader_name} อยู่ที่ไหน — ต้องหาเบาะแสก่อน")
+
+    # --- give/hand-over: engine-committed ownership, never narrated prose -------
+    async def _handle_give(
+        self, ctx: ResolvedContext, *, action_text: str, interpretation,
+        directory, resolution,
+    ) -> BridgeResult:
+        """'ส่งขวดให้ Bront' → InventoryService.transfer. The receiver comes from
+        authoritative scene presence (named present teammate, else the only other
+        teammate here); the item is matched against the sender's REAL inventory; the
+        commit is exactly-once on the Discord message id. A refusal states the real
+        in-world reason — never a vague failure or a fabricated hand-over."""
+        from app.core.errors import ValidationError as _VErr
+        from app.entities.directory import normalize_name
+        from app.services.campaigns.inventory_service import InventoryService
+
+        # 1. The receiver — a present teammate, from the authoritative directory.
+        pcs = [e for e in directory.present_player_characters if not e.is_actor]
+        target = None
+        wanted = normalize_name(interpretation.give_target_reference or "")
+        if wanted:
+            named = [e for e in pcs if wanted in e.names_normalized()]
+            if len(named) == 1:
+                target = named[0]
+        if target is None:
+            hits = [e for e in resolution.resolved
+                    if e.entity_type == PLAYER_CHARACTER and not e.is_actor]
+            if len(hits) == 1:
+                target = hits[0]
+        if target is None and len(pcs) == 1:
+            target = pcs[0]                      # the obvious interpretation
+        if target is None:
+            if resolution.not_present:
+                name = resolution.not_present[0].canonical_name
+                return self._table_note(
+                    ctx, f"{name} ไม่ได้อยู่ตรงนี้ตอนนี้ — "
+                         "ต้องอยู่ที่เดียวกันจึงจะส่งของให้กันได้")
+            return self._table_note(ctx, "จะส่งให้ใคร? บอกชื่อคนที่อยู่ตรงนี้ด้วยกัน")
+        _, receiver_id = parse_entity_ref(target.entity_ref)
+
+        # 2. The item — matched against what the sender actually carries.
+        item_ref = (interpretation.give_item_reference or "").strip()
+        norm_ref = normalize_name(item_ref)
+        async with self.db.session() as read:
+            rows = await InventoryService(read).list_inventory(ctx.character_id)
+        scored: list[tuple[int, str]] = []
+        for _entry, item in rows:
+            n = normalize_name(item.name)
+            if n and norm_ref and (n in norm_ref or norm_ref in n):
+                scored.append((len(n), item.name))
+        best_name = item_ref
+        if scored:
+            scored.sort(reverse=True)
+            top = sorted({nm for ln, nm in scored if ln == scored[0][0]})
+            if len(top) == 1:
+                best_name = top[0]
+            else:
+                return await self._enter_clarification(
+                    ctx, action_text, f"หมายถึงชิ้นไหน: {', '.join(top)}?")
+
+        # 3. Commit exactly once (idempotent on the inbound message id).
+        try:
+            async with self.db.unit_of_work() as s:
+                await InventoryService(s).transfer(
+                    from_character_id=ctx.character_id, to_character_id=receiver_id,
+                    name=best_name, session_id=ctx.session_id,
+                    idempotency_key=ctx.processed_message_id or None)
+                me = await s.get(Character, ctx.character_id)
+                actor_name = me.name if me else "ตัวละครของเจ้า"
+        except _VErr as exc:
+            return self._table_note(ctx, str(exc))
+        return BridgeResult(
+            handled=True, category=MessageCategory.COMMITTED_ACTION,
+            state_mutated=True, note="item transferred",
+            responses=[OutboundMessage(
+                ctx.channel_id,
+                f"{actor_name} ส่ง{best_name}ให้ {target.canonical_name} — "
+                f"ตอนนี้ของอยู่กับ {target.canonical_name} แล้ว",
+                kind=MessageKind.TABLE_NOTICE)])
 
     # --- spellcasting: engine-resolved, never a generic check ------------------
     async def _handle_cast(

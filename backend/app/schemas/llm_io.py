@@ -132,6 +132,12 @@ class ActionInterpretation(BaseModel):
     follow_intent: bool = False
     follow_reference: str = ""
     stop_following: bool = False
+    # Handing an object to someone present ("ส่งขวดให้ Bront"): the ENGINE validates
+    # possession + presence and commits the transfer; the LLM only names what and to
+    # whom, exactly as spoken. Never narrate a hand-over — the engine does it.
+    give_intent: bool = False
+    give_item_reference: str = ""
+    give_target_reference: str = ""
     # Ordered compound steps, when the action is more than one thing ("A แล้ว B แล้ว
     # C"). Empty for a simple single action (the common case) — the pipeline then
     # uses the flat flags above exactly as before (fully backward compatible).

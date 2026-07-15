@@ -143,6 +143,20 @@ def _interpret(messages, _model) -> ActionInterpretation:
     text = _marker(messages, "ACTION") or _joined(messages)
     low = text.lower()
 
+    # Handing an object over: "ส่ง <ของ> ให้ <คน>" / "give <item> to <person>".
+    import re as _re
+
+    give = (_re.search(r"(?:ส่ง|ยื่น|มอบ|คืน)\s*(.+?)\s*ให้\s*(.+)", text)
+            or _re.search(r"(?:give|hand)\s+(.+?)\s+to\s+(.+)", low))
+    if give is not None:
+        item_ref = give.group(1).strip()
+        target_ref = give.group(2).strip().rstrip("ครับค่ะนะ ").strip()
+        return ActionInterpretation(
+            goal=f"ส่ง {item_ref} ให้ {target_ref}", method="ยื่นให้กับมือ",
+            intent_confidence=0.9, give_intent=True,
+            give_item_reference=item_ref, give_target_reference=target_ref,
+            target_references=[target_ref])
+
     # Natural following (reuse consent system): "ตาม Kael ไป" / "I follow Kael".
     if (("ตาม" in text and "หยุด" not in text and "เลิก" not in text)
             or low.startswith("i follow") or " follow " in low):
