@@ -11,14 +11,22 @@ from __future__ import annotations
 
 from app.core.errors import RulesViolation, ValidationError
 from app.core.ids import parse_entity_ref
+from app.models.consequences import QUEST_STATES, REPUTATION_SCOPES
 from app.models.enums import EventType, Visibility
 from app.models.event import Event
 from app.models.npc import NPC
 from app.schemas.llm_io import ProposedDelta
 from app.services.events import EventService
 
+# Persistent-world consequences the planner may PROPOSE. These delegate to the shared
+# ConsequenceService (no parallel engine) and, like advance_time, are all information/
+# state consequences — never authoritative mechanics. Injury, currency, items, combat,
+# crime attribution, access-state, and scheduling stay engine-owned off this path.
+_CONSEQUENCE_KINDS = frozenset({"spread_rumor", "update_quest", "change_reputation"})
+
 ALLOWED_DELTA_KINDS = frozenset(
     {"advance_time", "raise_suspicion", "note", "reveal_secret", "reveal_fragment"}
+    | _CONSEQUENCE_KINDS
 )
 
 
@@ -76,6 +84,26 @@ class DeltaApplier:
                 raise ValidationError(
                     "reveal_fragment must match an AUTHORED clue for this scene — "
                     "the model may time a reveal, never invent one")
+        if delta.kind == "spread_rumor":
+            if not (delta.payload.get("content") or "").strip():
+                raise ValidationError("spread_rumor requires payload.content")
+        if delta.kind == "update_quest":
+            if not (delta.payload.get("key") or "").strip():
+                raise ValidationError("update_quest requires payload.key")
+            state = delta.payload.get("state")
+            if state is not None and state not in QUEST_STATES:
+                raise ValidationError(
+                    f"update_quest state must be one of {list(QUEST_STATES)}")
+        if delta.kind == "change_reputation":
+            kind, _ = parse_entity_ref(delta.target or "")
+            if kind not in ("character", "npc"):
+                raise ValidationError(
+                    "change_reputation must target a character:<id> or npc:<id>")
+            if delta.payload.get("scope") not in REPUTATION_SCOPES:
+                raise ValidationError(
+                    f"change_reputation scope must be one of {list(REPUTATION_SCOPES)}")
+            if not isinstance(delta.payload.get("amount"), int):
+                raise ValidationError("change_reputation requires integer payload.amount")
 
     async def apply(self, delta: ProposedDelta) -> list[Event]:
         self.validate(delta)
@@ -90,6 +118,11 @@ class DeltaApplier:
             return [await self._reveal_secret(delta)]
         if delta.kind == "reveal_fragment":
             return [await self._reveal_fragment(delta)]
+        if delta.kind in _CONSEQUENCE_KINDS:
+            # ConsequenceService records the canonical event itself (like the world
+            # clock), so no Event is returned to the caller here.
+            await self._apply_consequence(delta)
+            return []
         return []  # unreachable (validate() guards)
 
     async def apply_all(self, deltas: list[ProposedDelta]) -> list[Event]:
@@ -128,6 +161,34 @@ class DeltaApplier:
             campaign_id=self.campaign_id, minutes=minutes,
             session_id=self.session_id, scene_id=self.scene_id, actor_entity=self.actor_entity,
         )
+
+    async def _apply_consequence(self, delta: ProposedDelta) -> None:
+        """Delegate a proposed persistent consequence to the shared ConsequenceService
+        — the single validated command layer — rather than mutating state here."""
+        from app.world.consequence_service import ConsequenceService
+
+        cs = ConsequenceService(
+            self.session, campaign_id=self.campaign_id, session_id=self.session_id,
+            scene_id=self.scene_id, actor_entity=self.actor_entity,
+        )
+        if delta.kind == "spread_rumor":
+            await cs.spread_rumor(
+                content=delta.payload["content"].strip(),
+                truth=bool(delta.payload.get("truth", True)),
+                origin_location_id=delta.payload.get("origin_location_id"),
+            )
+        elif delta.kind == "update_quest":
+            await cs.update_quest(
+                key=delta.payload["key"].strip(), name=delta.payload.get("name"),
+                state=delta.payload.get("state"), progress=delta.payload.get("progress"),
+                data=delta.payload.get("data"),
+            )
+        elif delta.kind == "change_reputation":
+            await cs.change_reputation(
+                subject_ref=delta.target, scope=delta.payload["scope"],
+                amount=int(delta.payload["amount"]),
+                scope_ref=delta.payload.get("scope_ref"), reason=delta.reason,
+            )
 
     async def _reveal_secret(self, delta: ProposedDelta) -> Event:
         """Reveal a PRE-AUTHORED Secret to one character, privately.

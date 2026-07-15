@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import JSON, String, Text
+from sqlalchemy import JSON, Boolean, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, fk_id, pk_column
@@ -43,3 +43,8 @@ class NPC(Base, TimestampMixin):
     biases: Mapped[list[dict[str, Any]] | None] = mapped_column(
         JSON, nullable=True, default=None
     )
+    # Persistent physical condition + availability — a durable CONSEQUENCE, not hit
+    # points (authoritative HP still lives on the dice path). An injured shopkeeper who
+    # closes up stays hurt/unavailable across sessions and restart.
+    physical_state: Mapped[str] = mapped_column(String(40), default="healthy")  # healthy|hurt|wounded|gravely_wounded|dead
+    available: Mapped[bool] = mapped_column(Boolean, default=True)

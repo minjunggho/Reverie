@@ -15,6 +15,13 @@ from app.models.campaign import Campaign, CampaignMember
 from app.models.canon_import import CanonImport
 from app.models.character import Character
 from app.models.character_draft import CharacterDraft
+from app.models.consequences import (
+    CrimeRecord,
+    Faction,
+    Quest,
+    Reputation,
+    Rumor,
+)
 from app.models.combat import Combatant, CombatEncounter
 from app.models.economy import CurrencyTransaction, Wallet
 from app.models.event import Event
@@ -68,4 +75,9 @@ __all__ = [
     "CampaignCanonRecord",
     "Wallet",
     "CurrencyTransaction",
+    "Faction",
+    "Reputation",
+    "CrimeRecord",
+    "Quest",
+    "Rumor",
 ]
