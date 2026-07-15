@@ -80,6 +80,8 @@ class CommittedActionPipeline:
 
     # --- entry points --------------------------------------------------------
     async def handle(self, ctx: ResolvedContext, action: CommittedAction) -> BridgeResult:
+        if action.is_speech:
+            return await self._handle_speech(ctx, utterance=action.action_text)
         return await self._process(ctx, action.action_text, allow_clarify=True)
 
     async def resume_clarification(
@@ -426,6 +428,86 @@ class CommittedActionPipeline:
                 return None
             user = await s.get(User, member.user_id)
             return user.discord_user_id if user else None
+
+    # --- speech: verbatim dialogue, never executed as an action ----------------
+    async def _handle_speech(self, ctx: ResolvedContext, *, utterance: str) -> BridgeResult:
+        """A quoted `!"..."` message: the player's character SPEAKS these exact words.
+
+        The words are carried verbatim — never re-interpreted into a physical action
+        and never reworded by the narrator (so `!"ข้าชักดาบ"` is the character SAYING
+        that, not drawing a weapon). If the line addresses NPC(s) present in the
+        scene, each answers from its OWN authorized context via NPCSocialService;
+        otherwise the line is simply spoken into the scene with no dice and no
+        invented reaction — the strongest anti-hallucination guarantee for dialogue.
+        """
+        if ctx.session_id is None:
+            return self._table_note(ctx, "ยังไม่ได้เริ่มเซสชัน เริ่มก่อนถึงจะพูดในฉากได้")
+
+        async with self.db.session() as read:
+            scene = await SceneService(read).get_active_scene(ctx.session_id)
+            character = await read.get(Character, ctx.character_id) if ctx.character_id else None
+            directory = await SceneEntityDirectory(read).build(
+                scene, actor_character_id=ctx.character_id, campaign_id=ctx.campaign_id
+            )
+            # Interpret ONLY to find who is addressed; the spoken words stay verbatim
+            # and every action-shaped intent the interpreter reports is ignored.
+            interpretation = await self.interpreter.run(
+                read, action_text=utterance, scene=scene, character=character,
+                directory=directory,
+            )
+            resolution = directory.resolve_mentions(interpretation.target_references)
+
+        npc_targets = [e for e in resolution.resolved if e.entity_type != PLAYER_CHARACTER]
+        # Implicit sole addressee: a line with no named target, spoken where exactly
+        # one NPC is present, is addressed to that NPC ("How much for the sword?").
+        if not npc_targets and len(directory.present_npcs) == 1:
+            npc_targets = list(directory.present_npcs)
+
+        if npc_targets and ctx.character_id:
+            return await self._handle_social(ctx, action_text=utterance, npc_targets=npc_targets)
+        return await self._speak_into_scene(ctx, utterance=utterance, directory=directory)
+
+    async def _speak_into_scene(
+        self, ctx: ResolvedContext, *, utterance: str, directory,
+    ) -> BridgeResult:
+        """No NPC is addressed (talking to the party, or to the air). Record the
+        spoken line as a canonical event and echo it verbatim. No dice, no NPC
+        dialogue, no invented consequence — the DM must not answer for anyone."""
+        async with self.db.unit_of_work() as s:
+            scene_row = await SceneService(s).get_active_scene(ctx.session_id) if ctx.session_id else None
+            scene_id = scene_row.id if scene_row else None
+            actor = (
+                entity_ref("character", ctx.character_id) if ctx.character_id else SYSTEM_ACTOR
+            )
+            await EventService(s).record(
+                campaign_id=ctx.campaign_id, session_id=ctx.session_id, scene_id=scene_id,
+                event_type=EventType.PLAYER_ACTION_COMMITTED, actor_entity=actor,
+                target_entities=[],
+                payload={"action_text": utterance, "summary": utterance,
+                         "social": True, "speech": True},
+                visibility=Visibility.PARTY, narrative_significance=10,
+            )
+            pm = await s.get(ProcessedMessage, ctx.processed_message_id) if ctx.processed_message_id else None
+            if pm is not None:
+                pm.stage = ProcessingStage.SENT.value
+                pm.category = MessageCategory.COMMITTED_ACTION.value
+                pm.result = {"response": utterance, "speech": True}
+            session_row = await s.get(Session, ctx.session_id) if ctx.session_id else None
+            if session_row is not None:
+                session_row.active_play_state = ActivePlayState.TABLE_OPEN.value
+                session_row.version += 1
+            if scene_row is not None and ctx.character_id:
+                self._bump_spotlight(scene_row, actor)
+
+        speaker = directory.actor.canonical_name if directory.actor else "ตัวละครของเจ้า"
+        return BridgeResult(
+            handled=True, category=MessageCategory.COMMITTED_ACTION, state_mutated=True,
+            responses=[OutboundMessage(
+                ctx.channel_id, f"“{utterance}”", kind=MessageKind.NPC_DIALOGUE,
+                title=speaker, data={"decision_prompt": "จะทำอะไรต่อ?"},
+            )],
+            note="speech: spoken into scene (no NPC addressed)",
+        )
 
     # --- social actions: engine-routed, NPC-authorized -------------------------
     async def _handle_social(

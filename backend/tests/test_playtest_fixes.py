@@ -194,6 +194,65 @@ async def test_multi_npc_thanks_resolves_all_present_targets(db, provider):
     assert "กระดานชนวน" in nara_resp.content
 
 
+# --- TEST 4b: quoted speech is verbatim dialogue, never an executed action -----
+
+async def test_quoted_speech_to_named_npc_routes_to_verbatim_dialogue(db, provider):
+    """`!"..."` addressed to a present NPC answers via NPCSocialService with the
+    player's exact words as the utterance — the generic narrator never runs, and
+    the interpreter's action-shaped intents are ignored."""
+    ids = await _setup_black_chapel(db, provider)
+    # Even if the interpreter reports movement, speech must NOT move the character.
+    provider.on("interpret_committed_action", lambda m, model: ActionInterpretation(
+        goal="พูด", method="พูดกับ Mother Veyra", intent_confidence=0.9,
+        target_references=["Mother Veyra"], movement_intent=True,
+        movement_kind="CANONICAL_TRAVEL", movement_reference="ข้างนอก"))
+
+    captured: dict = {}
+    def echo_utterance(messages, _model):
+        blob = "\n".join(m.get("content", "") for m in messages)
+        captured["blob"] = blob
+        return NPCResponse(utterance="…")
+    provider.on("generate_npc_response", echo_utterance)
+    dm_before = len([c for c in provider.calls if c[0] == "generate_dm_narration"])
+
+    bridge = build_bridge(db, provider=provider, rng=SequenceRandomness(default=10))
+    r = await bridge.handle_inbound(_msg('!"ท่านแม่ ประตูโบสถ์ล็อกอยู่หรือไม่"', author="owner"))
+
+    assert r.responses[0].title == "Mother Veyra"
+    # The player's exact spoken words reached the NPC (verbatim, not reworded).
+    assert "ท่านแม่ ประตูโบสถ์ล็อกอยู่หรือไม่" in captured["blob"]
+    # The narrator never ran, and the movement intent was ignored — the speaker did
+    # not travel; the words were only spoken.
+    dm_after = len([c for c in provider.calls if c[0] == "generate_dm_narration"])
+    assert dm_after == dm_before
+    async with db.session() as s:
+        veskan = await s.get(Character, ids["veskan_id"])
+        assert veskan.location_id == ids["chapel_id"]
+
+
+async def test_quoted_speech_without_addressee_is_spoken_into_scene(db, provider):
+    """`!"..."` with no NPC addressed (three NPCs present, none named) speaks the
+    line into the scene verbatim under the speaker's name — no NPC dialogue, no
+    dice, and the narrator never authors a reaction."""
+    ids = await _setup_black_chapel(db, provider)
+    provider.on("interpret_committed_action", lambda m, model: ActionInterpretation(
+        goal="พูดกับตัวเอง", method="รำพึง", intent_confidence=0.9,
+        target_references=[]))
+    dm_before = len([c for c in provider.calls if c[0] == "generate_dm_narration"])
+    npc_before = len([c for c in provider.calls if c[0] == "generate_npc_response"])
+
+    bridge = build_bridge(db, provider=provider, rng=SequenceRandomness(default=10))
+    r = await bridge.handle_inbound(_msg('!"ข้ารู้สึกไม่ชอบมาพากลกับที่นี่เลย"', author="owner"))
+
+    assert len(r.responses) == 1
+    assert r.responses[0].title == "Veskan"
+    assert "ข้ารู้สึกไม่ชอบมาพากลกับที่นี่เลย" in r.responses[0].content
+    # Nobody was answered for: neither the narrator nor any NPC produced a line.
+    dm_after = len([c for c in provider.calls if c[0] == "generate_dm_narration"])
+    npc_after = len([c for c in provider.calls if c[0] == "generate_npc_response"])
+    assert dm_after == dm_before and npc_after == npc_before
+
+
 # --- TEST 5: leave Black Chapel -> clean destination scene ---------------------
 
 async def test_leaving_black_chapel_leaves_npcs_behind_in_a_clean_scene(db, provider):

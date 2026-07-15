@@ -42,6 +42,21 @@ def test_commitment_detection():
     assert detect_commitment(_inbound("m", content="   ! วิ่ง")) is not None
     # A normal message is NOT a commitment.
     assert detect_commitment(_inbound("m", content="เราไปดูหน้าต่างดีไหม")) is None
+    # A plain `!` action is not speech.
+    assert detect_commitment(_inbound("m", content="! ย่องไป")).is_speech is False
+
+
+def test_commitment_speech_detection():
+    # `!"..."` is SPEECH: quotes stripped, words verbatim, is_speech True.
+    c = detect_commitment(_inbound("m", content='!"เปิดประตูให้หน่อย"'))
+    assert c is not None and c.is_speech is True and c.action_text == "เปิดประตูให้หน่อย"
+    # A space after the marker still counts, and curly quotes work too (IME/autocorrect).
+    c = detect_commitment(_inbound("m", content='! “หยุดอยู่ตรงนั้น”'))
+    assert c is not None and c.is_speech is True and c.action_text == "หยุดอยู่ตรงนั้น"
+    # A partial/embedded quote is NOT speech — it stays a physical action verbatim.
+    c = detect_commitment(_inbound("m", content='!ผลักประตูแล้วตะโกน "หยุด"'))
+    assert c is not None and c.is_speech is False
+    assert c.action_text == 'ผลักประตูแล้วตะโกน "หยุด"'
 
 
 async def test_bridge_resolves_member_and_character(db):
