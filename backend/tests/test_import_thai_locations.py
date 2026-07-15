@@ -98,3 +98,68 @@ async def test_prose_opening_location_resolves_by_name_fallback(db, provider):
         db, provider, _thai_campaign_md("ที่โบสถ์แสงสุดท้าย"))
     church = next(loc for loc in locations if loc.name == "โบสถ์แสงสุดท้าย")
     assert campaign.starting_location_id == church.id
+
+
+# --- aliases: one canonical place answering to many names (Failure 4) --------------
+
+_ALIASED_MD = (
+    "# Campaign: มงกุฎเลือด\n\n"
+    "## Central Question\nใครจะหยุดมงกุฎเลือด?\n\n"
+    "## Location: โบสถ์แสงสุดท้าย\n"
+    "### Obvious\nโบสถ์หินเก่าแก่\n"
+    "### Connections\nห้องใต้ดินเก็บไวน์\n\n"
+    "## Location: ห้องใต้ดินเก็บไวน์\n"
+    "### Obvious\nชั้นไวน์เรียงราย\n"
+    "### Aliases\n"
+    "- ห้องใต้ดิน\n"
+    "- ห้องเก็บไวน์\n"
+    "- wine cellar\n"
+    "- church basement\n\n"
+    "## Session 1\n"
+    "### Opening Location\nโบสถ์แสงสุดท้าย\n"
+).encode("utf-8")
+
+
+async def test_imported_aliases_resolve_to_one_canonical_location(db, provider):
+    """'ห้องใต้ดิน', 'wine cellar', and 'ห้องเก็บไวน์' are ONE place: aliases are
+    imported onto the canonical row and every alias resolves to the same id."""
+    from app.world.location_resolver import LocationResolver
+
+    campaign, locations, _ = await _import_and_approve(db, provider, _ALIASED_MD)
+    cellar = next(loc for loc in locations if loc.name == "ห้องใต้ดินเก็บไวน์")
+    assert "wine cellar" in cellar.aliases and "ห้องใต้ดิน" in cellar.aliases
+
+    async with db.session() as s:
+        resolver = LocationResolver(s)
+        for ref in ("ห้องใต้ดิน", "ห้องเก็บไวน์", "wine cellar", "church basement"):
+            result = await resolver.resolve(campaign_id=campaign.id, reference=ref)
+            assert result.resolved, f"alias {ref!r} did not resolve"
+            assert result.match.location.id == cellar.id, f"alias {ref!r} split the room"
+    # No duplicate room was created for any alias.
+    assert len(locations) == 2
+
+
+async def test_alias_collision_is_a_loud_preview_warning(db, provider):
+    """The same alias answering for two locations makes references ambiguous —
+    the import preview must say so, not let players get split later."""
+    from sqlalchemy import select
+
+    from app.discord_bridge.dto import InboundAttachment
+    from app.models.canon_import import CanonImport
+
+    md = (
+        "# Campaign: ซ้ำซ้อน\n\n"
+        "## Location: หอเหนือ\n### Obvious\nหอคอยด้านเหนือ\n"
+        "### Aliases\n- หอคอย\n\n"
+        "## Location: หอใต้\n### Obvious\nหอคอยด้านใต้\n"
+        "### Aliases\n- หอคอย\n"
+    ).encode("utf-8")
+    admin = AdminBridge(db, provider)
+    await admin.handle(_msg("!rv campaign new ซ้ำซ้อน"))
+    await admin.handle(_msg(
+        "!rv campaign import",
+        attachment=InboundAttachment("dup.md", "text/markdown", md)))
+    async with db.session() as s:
+        draft = (await s.execute(select(CanonImport))).scalar_one()
+    warnings = " ".join(draft.proposal["_review"]["warnings"])
+    assert "หอคอย" in warnings and "multiple locations" in warnings

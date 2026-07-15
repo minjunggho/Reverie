@@ -60,6 +60,10 @@ class ExitProposal(BaseModel):
 class LocationProposal(BaseModel):
     key: str = Field(min_length=1, max_length=80, pattern=KEY)
     name: str = Field(min_length=1, max_length=160)
+    # Every other name this place answers to (Thai/English/colloquial). These feed
+    # Location.aliases so "wine cellar", "ห้องใต้ดิน", and "ห้องเก็บไวน์" resolve to
+    # ONE canonical place instead of spawning duplicates.
+    aliases: list[str] = Field(default_factory=list, max_length=20)
     location_type: str = Field(default="LOCATION", max_length=20)
     parent: str | None = Field(default=None, max_length=80)
     obvious: str = Field(default="", max_length=8000)
@@ -233,6 +237,7 @@ def _parse_markdown(text: str) -> dict:
             conns = [x.strip() for x in re.split(r"[,\n]", f.get("connections", "")) if x.strip()]
             prop["locations"].append({
                 "key": key, "name": name, "location_type": (f.get("type") or "LOCATION").upper(),
+                "aliases": _bullets(f.get("aliases", "")),
                 "parent": (f.get("parent") or None), "obvious": f.get("obvious", ""),
                 "focused": f.get("focused", ""), "hidden": f.get("hidden", ""),
                 "weather": f.get("weather", ""), "current_activity": f.get("activity", ""),
@@ -330,22 +335,25 @@ def parse_campaign_file(filename: str, data: bytes) -> tuple[str, CampaignPropos
 
 
 def _location_by_name(prose: str, proposal: "CampaignProposal", by_key: dict):
-    """Resolve a prose location reference by NAME (any script): exact normalized
-    equality first, then unique containment either way. Ambiguity returns None —
-    the preview warning stays loud rather than guessing."""
+    """Resolve a prose location reference by NAME or ALIAS (any script): exact
+    normalized equality first, then unique containment either way. Ambiguity returns
+    None — the preview warning stays loud rather than guessing."""
     def norm(text: str) -> str:
         return " ".join((text or "").split()).casefold()
+
+    def labels(loc) -> list[str]:
+        return [n for n in (norm(loc.name), *(norm(a) for a in loc.aliases)) if n]
 
     want = norm(prose)
     if not want:
         return None
     exact = [by_key[loc.key] for loc in proposal.locations
-             if loc.key in by_key and norm(loc.name) == want]
+             if loc.key in by_key and want in labels(loc)]
     if len(exact) == 1:
         return exact[0]
     partial = [by_key[loc.key] for loc in proposal.locations
-               if loc.key in by_key and norm(loc.name)
-               and (norm(loc.name) in want or want in norm(loc.name))]
+               if loc.key in by_key
+               and any(n in want or want in n for n in labels(loc))]
     return partial[0] if len(partial) == 1 else None
 
 
@@ -365,6 +373,19 @@ def _validate(p: CampaignProposal) -> ImportReview:
         raise ValidationError(f"connections/exits/parents reference unknown location keys: {', '.join(bad)}")
 
     warnings: list[str] = []
+    # A name/alias answering for MORE than one place makes the resolver ambiguous —
+    # the root of "same room, two locations". Surface every collision at preview.
+    answers_for: dict[str, list[str]] = {}
+    for loc in p.locations:
+        for label in {" ".join((loc.name or "").split()).casefold(),
+                      *(" ".join(a.split()).casefold() for a in loc.aliases if a.strip())}:
+            if label:
+                answers_for.setdefault(label, []).append(loc.name)
+    for label, places in sorted(answers_for.items()):
+        if len(places) > 1:
+            warnings.append(
+                f"Name/alias '{label}' answers for multiple locations: "
+                f"{', '.join(places)} — references to it will be ambiguous.")
     for n in p.npcs:
         if not n.goal:
             warnings.append(f"NPC '{n.name}' has no goal.")
@@ -491,7 +512,7 @@ class CanonImportService:
         by_key: dict[str, Location] = {}
         for item in proposal.locations:
             loc = Location(
-                campaign_id=campaign_id, name=item.name,
+                campaign_id=campaign_id, name=item.name, aliases=list(item.aliases),
                 description_obvious=item.obvious, description_focused=item.focused,
                 description_hidden=item.hidden, location_type=item.location_type,
                 weather=item.weather, current_activity=item.current_activity,
