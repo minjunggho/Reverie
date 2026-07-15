@@ -147,3 +147,55 @@ async def test_late_joiner_is_placed_at_party_anchor_not_campaign_start(db, prov
     assert joined.location_id != world.location_id            # NOT the campaign start
     # The veterans did not move either.
     assert (await _char(db, world.kael_id)).location_id == harbor_id
+
+
+# --- cinematic opening: exactly once, governed by state not session number ---------
+
+_GOAL = "ทำลายตราสัญญากลวงก่อนวันที่เก้า"
+
+
+def _prologues(result):
+    return [m for m in result.messages if m.kind == MessageKind.CAMPAIGN_PROLOGUE]
+
+
+async def test_cinematic_plays_on_later_session_when_never_played(db, provider):
+    """A campaign whose first session was consumed by a broken start still gets its
+    opening cinematic on the NEXT session — and never again after that."""
+    world = await build_world(db)
+    # Session 1 happens with no main goal (the real playtest's broken start).
+    first = await _open_session(db, provider, world, location_id=world.location_id)
+    assert first.number == 1 and _prologues(first) == []
+    await _complete(db, first.session_id)
+
+    # The campaign canon arrives (import completes): a main goal now exists.
+    async with db.unit_of_work() as s:
+        (await s.get(Campaign, world.campaign_id)).central_question = _GOAL
+
+    second = await _open_session(db, provider, world)
+    assert second.number == 2
+    assert _prologues(second)                                 # cinematic finally plays
+    async with db.session() as s:
+        campaign = await s.get(Campaign, world.campaign_id)
+        assert campaign.config.get("opening_cinematic_played") is True
+    await _complete(db, second.session_id)
+
+    third = await _open_session(db, provider, world)
+    assert _prologues(third) == []                            # never replays
+
+
+async def test_start_at_still_plays_the_cinematic_exactly_once(db, provider):
+    """An owner-supplied location must not bypass the opening cinematic."""
+    world = await build_world(db)
+    async with db.unit_of_work() as s:
+        (await s.get(Campaign, world.campaign_id)).central_question = _GOAL
+        location_name = (await s.get(Location, world.location_id)).name
+
+    game = build_bridge(db, provider=provider)
+    admin = AdminBridge(db, provider, creation_flow=game.creation_flow,
+                        session_zero=game.session_zero)
+    result = await admin.handle(_admin_msg(f"!rv session start at {location_name}"))
+    kinds = [m.kind for m in result.responses]
+    assert MessageKind.CAMPAIGN_PROLOGUE in kinds             # cinematic ran
+    async with db.session() as s:
+        assert (await s.get(Campaign, world.campaign_id)).config.get(
+            "opening_cinematic_played") is True

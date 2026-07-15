@@ -167,6 +167,12 @@ class SessionOpeningService:
 
             campaign = await read.get(Campaign, campaign_id)
             prep = dict((campaign.session_prep if campaign else None) or {})
+            # The cinematic opening is governed by persisted state, never by session
+            # numbering — a campaign whose first session was consumed by a broken
+            # start still gets its opening on the next session.
+            cinematic_played = bool(
+                ((campaign.config if campaign else None) or {}).get(
+                    "opening_cinematic_played"))
 
         async with self.db.unit_of_work() as s:
             session_row = await SessionService(s).create_session(
@@ -187,27 +193,29 @@ class SessionOpeningService:
         ctx = await self._gather(campaign_id, attendance_member_ids, location_id)
         reminders = ctx["reminders"]
 
-        # 3. build the opening (session 1: a grand cinematic prologue when the
-        #    campaign has a known main goal, else the standard hook-aware opening;
-        #    later sessions: continuity restore).
+        # 3. build the opening. The grand cinematic prologue plays EXACTLY ONCE per
+        #    campaign — whenever the played-once flag is unset and canon provides a
+        #    main goal — regardless of session number or how the location was chosen
+        #    (inferred or `start at`). Resuming later sessions never replays it.
         prologue: CampaignPrologue | None = None
-        if number == 1:
+        if not cinematic_played:
             world = await self._gather_world_canon(campaign_id, location_id)
             if world["main_goal"]:
                 prologue = await self._generate_cinematic_prologue(ctx, world, prep=prep)
-            if prologue is not None:
-                # The prologue's first beat + first choice ARE the opening scene; the
-                # world-scale movements are rendered ahead of it in step 5.
-                opening = OpeningScene(
-                    title=prologue.title,
-                    situation_lines=[prologue.first_beat],
-                    pressure="",
-                    decision_prompt=prologue.decision_prompt,
-                    used_hooks=prologue.used_hooks,
-                )
-            else:
-                opening = await self._generate_first_opening(
-                    ctx, prep.get("purpose") or scene_purpose, prep=prep)
+        if prologue is not None:
+            # The prologue's first beat + first choice ARE the opening scene; the
+            # world-scale movements are rendered ahead of it in step 5.
+            opening = OpeningScene(
+                title=prologue.title,
+                situation_lines=[prologue.first_beat],
+                pressure="",
+                decision_prompt=prologue.decision_prompt,
+                used_hooks=prologue.used_hooks,
+            )
+            recap_text = ""
+        elif number == 1:
+            opening = await self._generate_first_opening(
+                ctx, prep.get("purpose") or scene_purpose, prep=prep)
             recap_text = ""
         else:
             async with self.db.session() as read:
@@ -256,6 +264,14 @@ class SessionOpeningService:
                 campaign_row = await s.get(Campaign, campaign_id)
                 if campaign_row is not None:
                     campaign_row.current_party_anchor_id = location_id
+            # The cinematic played — persist the played-once flag in the SAME
+            # transaction as the scene/lifecycle so it can never fire twice.
+            if prologue is not None:
+                camp_row = await s.get(Campaign, campaign_id)
+                if camp_row is not None:
+                    camp_row.config = {
+                        **(camp_row.config or {}), "opening_cinematic_played": True,
+                    }
             await SessionService(s).begin_active_play(session_id)
             row = await s.get(Session, session_id)
             row.active_play_state = ActivePlayState.TABLE_OPEN.value
