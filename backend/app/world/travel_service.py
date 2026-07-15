@@ -53,7 +53,15 @@ class TravelService:
         self.provider = provider
         self.expansion = WorldExpansionService(db, provider)
 
-    async def travel(self, ctx, *, reference: str, allow_expansion: bool = True) -> BridgeResult:
+    # Verbs that mean "I am attaching myself to this person's movement" — used to
+    # decide whether a person-directed movement also establishes persistent follow.
+    _FOLLOW_HINTS = ("ตาม", "ไปกับ", "ไปด้วย", "อยู่กับ", "เกาะติด", "follow",
+                     "stay with", "go with", "keep close", "walk after")
+
+    async def travel(
+        self, ctx, *, reference: str, allow_expansion: bool = True,
+        forced_destination_id: str | None = None, preserve_follow: bool = False,
+    ) -> BridgeResult:
         async with self.db.session() as read:
             scene = await SceneService(read).get_active_scene(ctx.session_id) if ctx.session_id else None
             actor = await read.get(Character, ctx.character_id) if ctx.character_id else None
@@ -72,6 +80,20 @@ class TravelService:
         if current_id is None:
             return self._note(ctx, "ยังไม่รู้ว่าตัวละครอยู่ตรงไหนในโลก — เริ่มเซสชันก่อน")
 
+        # PERSON-DIRECTED movement (F3): "ตามเนเน่โกะไป" names a TEAMMATE, not a
+        # direction — the target IS the contextual destination. Resolve the person
+        # first: co-located → attach (never ask "which direction?"); known elsewhere →
+        # their location becomes the destination; unknown → an honest in-world reason.
+        if forced_destination_id is None:
+            person = await self._person_directed(
+                ctx, current_id=current_id, reference=reference)
+            if isinstance(person, BridgeResult):
+                return person
+            if person is not None:
+                forced_destination_id, wants_follow = person
+                # Walking TO the person one follows is following, not leading.
+                preserve_follow = preserve_follow or wants_follow
+
         # Resolve to an ordered ROUTE (list of connection ids to walk), in priority:
         #   1. a direct authored exit (fast path, one hop);
         #   2. a MULTI-HOP route to a named/aliased/NPC-located destination — the
@@ -85,7 +107,28 @@ class TravelService:
         # The weak single-exit "just leave" fallback (conf 0.7) is held back: a NAMED
         # destination elsewhere outranks "go through the only door" (§5).
         strong = match if (match is not None and match.confidence >= 0.8) else None
-        if strong is not None:
+        if forced_destination_id is not None:
+            # The destination is already a canonical location id (a teammate's
+            # position, a follow catch-up) — route straight to it, no reference
+            # resolution and NEVER expansion.
+            from app.world.route_service import RouteService
+
+            async with self.db.session() as read:
+                route = await RouteService(read).find_route(
+                    campaign_id=ctx.campaign_id, from_location_id=current_id,
+                    to_location_id=forced_destination_id)
+            if route is None or not route.hops:
+                from app.models.location import Location as _DLoc
+
+                async with self.db.session() as read:
+                    dest = await read.get(_DLoc, forced_destination_id)
+                dest_name = dest.name if dest else "ที่นั่น"
+                return self._note(
+                    ctx, f"รู้แล้วว่าอยู่ที่{dest_name} แต่ตอนนี้ยังไม่มีทางเปิดไปถึง — "
+                         "ลองหาทางอื่นหรือรอให้ทางเปิดก่อน")
+            hop_ids = [h.id for h in route.hops]
+            waypoints = list(route.waypoint_names)
+        elif strong is not None:
             if strong.connection.access_state != "open":
                 return self._note(
                     ctx, f"ทาง{strong.connection.label or 'นั้น'}ตอนนี้{_access_th(strong.connection.access_state)}")
@@ -143,8 +186,10 @@ class TravelService:
                     campaign_id=ctx.campaign_id, leader_id=ctx.character_id,
                     at_location_id=current_id))
                 # The actor moving on their own initiative is now leading, not
-                # following — break any stale follow state they held.
-                await PositionService(s).stop_follow(follower_id=ctx.character_id)
+                # following — break any stale follow state they held. A catch-up
+                # walk toward one's leader (preserve_follow) is NOT own initiative.
+                if not preserve_follow:
+                    await PositionService(s).stop_follow(follower_id=ctx.character_id)
 
             walk = await self._execute_route(
                 s, ctx=ctx, hop_ids=hop_ids, movers=movers, origin_id=current_id)
@@ -224,6 +269,99 @@ class TravelService:
         note = f"travel -> {sctx.location_name}" + (" (blocked midway)" if blocked_note else "")
         return BridgeResult(handled=True, category=MessageCategory.COMMITTED_ACTION,
                             state_mutated=True, responses=responses, note=note)
+
+    @staticmethod
+    async def resolve_party_character(
+        read, *, campaign_id: str, reference: str, exclude_id: str | None,
+    ) -> Character | None:
+        """The single party character named in a reference (exact normalized name/
+        alias, else a unique containment match). None on no match or ambiguity —
+        never a guess between two teammates."""
+        from app.rules_content.choice_names import normalize_choice_name
+
+        ref = normalize_choice_name(reference or "")
+        if not ref:
+            return None
+        rows = list((await read.execute(select(Character).where(
+            Character.campaign_id == campaign_id))).scalars())
+        others = [c for c in rows if c.id != exclude_id]
+
+        def names(c: Character) -> list[str]:
+            return [n for n in (c.name, *(c.aliases or [])) if n]
+
+        exact = [c for c in others
+                 if any(normalize_choice_name(n) == ref for n in names(c))]
+        if len(exact) == 1:
+            return exact[0]
+        if exact:
+            return None
+        scored: list[tuple[Character, int]] = []
+        for c in others:
+            best = max((len(normalize_choice_name(n)) for n in names(c)
+                        if normalize_choice_name(n)
+                        and normalize_choice_name(n) in ref), default=0)
+            if best >= 2:          # one-char accidental hits are never a person match
+                scored.append((c, best))
+        if not scored:
+            return None
+        scored.sort(key=lambda t: -t[1])
+        top = [c for c, ln in scored if ln == scored[0][1]]
+        return top[0] if len(top) == 1 else None
+
+    async def _person_directed(
+        self, ctx, *, current_id: str, reference: str,
+    ) -> "BridgeResult | str | None":
+        """Resolve movement aimed at a PERSON. Returns a finished BridgeResult
+        (co-located attach / unknown-position note), a ``(location_id, wants_follow)``
+        pair (known elsewhere — walk to them), or None (not person-directed)."""
+        if not getattr(ctx, "character_id", None):
+            return None
+        low = (reference or "").casefold()
+        wants_follow = any(h in low for h in self._FOLLOW_HINTS)
+
+        async with self.db.session() as read:
+            target = await self.resolve_party_character(
+                read, campaign_id=ctx.campaign_id, reference=reference,
+                exclude_id=ctx.character_id)
+            # Pronoun follow ("ตามเธอไป"): no name resolves, but the follow verb +
+            # exactly ONE other teammate right here is unambiguous — follow them.
+            if target is None and wants_follow:
+                here = [c for c in await PositionService(read).co_located(
+                    campaign_id=ctx.campaign_id, location_id=current_id)
+                    if c.id != ctx.character_id]
+                if len(here) == 1:
+                    target = here[0]
+        if target is None:
+            return None
+
+        if target.location_id == current_id:
+            async with self.db.unit_of_work() as s:
+                actor = await s.get(Character, ctx.character_id)
+                actor_name = actor.name if actor else "ตัวละครของเจ้า"
+                if wants_follow:
+                    await PositionService(s).set_follow(
+                        follower_id=ctx.character_id, leader_id=target.id)
+            if wants_follow:
+                return BridgeResult(
+                    handled=True, category=MessageCategory.COMMITTED_ACTION,
+                    state_mutated=True, note="follow set (co-located)",
+                    responses=[OutboundMessage(
+                        ctx.channel_id,
+                        f"{actor_name} ขยับไปอยู่ข้างๆ {target.name} — "
+                        f"จากนี้จะเดินทางไปด้วยกันจนกว่าจะบอกหยุดตาม",
+                        kind=MessageKind.TABLE_NOTICE)])
+            return self._note(
+                ctx, f"{target.name} อยู่ตรงนี้เอง — {actor_name} เดินเข้าไปหาได้เลย")
+
+        if target.location_id:
+            if wants_follow:
+                async with self.db.unit_of_work() as s:
+                    await PositionService(s).set_follow(
+                        follower_id=ctx.character_id, leader_id=target.id)
+            return (target.location_id, wants_follow)
+
+        return self._note(
+            ctx, f"ตอนนี้ไม่มีใครรู้ว่า {target.name} อยู่ที่ไหน — ต้องหาเบาะแสก่อน")
 
     async def _resolve_multi_hop(
         self, ctx, *, current_id: str, reference: str,

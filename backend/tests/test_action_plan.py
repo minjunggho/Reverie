@@ -144,15 +144,21 @@ async def test_natural_language_follow_and_stop(db, provider):
     assert (await _char(db, world.kael_id)).following_character_id is None
 
 
-async def test_follow_requires_co_location(db, provider):
+async def test_follow_after_leader_left_catches_up(db, provider):
+    """The leader already walked out (Discord messages are sequential, so this is
+    the COMMON case). Following is not refused for lack of co-location — the target
+    IS the destination: attach + walk to them in the same transaction (F3)."""
     world, sid, hall, yard = await _two_room_scene(db)
-    async with db.unit_of_work() as s:      # move Bront away first
+    async with db.unit_of_work() as s:      # Bront already moved on
         bront = await s.get(Character, world.bront_id)
         bront.location_id = yard
     table = Table(db, provider)
     r = await table.send("! ฉันตาม Bront ไป", author=world.p1_discord_id)
-    assert "ต้องอยู่ที่เดียวกับ" in r.responses[0].content
-    assert (await _char(db, world.kael_id)).following_character_id is None
+    kael = await _char(db, world.kael_id)
+    assert kael.following_character_id == world.bront_id     # consent recorded
+    assert kael.location_id == yard                          # caught up, no dead end
+    blob = "\n".join(m.content for m in r.responses)
+    assert "ต้องอยู่ที่เดียวกับ" not in blob and "ทางไหน" not in blob
 
 
 async def test_english_follow_phrase_also_works(db, provider):

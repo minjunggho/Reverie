@@ -685,30 +685,64 @@ class CommittedActionPipeline:
                 name = actor.name if actor else "ตัวละครของเจ้า"
             return self._table_note(ctx, f"{name} หยุดตามแล้ว — จะอยู่ที่นี่")
 
-        # Resolve the named leader among co-located party characters.
+        # Resolve the leader: (1) a named scene entity; (2) a party-wide name match —
+        # the leader may have JUST left the room (Discord messages are sequential, so
+        # "B follows A" often arrives after A moved); (3) the obvious interpretation —
+        # exactly ONE other teammate standing right here.
+        from app.world.travel_service import TravelService as _TS
+
         async with self.db.session() as read:
             scene = await SceneService(read).get_active_scene(ctx.session_id)
             directory = await SceneEntityDirectory(read).build(
                 scene, actor_character_id=ctx.character_id, campaign_id=ctx.campaign_id)
             resolution = directory.resolve_mentions(
                 [interpretation.follow_reference] if interpretation.follow_reference else [])
-            actor = await read.get(Character, ctx.character_id)
-        leaders = [e for e in resolution.resolved if e.entity_type == PLAYER_CHARACTER
-                   and e.entity_ref != entity_ref("character", ctx.character_id)]
-        if not leaders:
+            leaders = [e for e in resolution.resolved if e.entity_type == PLAYER_CHARACTER
+                       and e.entity_ref != entity_ref("character", ctx.character_id)]
+            leader_id = None
+            if leaders:
+                _, leader_id = parse_entity_ref(leaders[0].entity_ref)
+            if leader_id is None and interpretation.follow_reference:
+                found = await _TS.resolve_party_character(
+                    read, campaign_id=ctx.campaign_id,
+                    reference=interpretation.follow_reference,
+                    exclude_id=ctx.character_id)
+                leader_id = found.id if found is not None else None
+            if leader_id is None:
+                me = await read.get(Character, ctx.character_id)
+                here = []
+                if me is not None and me.location_id:
+                    here = [c for c in await PositionService(read).co_located(
+                        campaign_id=ctx.campaign_id, location_id=me.location_id)
+                        if c.id != me.id]
+                if len(here) == 1:
+                    leader_id = here[0].id
+        if leader_id is None:
             return self._table_note(
-                ctx, f"จะตามใคร? บอกชื่อตัวละครที่อยู่ด้วยกันตอนนี้")
-        _, leader_id = parse_entity_ref(leaders[0].entity_ref)
+                ctx, "จะตามใคร? บอกชื่อตัวละครที่อยู่ด้วยกันตอนนี้")
+
         async with self.db.unit_of_work() as s:
             leader = await s.get(Character, leader_id)
             me = await s.get(Character, ctx.character_id)
-            if leader is None or me is None or leader.location_id != me.location_id:
-                return self._table_note(
-                    ctx, f"ต้องอยู่ที่เดียวกับ {leaders[0].canonical_name} ก่อนจึงจะตามได้")
-            await PositionService(s).set_follow(follower_id=me.id, leader_id=leader_id)
-            actor_name, leader_name = me.name, leader.name
+            if leader is None or me is None:
+                return self._table_note(ctx, "จะตามใคร? บอกชื่อตัวละครที่อยู่ด้วยกันตอนนี้")
+            leader_loc, my_loc = leader.location_id, me.location_id
+            leader_name, actor_name = leader.name, me.name
+            if leader_loc == my_loc or leader_loc:
+                # Following is consent to travel together — record it either way.
+                await PositionService(s).set_follow(follower_id=me.id, leader_id=leader_id)
+        if leader_loc == my_loc:
+            return self._table_note(
+                ctx, f"{actor_name} จะเดินทางตาม {leader_name} ตราบใดที่ยังอยู่ด้วยกัน")
+        if leader_loc:
+            # The leader already moved on — catch up transactionally: walk the
+            # follower to the leader's location (never ask "which direction?").
+            return await self.travel.travel(
+                ctx, reference=interpretation.follow_reference or leader_name,
+                allow_expansion=False, forced_destination_id=leader_loc,
+                preserve_follow=True)
         return self._table_note(
-            ctx, f"{actor_name} จะเดินทางตาม {leader_name} ตราบใดที่ยังอยู่ด้วยกัน")
+            ctx, f"ตอนนี้ไม่มีใครรู้ว่า {leader_name} อยู่ที่ไหน — ต้องหาเบาะแสก่อน")
 
     # --- spellcasting: engine-resolved, never a generic check ------------------
     async def _handle_cast(
