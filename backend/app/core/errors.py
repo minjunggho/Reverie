@@ -27,6 +27,15 @@ class IllegalStateTransition(ReverieError):
     """A lifecycle / state-machine transition was not allowed."""
 
 
+class StateIntegrityError(ReverieError):
+    """Persisted world/session state is missing or inconsistent.
+
+    Raised instead of silently falling back (e.g. teleporting the party to the
+    campaign start). The action stops, the last valid state is preserved, and the
+    message names exactly what is missing so the owner can repair it explicitly.
+    """
+
+
 class AuthorizationError(ReverieError):
     """A visibility / retrieval-layer authorization violation."""
 

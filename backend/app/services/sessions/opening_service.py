@@ -64,12 +64,19 @@ class SessionOpeningService:
         """Canonical WHERE-to-open resolution (E7). Creation order is NEVER intent:
         1. current party anchor (continuity — where play last was)
         2. attending characters' canonical position (majority)
+        — an ONGOING campaign may resolve ONLY from the two continuity sources above;
+          if both are missing/dangling this raises StateIntegrityError instead of
+          silently teleporting the party back to the campaign start —
         3. campaign.starting_location_id (imported / AI-approved / owner-set)
         4. legacy session_prep.opening_location_id
         5. the campaign's ONLY location (unambiguous by count, never 'latest')
+        3–5 are legal only for a campaign with NO prior sessions (a genuine beginning).
         None → the caller must show a setup-incomplete notice; nothing is invented."""
         from collections import Counter
 
+        from sqlalchemy import func, select
+
+        from app.core.errors import StateIntegrityError
         from app.models.location import Location
         from app.world import LocationService
 
@@ -99,6 +106,24 @@ class SessionOpeningService:
                 found = await _alive(candidate)
                 if found:
                     return found
+
+            # Continuity sources exhausted. If this campaign has EVER had a session,
+            # falling back to the campaign start would teleport the party to the
+            # opening — the exact `saved_location or campaign.start_location` failure.
+            # Stop, preserve state, and report what is broken instead.
+            prior_sessions = (await s.execute(
+                select(func.count(Session.id)).where(Session.campaign_id == campaign_id)
+            )).scalar_one()
+            if prior_sessions > 0:
+                raise StateIntegrityError(
+                    f"campaign {campaign_id} has {prior_sessions} prior session(s) but no "
+                    f"valid party position: anchor="
+                    f"{campaign.current_party_anchor_id!r} (missing or dangling), "
+                    f"attending character positions={positions!r} (none resolvable). "
+                    "Refusing to fall back to the campaign start — repair explicitly "
+                    "(owner: `!rv session start at <location>`) or restore the data."
+                )
+
             start = await _alive(campaign.starting_location_id)
             if start:
                 return start
@@ -204,15 +229,29 @@ class SessionOpeningService:
             # Imported allowed clues seed the scene (failure-with-teeth material).
             if prep_clues:
                 scene.allowed_clues = prep_clues
-            # Place every attending character at the opening location (canonical position)
-            # and move the party anchor here — the continuity point for next session.
+            # Canonical placement — WITHOUT teleporting anyone. Only the campaign's
+            # FIRST session may seat the whole party at the opening location; after
+            # that, a character with a live position keeps it (a split party is a
+            # fact, not an error), and only characters with NO live position (a late
+            # joiner, a dangling location after re-import) are placed — at the
+            # party's current anchor, never silently back at the campaign start.
             if location_id:
                 from app.models.character import Character as _Char
+                from app.models.location import Location as _Loc
 
                 for ref in ctx["participant_refs"]:
                     _, cid = ref.split(":", 1)
                     char = await s.get(_Char, cid)
-                    if char is not None:
+                    if char is None:
+                        continue
+                    current = (
+                        await s.get(_Loc, char.location_id)
+                        if char.location_id else None
+                    )
+                    has_live_position = (
+                        current is not None and current.campaign_id == campaign_id
+                    )
+                    if number == 1 or not has_live_position:
                         char.location_id = location_id
                 campaign_row = await s.get(Campaign, campaign_id)
                 if campaign_row is not None:

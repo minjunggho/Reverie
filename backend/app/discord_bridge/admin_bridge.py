@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import select
 
-from app.core.errors import ReverieError
+from app.core.errors import ReverieError, StateIntegrityError
 from app.core.logging import get_logger
 from app.discord_bridge.dto import BridgeResult, InboundMessage, OutboundMessage
 from app.entities.directory import normalize_name
@@ -769,8 +769,25 @@ class AdminBridge:
             campaign_id = campaign.id
 
         opener = SessionOpeningService(self.db, self.provider)
-        location_id = await opener.resolve_opening_location(
-            campaign_id=campaign_id, attendance_member_ids=attending)
+        try:
+            location_id = await opener.resolve_opening_location(
+                campaign_id=campaign_id, attendance_member_ids=attending)
+        except StateIntegrityError as exc:
+            # Ongoing campaign with broken continuity state: stop, keep the last
+            # valid state, and tell the owner exactly what to repair — never
+            # teleport the party to the campaign start as error recovery.
+            log.error("session start blocked by state integrity: %s", exc)
+            return BridgeResult(handled=True, responses=[OutboundMessage(
+                ctx.inbound.channel_id,
+                "สถานะความต่อเนื่องของแคมเปญเสียหาย — ข้าหยุดไว้เพื่อไม่ให้ทุกคน"
+                "ถูกดีดกลับไปจุดเริ่มต้นของแคมเปญ\n\n"
+                "ไม่มีอะไรถูกเปลี่ยน ตำแหน่งล่าสุดของทุกคนยังอยู่ครบ\n"
+                "เจ้าของโต๊ะซ่อมได้ด้วย `!rv session start at <ชื่อสถานที่>` "
+                "(เลือกที่ที่ปาร์ตี้อยู่จริง)\n\n"
+                f"รายละเอียด: `{exc}`",
+                kind=MessageKind.TECHNICAL_ERROR,
+                title="เริ่มเซสชันไม่ได้ — สถานะไม่สมบูรณ์",
+            )])
         if location_id is None:
             # SETUP INCOMPLETE — never invent a universal tavern. The world is
             # the owner's: import it, create it with AI, or name the start.
