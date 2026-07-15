@@ -141,7 +141,13 @@ class SceneEntityDirectory:
 
         present_pc_refs: set[str] = set()
         if scene is not None:
-            # PLAYER CHARACTERS physically present in THIS scene.
+            # PLAYER CHARACTERS physically present in THIS scene. Presence is the
+            # same HARD invariant NPCs get: canonical POSITION is the truth, the
+            # participants list is bookkeeping. A participant whose tracked position
+            # is elsewhere is NOT present (no ghosts); a teammate standing at this
+            # scene's location IS present even if the participants list missed them
+            # (two people in one room must always be able to interact — never
+            # "invent distance" from a stale membership record).
             for ref in list(scene.participants or []):
                 kind, cid = parse_entity_ref(ref)
                 if kind != "character" or not cid:
@@ -149,12 +155,34 @@ class SceneEntityDirectory:
                 char = await self.session.get(Character, cid)
                 if char is None:
                     continue
+                if (scene.location_id is not None and char.location_id is not None
+                        and char.location_id != scene.location_id
+                        and cid != actor_character_id):
+                    continue                      # tracked elsewhere → absent below
                 present_pc_refs.add(ref)
                 ec = await self._pc_context(char, present=True,
                                             is_actor=(cid == actor_character_id))
                 entities.append(ec)
                 if ec.is_actor:
                     actor = ec
+
+            # Co-located teammates the participants list MISSED — position is
+            # canonical, so they are present and fully interactable.
+            if scene.location_id is not None and campaign_id is not None:
+                here = (await self.session.execute(select(Character).where(
+                    Character.campaign_id == campaign_id,
+                    Character.location_id == scene.location_id,
+                ))).scalars().all()
+                for char in here:
+                    ref = entity_ref("character", char.id)
+                    if ref in present_pc_refs:
+                        continue
+                    present_pc_refs.add(ref)
+                    ec = await self._pc_context(char, present=True,
+                                                is_actor=(char.id == actor_character_id))
+                    entities.append(ec)
+                    if ec.is_actor:
+                        actor = ec
 
             # NPCs / creatures visible or pressing in this scene. Presence is a HARD
             # invariant, not "was ever listed here": a ref only counts if the NPC's
