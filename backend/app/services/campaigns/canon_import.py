@@ -41,7 +41,9 @@ from app.schemas.belief import (
 
 ALLOWED_EXTENSIONS = {".json", ".md", ".txt"}
 MAX_BYTES = 1_000_000
-KEY = r"^[A-Za-z0-9_-]+$"
+# Keys are Unicode-aware: a Thai campaign's locations must keep distinct canonical
+# keys (the ASCII-only pattern rejected every Thai-derived key). No whitespace.
+KEY = r"^\S+$"
 
 
 # --- proposal schema ----------------------------------------------------------------
@@ -180,7 +182,16 @@ def _bullets(body: str) -> list[str]:
 
 
 def _slug(name: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_-]+", "-", name).strip("-").lower() or "x"
+    """Unicode-aware key slug. The previous ASCII-only slug stripped every Thai
+    character, so ALL Thai-named locations collapsed to the same key ("x") — a
+    2-location Thai campaign failed 'location keys must be unique', and a Thai
+    `Opening Location:` line could never match its location. Word characters of any
+    script are kept (plus the full Thai block, whose vowel/tone combining marks are
+    not matched by `\\w`), so Thai names produce distinct, stable keys and the same
+    prose slugs to the same key everywhere."""
+    cleaned = re.sub(r"[^\w฀-๿-]+", "-", name or "")
+    cleaned = re.sub(r"-{2,}", "-", cleaned).strip("-")
+    return cleaned.casefold() or "x"
 
 
 def _parse_exits(body: str) -> list[dict]:
@@ -316,6 +327,26 @@ def parse_campaign_file(filename: str, data: bytes) -> tuple[str, CampaignPropos
 
     review = _validate(proposal)
     return text, proposal, review
+
+
+def _location_by_name(prose: str, proposal: "CampaignProposal", by_key: dict):
+    """Resolve a prose location reference by NAME (any script): exact normalized
+    equality first, then unique containment either way. Ambiguity returns None —
+    the preview warning stays loud rather than guessing."""
+    def norm(text: str) -> str:
+        return " ".join((text or "").split()).casefold()
+
+    want = norm(prose)
+    if not want:
+        return None
+    exact = [by_key[loc.key] for loc in proposal.locations
+             if loc.key in by_key and norm(loc.name) == want]
+    if len(exact) == 1:
+        return exact[0]
+    partial = [by_key[loc.key] for loc in proposal.locations
+               if loc.key in by_key and norm(loc.name)
+               and (norm(loc.name) in want or want in norm(loc.name))]
+    return partial[0] if len(partial) == 1 else None
 
 
 def _validate(p: CampaignProposal) -> ImportReview:
@@ -574,10 +605,18 @@ class CanonImportService:
             if proposal.central_question:
                 campaign.central_question = proposal.central_question
             prep = dict(proposal.session_prep or {})
+            start = None
             if proposal.starting_location and proposal.starting_location in by_key:
-                prep["opening_location_id"] = by_key[proposal.starting_location].id
+                start = by_key[proposal.starting_location]
+            elif prep.get("opening_location"):
+                # The slugged reference missed every key — resolve the RAW prose
+                # against imported location NAMES before giving up, so a correctly
+                # imported campaign never demands `session start at <location>`.
+                start = _location_by_name(prep["opening_location"], proposal, by_key)
+            if start is not None:
+                prep["opening_location_id"] = start.id
                 # Canonical anchor: explicit imported starting location (E7).
-                campaign.starting_location_id = by_key[proposal.starting_location].id
+                campaign.starting_location_id = start.id
             campaign.session_prep = prep
             # Seed main-story continuity so the central storyline is remembered and
             # keeps reacting across turns/restarts (never lost, never railroaded).
