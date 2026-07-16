@@ -369,9 +369,16 @@ class CommittedActionPipeline:
         narration.text, _ = screen_narration(narration.text, actor_name)
         narration.decision_prompt = screen_decision_prompt(narration.decision_prompt, actor_name)
 
-        # Step 18-19: cache response + mark SENT.
+        # Step 18-19: cache response + mark SENT — and COMMIT any entities the
+        # narration introduces, in the same transaction, BEFORE delivery. A narrated
+        # "infected woman" becomes a real NPC at this scene's location, listed in the
+        # scene's visible entities, so approaching her next turn resolves instead of
+        # looping on "which direction?". Nothing already present is duplicated.
         roll_line = self._roll_line(check_result, outcome)
         async with self.db.unit_of_work() as s:
+            if narration.introduced_npcs:
+                await self._commit_introduced_npcs(
+                    s, ctx=ctx, introduced=narration.introduced_npcs)
             pm = await s.get(ProcessedMessage, ctx.processed_message_id) if ctx.processed_message_id else None
             if pm is not None:
                 pm.stage = ProcessingStage.SENT.value
@@ -751,6 +758,38 @@ class CommittedActionPipeline:
                 preserve_follow=True)
         return self._table_note(
             ctx, f"ตอนนี้ไม่มีใครรู้ว่า {leader_name} อยู่ที่ไหน — ต้องหาเบาะแสก่อน")
+
+    async def _commit_introduced_npcs(self, s, *, ctx: ResolvedContext, introduced) -> None:
+        """Create the entities a narration introduces — BEFORE the prose reaches the
+        table. Bounded (max 3 per narration), campaign-scoped, deduplicated against
+        entities already at this location (a Discord retry or a re-mention must never
+        spawn a twin). Each NPC lands at the scene's canonical location and joins the
+        scene's visible entities, so the directory resolves it next turn."""
+        from app.entities.directory import normalize_name
+        from app.models.npc import NPC as _NPC
+        from app.npcs import NPCService
+
+        scene_row = await SceneService(s).get_active_scene(ctx.session_id) if ctx.session_id else None
+        if scene_row is None or not scene_row.location_id:
+            return
+        existing = list((await s.execute(select(_NPC).where(
+            _NPC.campaign_id == ctx.campaign_id,
+            _NPC.current_location_id == scene_row.location_id))).scalars())
+        taken = {normalize_name(n.name) for n in existing}
+        visible = list(scene_row.visible_entity_ids or [])
+        for spec in introduced[:3]:
+            name = (spec.name or "").strip()
+            if not name or normalize_name(name) in taken:
+                continue
+            npc = await NPCService(s).create_npc(
+                campaign_id=ctx.campaign_id, name=name,
+                personality=(spec.descriptor or "").strip(),
+                current_location_id=scene_row.location_id)
+            taken.add(normalize_name(name))
+            ref = f"npc:{npc.id}"
+            if ref not in visible:
+                visible.append(ref)
+        scene_row.visible_entity_ids = visible
 
     # --- give/hand-over: engine-committed ownership, never narrated prose -------
     async def _handle_give(

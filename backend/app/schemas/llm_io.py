@@ -186,6 +186,14 @@ class ConsequenceProposal(BaseModel):
 
 
 # --- Narration ---------------------------------------------------------------
+class IntroducedNPC(BaseModel):
+    """A person/creature the narration is INTRODUCING into the scene. Declaring it
+    lets the ENGINE commit a real entity before delivery — a narrated 'infected
+    woman' must be approachable next turn, not a prose ghost."""
+    name: str
+    descriptor: str = ""            # one player-visible line (appearance/manner)
+
+
 class Narration(BaseModel):
     """Progressive-disclosure narration: short Thai lines in `text` (with line
     breaks), plus an optional single open decision point. The narrator NEVER puts
@@ -193,6 +201,8 @@ class Narration(BaseModel):
     text: str
     style: str = "concise"  # "concise" | "cinematic"
     decision_prompt: Optional[str] = None  # one open question, Thai, or None
+    # Entities this narration introduces (committed by the engine BEFORE delivery).
+    introduced_npcs: list[IntroducedNPC] = Field(default_factory=list)
 
 
 # --- Recap -------------------------------------------------------------------
