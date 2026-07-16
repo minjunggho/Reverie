@@ -31,8 +31,8 @@ _WORLD_RE = re.compile("|".join(_WORLD_AUTHORING), re.IGNORECASE)
 # the player. Actor-owned questions are explicitly exempted by `_actor_owns_question`.
 _DM_AGENCY = [
     r"(?:จะ|ควรจะ).*(?:ตอบ|พูด|บอก|แนะนำ|เสนอ|อธิบาย|ทำ|เลือก|ตัดสินใจ|โจมตี|ช่วย|ไป)"
-    r".*(?:อะไร|อย่างไร|ยังไง|แบบไหน|ทางไหน)",
-    r"(?:ตอบ|พูด|บอก|แนะนำ|เสนอ|ทำ|เลือก|ตัดสินใจ)\s*(?:อะไร|อย่างไร|ยังไง|แบบไหน)",
+    r".*(?:อะไร|อย่างไร|ยังไง|แบบไหน|ทางไหน|วิธีใด|สิ่งใด)",
+    r"(?:ตอบ|พูด|บอก|แนะนำ|เสนอ|ทำ|เลือก|ตัดสินใจ)\s*(?:อะไร|อย่างไร|ยังไง|แบบไหน|วิธีใด|สิ่งใด)",
     r"what will .+ (?:do|say|answer|suggest|choose|decide)",
     r"how will .+ (?:respond|answer|react|decide)",
     r"what should .+ (?:do|say|answer|suggest|choose)",
