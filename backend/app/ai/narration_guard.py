@@ -1,11 +1,12 @@
-"""Anti-hallucination / world-authoring screen for narrator output.
+"""Anti-hallucination / agency screen for narrator output.
 
 In AUTHORITATIVE_WORLD mode, Reverie must never ask a player to invent an objective
-world fact. This deterministically detects DM output that outsources world authorship
-("เจ้าเห็นอะไรข้างนอก?", "เมืองนี้ชื่ออะไร?") and rewrites it to an agency-safe prompt
-("Veskan จะทำอย่างไร?"). Questions about the player's OWN character are allowed.
+world fact ("เจ้าเห็นอะไรข้างนอก?") or decide what a DM-owned NPC/enemy will do
+("Oruktyr จะเสนออะไร?"). Offending prompts are deterministically rewritten to an
+agency-safe question about the acting player character.
 
-This is a structural guard, not a prompt plea — see docs/world-canon.md.
+Questions about the player's OWN character remain allowed. This is a structural guard,
+not a prompt plea — see docs/world-canon.md and issue #1.
 """
 from __future__ import annotations
 
@@ -26,6 +27,18 @@ _WORLD_AUTHORING = [
 ]
 _WORLD_RE = re.compile("|".join(_WORLD_AUTHORING), re.IGNORECASE)
 
+# Questions that hand control of an NPC, enemy, creature, or other DM-owned entity to
+# the player. Actor-owned questions are explicitly exempted by `_actor_owns_question`.
+_DM_AGENCY = [
+    r"(?:จะ|ควรจะ).*(?:ตอบ|พูด|บอก|แนะนำ|เสนอ|อธิบาย|ทำ|เลือก|ตัดสินใจ|โจมตี|ช่วย|ไป)"
+    r".*(?:อะไร|อย่างไร|ยังไง|แบบไหน|ทางไหน)",
+    r"(?:ตอบ|พูด|บอก|แนะนำ|เสนอ|ทำ|เลือก|ตัดสินใจ)\s*(?:อะไร|อย่างไร|ยังไง|แบบไหน)",
+    r"what will .+ (?:do|say|answer|suggest|choose|decide)",
+    r"how will .+ (?:respond|answer|react|decide)",
+    r"what should .+ (?:do|say|answer|suggest|choose)",
+]
+_DM_AGENCY_RE = re.compile("|".join(_DM_AGENCY), re.IGNORECASE)
+
 # A safe fallback decision prompt (the world is framed; the CHARACTER decides).
 _SAFE_PROMPT = "จะทำอะไรต่อ?"
 
@@ -34,29 +47,65 @@ def is_world_authoring_question(text: str) -> bool:
     return bool(_WORLD_RE.search(text or ""))
 
 
+def _actor_owns_question(text: str, actor_name: str | None) -> bool:
+    """Return True when the grammatical decision owner is the acting PC.
+
+    Merely mentioning the actor is not enough: "Oruktyr จะตอบ Veskan อย่างไร?"
+    contains Veskan but still delegates Oruktyr's agency. The actor's name must appear
+    immediately before a player-choice verb.
+    """
+    if not text or not actor_name:
+        return False
+    actor = re.escape(actor_name.strip())
+    if not actor:
+        return False
+    pattern = re.compile(
+        rf"{actor}\s*(?:จะ|ควรจะ|อยาก|ต้องการ|เลือกจะ|คิดจะ)?\s*"
+        rf"(?:ทำ|พูด|ตอบ|ถาม|ตรวจ|สำรวจ|เสี่ยง|เลือก|ตัดสินใจ|ไป|ช่วย|โจมตี)",
+        re.IGNORECASE,
+    )
+    return bool(pattern.search(text))
+
+
+def is_dm_agency_question(text: str, actor_name: str | None = None) -> bool:
+    """Detect a question asking the player to choose a DM-owned entity's action."""
+    if not text or _actor_owns_question(text, actor_name):
+        return False
+    return bool(_DM_AGENCY_RE.search(text))
+
+
+def is_invalid_decision_question(text: str, actor_name: str | None = None) -> bool:
+    return is_world_authoring_question(text) or is_dm_agency_question(text, actor_name)
+
+
 def screen_decision_prompt(prompt: str | None, actor_name: str | None = None) -> str | None:
     """A decision prompt may ask the CHARACTER what they do, never the player to
-    supply world facts. Rewrite offenders."""
+    supply world facts or control a DM-owned entity. Rewrite offenders."""
     if not prompt:
         return prompt
-    if is_world_authoring_question(prompt):
+    if is_invalid_decision_question(prompt, actor_name):
         who = actor_name or "ตัวละครของเจ้า"
         return f"{who}จะทำอย่างไร?"
     return prompt
 
 
 def screen_narration(text: str, actor_name: str | None = None) -> tuple[str, bool]:
-    """Strip world-authoring questions from narration prose. Returns (text, changed).
-    A sentence that asks the player to invent scenery is removed; if that empties the
-    text, a safe prompt is substituted."""
+    """Strip invalid questions from narration prose. Returns (text, changed).
+
+    A sentence that asks the player to invent scenery or control an NPC/enemy is
+    removed; if that empties the text, a safe actor-owned prompt is substituted.
+    """
     if not text:
         return text, False
     kept, changed = [], False
     for line in text.split("\n"):
         # Split a line into sentence-ish chunks on Thai/Latin terminators.
-        offending = any(is_world_authoring_question(chunk)
-                        for chunk in re.split(r"(?<=[?？])\s*", line) if chunk.strip())
-        if offending and "?" in line:
+        offending = any(
+            is_invalid_decision_question(chunk, actor_name)
+            for chunk in re.split(r"(?<=[?？])\s*", line)
+            if chunk.strip()
+        )
+        if offending and ("?" in line or "？" in line):
             changed = True
             continue
         kept.append(line)
