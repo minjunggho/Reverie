@@ -54,7 +54,8 @@ HELP_LINES = (
     "`!rv join` — นั่งร่วมโต๊ะ",
     "`!rv character` — สร้างตัวละครแบบคุยกัน (แนะนำ) · หรือ `!rv character <ชื่อ> <คลาส>`",
     "`!rv resume` — เปิดแบบร่างตัวละครที่สร้างค้างไว้จากขั้นตอนเดิม",
-    "`!rv session start` / `!rv session end` — เริ่ม/จบเซสชัน (เจ้าของโต๊ะ)",
+    "`!rv session start` / `!rv session resume` / `!rv session end` — "
+    "เริ่มเซสชันใหม่ / เรียกดูสถานะปัจจุบัน / จบเซสชัน",
     "`!rv sheet` · `!rv spells` · `!rv inventory` · `!rv journal` · `!rv party` — ดูตัวละคร/คาถา/ของ/บันทึก/ปาร์ตี้",
     "`!rv wallet` — ถุงเงินของตัวละคร · `!rv time` — เวลาในโลก",
     "`!rv follow <ชื่อตัวละคร>` / `!rv unfollow` — ตามเดินทางหรือหยุดตามตัวละครนั้น",
@@ -730,7 +731,13 @@ class AdminBridge:
             return await self._session_start(ctx)
         if sub == "end":
             return await self._session_end(ctx)
-        return self._notice(ctx.inbound, "ใช้: `!rv session start` หรือ `!rv session end`")
+        if sub == "resume":
+            return await self._session_resume(ctx)
+        return self._notice(ctx.inbound, (
+            "คำสั่งเซสชันแยกหน้าที่ชัดเจน:\n"
+            "• `!rv session start` — เริ่มเซสชันใหม่จริงๆ (เมื่อไม่มีเซสชันค้างอยู่)\n"
+            "• `!rv session resume` — เรียกดูสถานะปัจจุบันของเซสชันที่เล่นอยู่ ตรงตามที่บันทึกไว้\n"
+            "• `!rv session end` — จบเซสชันพร้อมสรุป"))
 
     async def _session_start(self, ctx: _Ctx) -> BridgeResult:
         async with self.db.unit_of_work() as s:
@@ -803,6 +810,77 @@ class AdminBridge:
             participants=participants, mode=SceneMode.EXPLORATION,
         )
         return BridgeResult(handled=True, responses=opening.messages)
+
+    async def _session_resume(self, ctx: _Ctx) -> BridgeResult:
+        """Restore the table's orientation from AUTHORITATIVE state — where the party
+        is, who is present, known exits, the main objective, in-world time. Strictly
+        read-only: resuming never creates, moves, replays, or repairs anything, so it
+        can never be the thing that corrupts a session (F15/F16)."""
+        from app.core.clock import format_game_time_th
+        from app.models.location import Location
+        from app.models.npc import NPC
+        from app.services.campaigns.main_story import MainStoryService
+        from app.services.scenes import SceneService
+        from app.world import PositionService, WorldGraphService
+
+        async with self.db.session() as s:
+            camp = CampaignService(s)
+            campaign = await camp.resolve_campaign_by_channel(ctx.inbound.channel_id)
+            if campaign is None:
+                return self._notice(ctx.inbound, "ยังไม่มีโต๊ะในห้องนี้")
+            active = await SessionService(s).get_active_session(campaign.id)
+            if active is None:
+                return self._notice(
+                    ctx.inbound,
+                    "ไม่มีเซสชันที่กำลังเล่นอยู่ — เริ่มใหม่ด้วย `!rv session start`")
+            scene = await SceneService(s).get_active_scene(active.id)
+            location = (await s.get(Location, scene.location_id)
+                        if scene is not None and scene.location_id else None)
+            if location is None:
+                return self._notice(
+                    ctx.inbound,
+                    "เซสชันเปิดอยู่แต่ยังไม่มีฉากที่มีสถานที่ — แจ้งเจ้าของโต๊ะตรวจสอบ")
+
+            party = await PositionService(s).co_located(
+                campaign_id=campaign.id, location_id=location.id)
+            npcs = list((await s.execute(select(NPC).where(
+                NPC.campaign_id == campaign.id,
+                NPC.current_location_id == location.id))).scalars())
+            exits = await WorldGraphService(s).exits(location.id)
+            exit_lines = []
+            for e in exits[:8]:
+                dest = await s.get(Location, e.to_location_id)
+                label = e.label or (dest.name if dest else "?")
+                if dest is not None and label != dest.name:
+                    label += f" → {dest.name}"
+                exit_lines.append(f"• {label}")
+            story = await MainStoryService(s).get(campaign.id)
+            goal = next((g.get("text", "") for g in story.get("goals", [])
+                         if g.get("key") == "main" and g.get("text")),
+                        "") or campaign.central_question
+            fields = []
+            if party:
+                fields.append({"name": "อยู่ด้วยกันตอนนี้",
+                               "value": ", ".join(c.name for c in party),
+                               "inline": False})
+            if npcs:
+                fields.append({"name": "คนอื่นในที่นี้",
+                               "value": ", ".join(n.name for n in npcs[:8]),
+                               "inline": False})
+            if exit_lines:
+                fields.append({"name": "ทางออกที่รู้จัก",
+                               "value": "\n".join(exit_lines), "inline": False})
+            if goal:
+                fields.append({"name": "🎯 เป้าหมายหลักของการเดินทาง",
+                               "value": goal, "inline": False})
+            body = location.description_obvious or f"พวกเจ้าอยู่ที่{location.name}"
+            return BridgeResult(handled=True, responses=[OutboundMessage(
+                ctx.inbound.channel_id, body, kind=MessageKind.SCENE_FRAME,
+                title=f"ตอนนี้ — {location.name}",
+                data={"fields": fields,
+                      "footer": f"เซสชันที่ {active.number} · "
+                                f"{format_game_time_th(campaign.current_game_time)}"},
+            )])
 
     async def _session_end(self, ctx: _Ctx) -> BridgeResult:
         async with self.db.session() as s:

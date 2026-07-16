@@ -183,6 +183,54 @@ async def test_cinematic_plays_on_later_session_when_never_played(db, provider):
     assert _prologues(third) == []                            # never replays
 
 
+# --- session command semantics (F15): resume restores, never repairs-by-reset -----
+
+async def test_session_resume_restores_orientation_without_mutation(db, provider):
+    """`!rv session resume` answers Where am I / Who is with me / What is our goal —
+    from authoritative state, with ZERO writes (versions unchanged)."""
+    world = await build_world(db)
+    async with db.unit_of_work() as s:
+        (await s.get(Campaign, world.campaign_id)).central_question = _GOAL
+    opening = await _open_session(db, provider, world, location_id=world.location_id)
+
+    async with db.session() as s:
+        before_version = (await s.get(Session, opening.session_id)).version
+        location_name = (await s.get(Location, world.location_id)).name
+
+    game = build_bridge(db, provider=provider)
+    admin = AdminBridge(db, provider, creation_flow=game.creation_flow,
+                        session_zero=game.session_zero)
+    result = await admin.handle(_admin_msg("!rv session resume"))
+
+    card = result.responses[0]
+    assert location_name in (card.title or "")                 # Where am I?
+    values = " ".join(f.get("value", "") for f in (card.data.get("fields") or []))
+    assert "Kael" in values and "Bront" in values              # Who is with me?
+    assert "ยามเฝ้าประตู" in values                             # NPCs present
+    assert _GOAL in values                                     # What is our goal?
+    async with db.session() as s:
+        assert (await s.get(Session, opening.session_id)).version == before_version
+
+
+async def test_session_resume_without_active_session_points_to_start(db, provider):
+    world = await build_world(db)
+    game = build_bridge(db, provider=provider)
+    admin = AdminBridge(db, provider, creation_flow=game.creation_flow,
+                        session_zero=game.session_zero)
+    result = await admin.handle(_admin_msg("!rv session resume"))
+    assert "session start" in result.responses[0].content
+
+
+async def test_unknown_session_subcommand_explains_distinct_semantics(db, provider):
+    world = await build_world(db)
+    game = build_bridge(db, provider=provider)
+    admin = AdminBridge(db, provider, creation_flow=game.creation_flow,
+                        session_zero=game.session_zero)
+    result = await admin.handle(_admin_msg("!rv session restart"))
+    body = result.responses[0].content
+    assert "start" in body and "resume" in body and "end" in body
+
+
 async def test_start_at_still_plays_the_cinematic_exactly_once(db, provider):
     """An owner-supplied location must not bypass the opening cinematic."""
     world = await build_world(db)
