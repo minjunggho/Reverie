@@ -375,6 +375,7 @@ class CommittedActionPipeline:
                 scene_id=scene_id, actor_entity=actor,
             )
             applier.allowed_clues = list(scene_row.allowed_clues or []) if scene_row else []
+            applier.allowed_quest_keys = await self._authored_quest_keys(s, ctx.campaign_id)
             _, rejected = await applier.apply_valid(consequence.deltas)
             private_reveals = list(applier.private_reveals)
             fragments = list(applier.revealed_fragments)
@@ -559,6 +560,18 @@ class CommittedActionPipeline:
             responses=responses,
             note=f"outcome={outcome}; consequence={consequence.consequence_class.value}",
         )
+
+    @staticmethod
+    async def _authored_quest_keys(session, campaign_id: str) -> list[str]:
+        """The objective keys this campaign declared. Gates `update_quest` so the model
+        can advance an authored objective but never invent one."""
+        from sqlalchemy import select
+
+        from app.models.consequences import Quest
+
+        return list((await session.execute(
+            select(Quest.key).where(Quest.campaign_id == campaign_id)
+        )).scalars().all())
 
     async def _discord_id_for_character(self, character_id: str) -> str | None:
         from app.models.campaign import CampaignMember

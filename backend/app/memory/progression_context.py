@@ -85,9 +85,35 @@ class ProgressionContextBuilder:
             # main_story existed. The central question is the only direction there is.
             goal = campaign.central_question or ""
 
+        # The objective layer. A campaign with no chapters (hand-made, or imported
+        # before chapters existed) simply contributes nothing here — goal + leads
+        # still reach the narrator.
+        from app.services.campaigns.progression_service import ProgressionService
+
+        progression = ProgressionService(self.session)
+        chapter = await progression.active_chapter(campaign_id)
+        objectives = await progression.active_objectives(campaign_id)
+        # The immediate task is the first actionable objective; the rest are context
+        # the party can also act on and surface as leads below.
+        immediate = objectives[0] if objectives else None
+
         return ProgressionContext(
             campaign_goal=goal,
-            # chapter_goal / active_objective are filled by the objective layer
-            # (slice 2). Until then they stay empty and render nothing.
-            leads=[x for x in story.get("leads", []) if x][:MAX_VISIBLE_LEADS],
+            # hidden_purpose is DM-only and deliberately not read (see module docstring).
+            chapter_goal=chapter.goal if chapter is not None else "",
+            active_objective=(immediate.task or immediate.name) if immediate is not None else "",
+            leads=self._leads(story, objectives[1:]),
         )
+
+    @staticmethod
+    def _leads(story: dict, other_objectives: list) -> list[str]:
+        """Open objectives are stronger leads than main_story's free-text threads: they
+        are typed, stateful, and the engine knows when they resolve. They go first, and
+        story leads fill whatever room is left up to the visible cap."""
+        leads = [(q.task or q.name) for q in other_objectives if (q.task or q.name)]
+        for text in story.get("leads", []):
+            if len(leads) >= MAX_VISIBLE_LEADS:
+                break
+            if text and text not in leads:
+                leads.append(text)
+        return leads[:MAX_VISIBLE_LEADS]

@@ -90,6 +90,12 @@ class Database:
             ("physical_state", "VARCHAR(40) NOT NULL DEFAULT 'healthy'"),
             ("available", "BOOLEAN NOT NULL DEFAULT 1"),
         ],
+        "quests": [
+            ("chapter_id", "VARCHAR(32)"),
+            ("sort_order", "INTEGER NOT NULL DEFAULT 0"),
+            ("optional", "BOOLEAN NOT NULL DEFAULT 0"),
+            ("task", "TEXT NOT NULL DEFAULT ''"),
+        ],
         "npc_relationships": [
             ("familiarity", "INTEGER NOT NULL DEFAULT 0"),
             ("affection", "INTEGER NOT NULL DEFAULT 0"),

@@ -33,6 +33,16 @@ QUEST_STATES = (
     "COMPLETED", "FAILED", "ABANDONED", "TRANSFORMED",
 )
 
+# A quest/objective is RESOLVED once it reaches any terminal state — including FAILED.
+# The chapter above it advances on resolution, not on success, so one failed check can
+# never deadlock the campaign (docs/progression-audit.md, RC2).
+TERMINAL_QUEST_STATES = frozenset({"COMPLETED", "FAILED", "ABANDONED", "TRANSFORMED"})
+# Still live. BLOCKED is open but not actionable — it needs something to change before
+# the party can move on it, so it must never be counted as progress.
+OPEN_QUEST_STATES = frozenset({"UNKNOWN", "DISCOVERED", "ACTIVE", "BLOCKED"})
+# What the party can actually act on now. This is what reaches the narrator.
+ACTIONABLE_QUEST_STATES = frozenset({"DISCOVERED", "ACTIVE"})
+
 
 class Faction(Base, TimestampMixin):
     """A front/power with its own goal that advances on its own schedule (§13).
@@ -104,7 +114,13 @@ class CrimeRecord(Base, TimestampMixin):
 
 
 class Quest(Base, TimestampMixin):
-    """A quest/objective whose state and progress persist across sessions."""
+    """A quest/objective whose state and progress persist across sessions.
+
+    This IS the objective layer of the progression hierarchy (campaign goal → chapter
+    goal → **objective** → task → leads). It carried the right state machine from the
+    start and was simply never wired to the importer or the pipeline; `chapter_id`
+    below gives it its place in the hierarchy rather than duplicating it elsewhere.
+    """
 
     __tablename__ = "quests"
 
@@ -115,6 +131,22 @@ class Quest(Base, TimestampMixin):
     state: Mapped[str] = mapped_column(String(20), default="UNKNOWN")
     progress: Mapped[int] = mapped_column(Integer, default=0)   # 0..100
     data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)  # leads/clues/hidden truth
+
+    # --- place in the progression hierarchy ---------------------------------
+    # The chapter this objective belongs to. NULL means a free-floating objective
+    # (a side quest, or one created at runtime) — it is never required for any
+    # chapter to advance. Plain String, not a FK: quests predate chapters and
+    # existing rows must keep working untouched.
+    chapter_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    # Ordering within the chapter — which objective is "the immediate task".
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    # An optional objective enriches the chapter but never gates it. The chapter can
+    # complete with this still open, so a missable thread cannot strand the campaign.
+    optional: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Player-facing one-liner: what doing this actually means right now. `name` is a
+    # label ("the harbormaster's ledger"); this is the task ("read the ledger's torn
+    # page"). Empty falls back to name.
+    task: Mapped[str] = mapped_column(Text, default="")
 
 
 class Rumor(Base, TimestampMixin):

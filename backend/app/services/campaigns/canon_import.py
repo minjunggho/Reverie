@@ -23,7 +23,9 @@ from sqlalchemy import select
 
 from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.models.campaign import Campaign
+from app.models.campaign_progression import Chapter
 from app.models.canon_import import CanonImport
+from app.models.consequences import Quest
 from app.models.enums import Visibility
 from app.models.knowledge import Secret
 from app.models.location import Location
@@ -114,6 +116,31 @@ class ThreatProposal(BaseModel):
     scheduled_minutes: int = Field(default=0, ge=0, le=100000)
 
 
+class ObjectiveProposal(BaseModel):
+    """One thing the party is meant to accomplish. Becomes a `Quest` row.
+
+    `chapter` is the owning chapter's key; an objective with no chapter is a
+    free-floating side thread that gates nothing.
+    """
+
+    key: str = Field(min_length=1, max_length=80, pattern=KEY)
+    name: str = Field(min_length=1, max_length=200)
+    # What doing this actually means right now, player-facing ("read the torn page").
+    task: str = Field(default="", max_length=2000)
+    chapter: str | None = Field(default=None, max_length=80)
+    sort_order: int = Field(default=0, ge=0, le=10000)
+    optional: bool = False
+
+
+class ChapterProposal(BaseModel):
+    key: str = Field(min_length=1, max_length=80, pattern=KEY)
+    name: str = Field(min_length=1, max_length=200)
+    goal: str = Field(default="", max_length=2000)
+    sort_order: int = Field(default=0, ge=0, le=10000)
+    hidden_purpose: str = Field(default="", max_length=4000)   # DM-only
+    optional: bool = False
+
+
 class WorldFactProposal(BaseModel):
     fact: str = Field(min_length=1, max_length=4000)
     category: str = Field(default="world_fact", max_length=32)
@@ -140,6 +167,8 @@ class CampaignProposal(BaseModel):
     brief: str = Field(default="", max_length=8000)
     central_question: str = Field(default="", max_length=2000)
     world_facts: list[WorldFactProposal] = Field(default_factory=list, max_length=300)
+    chapters: list[ChapterProposal] = Field(default_factory=list, max_length=100)
+    objectives: list[ObjectiveProposal] = Field(default_factory=list, max_length=500)
     locations: list[LocationProposal] = Field(min_length=1, max_length=500)
     factions: list[FactionProposal] = Field(default_factory=list, max_length=100)
     npcs: list[NPCProposal] = Field(default_factory=list, max_length=300)
@@ -222,7 +251,7 @@ def _parse_exits(body: str) -> list[dict]:
 def _parse_markdown(text: str) -> dict:
     prop: dict = {"version": 1, "locations": [], "world_facts": [], "factions": [],
                   "npcs": [], "secrets": [], "threats": [], "protocols": [],
-                  "session_prep": {}}
+                  "chapters": [], "objectives": [], "session_prep": {}}
     m = re.search(r"(?m)^#\s+Campaign:\s*(.+)$", text)
     if m:
         prop["identity_name"] = m.group(1).strip()
@@ -275,6 +304,28 @@ def _parse_markdown(text: str) -> dict:
             prop["secrets"].append({"key": f.get("key") or _slug(name),
                                     "fact": f.get("_", "") or f.get("truth", "") or name,
                                     "clues": _bullets(f.get("clues", ""))})
+        elif low.startswith("chapter:"):
+            name = header.split(":", 1)[1].strip()
+            f = _subfields(body)
+            # Authoring order defaults to document order — a campaign document reads
+            # top to bottom, so chapter 1 is written first. An explicit `order` wins.
+            order = _int(f["order"]) if f.get("order") else len(prop["chapters"]) + 1
+            prop["chapters"].append({
+                "key": f.get("key") or _slug(name), "name": name,
+                "goal": f.get("goal", ""), "sort_order": order,
+                "hidden_purpose": f.get("hidden purpose", "") or f.get("dm note", ""),
+                "optional": _flag(f.get("optional")),
+            })
+        elif low.startswith("objective:"):
+            name = header.split(":", 1)[1].strip()
+            f = _subfields(body)
+            order = _int(f["order"]) if f.get("order") else len(prop["objectives"]) + 1
+            prop["objectives"].append({
+                "key": f.get("key") or _slug(name), "name": name,
+                "task": f.get("task", "") or f.get("_", ""),
+                "chapter": (f.get("chapter") or None),
+                "sort_order": order, "optional": _flag(f.get("optional")),
+            })
         elif low.startswith("threat:"):
             name = header.split(":", 1)[1].strip()
             f = _subfields(body)
@@ -311,6 +362,26 @@ def _parse_markdown(text: str) -> dict:
 def _int(s: str) -> int:
     m = re.search(r"-?\d+", s or "")
     return int(m.group(0)) if m else 0
+
+
+_TRUTHY = {"true", "yes", "y", "1", "optional", "ใช่", "จริง"}
+_FALSY = {"false", "no", "n", "0", "required", "ไม่", "ไม่ใช่"}
+
+
+def _flag(s: str | None) -> bool:
+    """Read a boolean subfield.
+
+    Absent (None) is False. Present but EMPTY is True — a bare `### optional` heading
+    means the author wrote it in order to set it. These two cases are the reason this
+    takes `f.get("optional")` and never `f.get("optional", "")`: the default would
+    collapse absent into empty and mark every chapter optional.
+    """
+    if s is None:
+        return False
+    body = s.strip().casefold()
+    if body in _FALSY:
+        return False
+    return body == "" or body in _TRUTHY
 
 
 # --- top-level parse + validation ----------------------------------------------------
@@ -610,6 +681,34 @@ class CanonImportService:
             self.session.add(Threat(campaign_id=campaign_id, name=t.name, goal=t.goal,
                                     next_action=t.next_action, progress=t.progress,
                                     scheduled_game_time=t.scheduled_minutes, status="active"))
+
+        # 5a. chapters + objectives → the progression hierarchy the engine operates.
+        # These are what make imported prose into something the engine can advance:
+        # without them a campaign has a goal and nothing between it and a scene.
+        chapter_ids: dict[str, str] = {}
+        for c in proposal.chapters:
+            row_c = Chapter(
+                campaign_id=campaign_id, key=c.key, name=c.name, goal=c.goal,
+                sort_order=c.sort_order, hidden_purpose=c.hidden_purpose,
+                optional=c.optional, state="PENDING",
+            )
+            self.session.add(row_c)
+            await self.session.flush()
+            chapter_ids[c.key] = row_c.id
+        for o in proposal.objectives:
+            self.session.add(Quest(
+                campaign_id=campaign_id, key=o.key, name=o.name, task=o.task,
+                chapter_id=chapter_ids.get(o.chapter or ""), sort_order=o.sort_order,
+                optional=o.optional, state="UNKNOWN", progress=0,
+            ))
+        await self.session.flush()
+        # Open chapter one. An imported campaign must start with an active chapter, or
+        # the party arrives with a goal and no objective — the "dropped in without a
+        # clear immediate objective" symptom.
+        if proposal.chapters:
+            from app.services.campaigns.progression_service import ProgressionService
+
+            await ProgressionService(self.session).start_first_chapter(campaign_id)
 
         # 5b. ordered protocols (structured, never an unordered fact bag).
         for pr in proposal.protocols:
