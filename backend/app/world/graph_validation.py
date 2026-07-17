@@ -160,6 +160,110 @@ async def validate_world_graph(session: AsyncSession, campaign_id: str) -> Graph
     return report
 
 
+@dataclass
+class ReachabilityReport:
+    """Which places the party can actually walk to from the start, and which are
+    stranded. The heart of "90 locations, players stuck in 2": a location the graph
+    cannot reach is a location that does not exist during play."""
+
+    start_id: str | None
+    reachable: set[str] = field(default_factory=set)
+    unreachable: list[str] = field(default_factory=list)   # location ids
+    orphans: list[str] = field(default_factory=list)       # unreachable AND no parent
+
+
+async def analyze_reachability(
+    session: AsyncSession, campaign_id: str, start_id: str | None,
+) -> ReachabilityReport:
+    """BFS the committed TRAVEL graph from the starting location.
+
+    Edges are open `LocationConnection` rows, directed as stored — the same graph
+    RouteService actually routes over. Containment (parent_id) is NOT an edge here: the
+    router cannot walk a parent link that has no connection, which is exactly why a
+    prose import full of parented-but-edgeless rooms plays as unreachable islands. Those
+    become real edges in `connect_unreachable` (via the exterior-link repair), and only
+    then do they count as reachable.
+
+    A location with no path from the start is unreachable; one that is also parentless
+    is an orphan the engine cannot connect on its own.
+    """
+    locs = list((await session.execute(select(Location).where(
+        Location.campaign_id == campaign_id))).scalars())
+    by_id = {l.id: l for l in locs}
+    if not locs:
+        return ReachabilityReport(start_id=start_id)
+    root = start_id if start_id in by_id else locs[0].id
+
+    adj: dict[str, set[str]] = {l.id: set() for l in locs}
+    conns = list((await session.execute(select(LocationConnection).where(
+        LocationConnection.campaign_id == campaign_id))).scalars())
+    for e in conns:
+        if e.access_state == "open" and e.from_location_id in adj and e.to_location_id in by_id:
+            adj[e.from_location_id].add(e.to_location_id)
+
+    seen = {root}
+    queue = [root]
+    while queue:
+        cur = queue.pop()
+        for nxt in adj.get(cur, ()):
+            if nxt not in seen:
+                seen.add(nxt)
+                queue.append(nxt)
+
+    unreachable = [l.id for l in locs if l.id not in seen]
+    orphans = [lid for lid in unreachable if not by_id[lid].parent_id]
+    return ReachabilityReport(start_id=root, reachable=seen,
+                              unreachable=unreachable, orphans=orphans)
+
+
+async def connect_unreachable(
+    session: AsyncSession, campaign_id: str, start_id: str | None,
+) -> tuple[list[str], list[str]]:
+    """Turn authored containment into real travel edges, then report what is still
+    stranded.
+
+    Step 1 — give every dead-ended interior a way out. A location with a parent but NO
+    committed exit of its own is materialized with the exterior link (child<->parent):
+    a prose author who wrote "the plaza, the inn, and the tower are in town" stated that
+    connectivity through `parent`, not through exits, and this makes it routable.
+
+    A location that already has a way out is left ALONE — adding a second "outside" link
+    to its parent would create a competing exit that hijacks "walk outside" away from
+    the destination the author actually authored. So this only ever ADDS a first exit,
+    never a redundant one. (This is the exact rule infer_exterior_link was built for; it
+    is applied here reachability-first so a chain of parented rooms all connect.)
+
+    Step 2 — measure reachability over the now-complete travel graph. Anything still
+    unreachable is a genuinely disconnected island the engine will not connect without
+    inventing canon. Those are returned for the owner to fix by hand.
+
+    Returns (inferred_connector_location_ids, remaining_orphan_ids).
+    """
+    from app.world.route_service import RouteService
+
+    rs = RouteService(session)
+    locs = list((await session.execute(select(Location).where(
+        Location.campaign_id == campaign_id))).scalars())
+    conns = list((await session.execute(select(LocationConnection).where(
+        LocationConnection.campaign_id == campaign_id))).scalars())
+    out_degree: dict[str, int] = {l.id: 0 for l in locs}
+    for e in conns:
+        if e.access_state == "open":
+            out_degree[e.from_location_id] = out_degree.get(e.from_location_id, 0) + 1
+
+    inferred: list[str] = []
+    for loc in locs:
+        # Only a location with a parent AND no way out of its own — never one the author
+        # already gave an exit.
+        if not loc.parent_id or out_degree.get(loc.id, 0) > 0:
+            continue
+        if await rs.infer_exterior_link(campaign_id=campaign_id, location_id=loc.id):
+            inferred.append(loc.id)
+
+    final = await analyze_reachability(session, campaign_id, start_id)
+    return inferred, final.unreachable
+
+
 async def safe_auto_repair(session: AsyncSession, campaign_id: str) -> list[str]:
     """Apply ONLY the SAFE_AUTO_REPAIR class — infer the missing exterior link for any
     interior with a parent but no way out. Returns the repaired location ids. Idempotent

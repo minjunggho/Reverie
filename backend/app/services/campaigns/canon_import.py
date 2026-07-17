@@ -15,7 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError as PydanticValidationError
@@ -41,7 +41,14 @@ from app.schemas.belief import (
     ReligiousRole,
 )
 
-ALLOWED_EXTENSIONS = {".json", ".md", ".txt"}
+ALLOWED_EXTENSIONS = {".json", ".md", ".txt", ".yaml", ".yml"}
+
+# Top-level keys the schema_version 2.0 YAML block declares that this importer does not
+# yet consume. They are not errors — they are surfaced in the import report as `ignored`
+# so an author knows the engine read the document but did nothing with these sections,
+# rather than silently discarding them.
+_V2_UNSUPPORTED_KEYS = ("routes", "items", "encounters", "events", "world_clocks",
+                        "progression_rules")
 MAX_BYTES = 1_000_000
 # Keys are Unicode-aware: a Thai campaign's locations must keep distinct canonical
 # keys (the ASCII-only pattern rejected every Thai-derived key). No whitespace.
@@ -207,8 +214,41 @@ class CampaignProposal(BaseModel):
 
 @dataclass
 class ImportReview:
+    """What the engine did with the author's document — so a campaign author is never
+    left guessing what was imported, inferred, ignored, or missing (RC7).
+
+    `counts` / `warnings` are the pre-commit structural read. The rest is filled after
+    commit, when the real graph exists: `inferred_connectors` are edges the engine added
+    to make stranded places reachable, and `orphans` are stranded places it could NOT
+    connect on its own (no parent to route through) — the one thing an author must fix
+    by hand.
+    """
+
     counts: dict
     warnings: list[str]
+    inferred_connectors: list[str] = field(default_factory=list)   # location names
+    orphans: list[str] = field(default_factory=list)               # location names
+    ignored: list[str] = field(default_factory=list)               # dropped/unparsed input
+
+    def as_report(self) -> str:
+        """A plain author-facing summary. Says what happened, in order of what the
+        author most needs to act on."""
+        lines = ["IMPORT REPORT"]
+        kept = " · ".join(f"{k}: {v}" for k, v in self.counts.items() if v)
+        if kept:
+            lines.append(f"imported — {kept}")
+        if self.inferred_connectors:
+            lines.append("inferred connectors (added to reach stranded places): "
+                         + ", ".join(self.inferred_connectors))
+        if self.orphans:
+            lines.append("UNREACHABLE — no way to reach these, and no parent to connect "
+                         "through; add an exit or a parent: " + ", ".join(self.orphans))
+        if self.ignored:
+            lines.append("ignored (unrecognised input): " + ", ".join(self.ignored))
+        if self.warnings:
+            lines.append("notes:")
+            lines.extend(f"- {w}" for w in self.warnings)
+        return "\n".join(lines)
 
 
 # --- markdown parsing ---------------------------------------------------------------
@@ -447,25 +487,102 @@ def _flag(s: str | None) -> bool:
     return body == "" or body in _TRUTHY
 
 
+_YAML_BLOCK = re.compile(r"(?ms)^```ya?ml\s*\n(.*?)^```\s*$")
+
+
+def _extract_yaml_block(text: str) -> str | None:
+    """The authoritative fenced YAML block, if the markdown carries one. A campaign is
+    'Markdown + one fenced YAML block' (the schema_version 2.0 contract); when present,
+    that block is the structured source of record and the surrounding prose is context.
+    Only a block that declares `schema_version` counts — an unrelated yaml fence in an
+    author's notes is not a campaign spec."""
+    m = _YAML_BLOCK.search(text or "")
+    if m and re.search(r"(?m)^\s*schema_version\s*:", m.group(1)):
+        return m.group(1)
+    return None
+
+
+def _map_v2(data: dict) -> tuple[dict, list[str]]:
+    """Map a schema_version 2.0 document onto the canonical CampaignProposal shape.
+
+    ONE schema is shared by template, importer, validation, model, and tests — so the
+    v2 YAML is a friendlier surface over the same proposal, never a second divergent
+    model. Returns (proposal_dict, ignored_keys): sections the contract lists but this
+    importer does not yet consume are reported, never silently dropped.
+    """
+    campaign = data.get("campaign") or {}
+    starting = data.get("starting_state") or {}
+    raw: dict = {
+        "version": 1,
+        "identity_name": campaign.get("name", "") or campaign.get("identity", ""),
+        "brief": campaign.get("brief", ""),
+        "central_question": campaign.get("central_question", "")
+                            or campaign.get("main_goal", ""),
+        "locations": list(data.get("locations") or []),
+        "chapters": list(data.get("chapters") or []),
+        "objectives": list(data.get("objectives") or []),
+        "clues": list(data.get("clues") or []),
+        "npcs": list(data.get("npcs") or []),
+        "factions": list(data.get("factions") or []),
+        "secrets": list(data.get("secrets") or []),
+        "threats": list(data.get("threats") or []),
+        "protocols": list(data.get("protocols") or []),
+        # `lore` is the v2 name for world_facts; accept plain strings or full objects.
+        "world_facts": [
+            wf if isinstance(wf, dict) else {"fact": str(wf)}
+            for wf in (data.get("lore") or data.get("world_facts") or [])
+        ],
+        "starting_location": starting.get("location") or data.get("starting_location"),
+    }
+    ignored = [k for k in _V2_UNSUPPORTED_KEYS if data.get(k)]
+    return {k: v for k, v in raw.items() if v not in (None, [])}, ignored
+
+
 # --- top-level parse + validation ----------------------------------------------------
 def parse_campaign_file(filename: str, data: bytes) -> tuple[str, CampaignProposal, ImportReview]:
     ext = Path(filename).suffix.lower()
     if ext not in ALLOWED_EXTENSIONS:
-        raise ValidationError("supported campaign files are .json, .md, and .txt")
+        raise ValidationError(
+            "supported campaign files are .json, .md, .txt, .yaml, and .yml")
     if not data or len(data) > MAX_BYTES:
         raise ValidationError("campaign file must be between 1 byte and 1 MB")
     try:
         text = data.decode("utf-8-sig")
     except UnicodeDecodeError as exc:
         raise ValidationError("campaign file must be UTF-8 text") from exc
+
+    ignored: list[str] = []
     try:
-        raw = json.loads(text) if ext == ".json" else _parse_markdown(text)
+        if ext == ".json":
+            raw = json.loads(text)
+        elif ext in (".yaml", ".yml"):
+            raw, ignored = _map_v2(_load_yaml(text))
+        elif (block := _extract_yaml_block(text)) is not None:
+            # A markdown document carrying the authoritative fenced YAML block.
+            raw, ignored = _map_v2(_load_yaml(block))
+        else:
+            raw = _parse_markdown(text)
         proposal = CampaignProposal.model_validate(raw)
     except (json.JSONDecodeError, PydanticValidationError) as exc:
         raise ValidationError(f"invalid campaign structure: {exc}") from exc
 
     review = _validate(proposal)
+    review.ignored = ignored
     return text, proposal, review
+
+
+def _load_yaml(text: str) -> dict:
+    try:
+        import yaml
+    except ModuleNotFoundError as exc:   # pragma: no cover - dependency is declared
+        raise ValidationError("YAML campaign import requires PyYAML") from exc
+    try:
+        loaded = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise ValidationError(f"invalid campaign YAML: {exc}") from exc
+    if not isinstance(loaded, dict):
+        raise ValidationError("campaign YAML must be a mapping at the top level")
+    return loaded
 
 
 def _location_by_name(prose: str, proposal: "CampaignProposal", by_key: dict):
@@ -557,14 +674,28 @@ def _validate(p: CampaignProposal) -> ImportReview:
         "player_safe_brief": 1 if p.brief else 0,
         "world_facts": len(p.world_facts),
         "locations": len(p.locations),
+        "chapters": len(p.chapters),
+        "objectives": len(p.objectives),
         "factions": len(p.factions),
         "important_npcs": len(p.npcs),
         "secrets": len(p.secrets),
-        "clues": sum(len(s.clues) for s in p.secrets),
+        # Explicit `## Clue:` blocks plus the evidence bullets under each secret.
+        "clues": len(p.clues) + sum(len(s.clues) for s in p.secrets),
         "threats": len(p.threats),
         "protocols": len(p.protocols),
         "session_prep": 1 if p.session_prep else 0,
     }
+    # A campaign with a graph but no objective layer plays as a static map — flag it so
+    # the author knows the engine has nothing to move the party toward.
+    if p.locations and not p.chapters:
+        warnings.append("No chapters defined — the campaign has no objective layer, so "
+                        "the engine cannot direct the party. Add at least one '## Chapter:'.")
+    # A clue reveal that points at nothing is dead weight — surface it.
+    known_obj = {o.key for o in p.objectives}
+    for c in p.clues:
+        for r in c.reveals:
+            if r.kind == "objective" and r.ref not in known_obj:
+                warnings.append(f"Clue '{c.key}' reveals unknown objective '{r.ref}'.")
     return ImportReview(counts=counts, warnings=warnings)
 
 
@@ -590,7 +721,8 @@ class CanonImportService:
             status="PENDING_REVIEW",
         )
         row.proposal = {**row.proposal, "_review": {"counts": review.counts,
-                                                    "warnings": review.warnings}}
+                                                    "warnings": review.warnings,
+                                                    "ignored": review.ignored}}
         self.session.add(row)
         await self.session.flush()
         return row
@@ -862,8 +994,31 @@ class CanonImportService:
             await MainStoryService(self.session).initialize_from_proposal(
                 campaign_id, proposal)
 
+        # Connectivity repair: infer the connectors that make stranded-but-parented
+        # locations reachable, and find the parentless islands that cannot be connected
+        # without inventing canon. This is where a prose import — many places, few or no
+        # authored exits — stops being a scatter of unreachable rooms.
+        from app.world.graph_validation import connect_unreachable
+
+        start_id = campaign.starting_location_id if campaign is not None else None
+        connected_ids, orphan_ids = await connect_unreachable(
+            self.session, campaign_id, start_id)
+
         row.status = "APPROVED"
         review = _validate(proposal)
+        review.inferred_connectors = [
+            by_key_name for lid in connected_ids
+            if (by_key_name := next((l.name for l in by_key.values() if l.id == lid), None))
+        ]
+        review.orphans = [
+            name for lid in orphan_ids
+            if (name := next((l.name for l in by_key.values() if l.id == lid), None))
+        ]
+        if review.orphans:
+            review.warnings.append(
+                f"{len(review.orphans)} location(s) have no route from the start even "
+                f"after connectors were inferred — add an exit or a parent so the party "
+                f"can reach them: {', '.join(review.orphans)}")
         return review
 
     async def repair_protocols(self, *, import_id: str, campaign_id: str) -> dict:
