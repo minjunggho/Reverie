@@ -127,6 +127,18 @@ class NPCSocialService:
             stance = recalled.relationship.current_stance if recalled.relationship else None
             memory_type = memory.memory_type
 
+            # The NPC's follow-ups become PLANS that outlive this turn. Without this
+            # the ladder was recomputed and dropped every turn, so an NPC could react
+            # when spoken to but never carry a decision — or act while the party was
+            # elsewhere (docs/progression-audit.md, RC6).
+            from app.npcs.intention_service import NPCIntentionService
+
+            await NPCIntentionService(s).sync_from_followups(
+                npc_id=npc_id, subject_ref=listener_ref,
+                followups=decision.followups, game_time=game_time,
+                source_memory_id=memory.id,
+            )
+
             for belief in response.proposed_belief_deltas:
                 if belief.npc_id != npc_id:
                     continue  # an NPC may only update ITS OWN beliefs

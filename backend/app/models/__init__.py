@@ -30,7 +30,7 @@ from app.models.items import InventoryEntry, ItemDefinition
 from app.models.knowledge import KnowledgeRecord, Secret
 from app.models.location import Location
 from app.models.npc import NPC
-from app.models.npc_epistemic import NPCFact, NPCMemory, NPCRelationship
+from app.models.npc_epistemic import NPCFact, NPCIntention, NPCMemory, NPCRelationship
 from app.models.processed_message import ProcessedMessage
 from app.models.progression import (
     ActiveEffect,
@@ -58,6 +58,7 @@ __all__ = [
     "NPCFact",
     "NPCRelationship",
     "NPCMemory",
+    "NPCIntention",
     "ProcessedMessage",
     "KnowledgeRecord",
     "Secret",

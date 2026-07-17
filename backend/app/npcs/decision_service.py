@@ -133,7 +133,14 @@ class NPCDecisionService:
         unresolved = await NPCMemoryService(self.session).unresolved(
             npc_id=npc.id, subject_ref=listener_ref)
         open_questions = [m.open_question for m in unresolved if m.open_question]
+        # Derived from what this NPC feels RIGHT NOW...
         followups = _followups(rel, unresolved)
+        # ...merged with what it already decided to do and has not yet done. A plan
+        # formed when suspicion was high survives the suspicion being talked down: an
+        # innkeeper who decided to move the strongbox does not unmake that decision
+        # because the thief was charming afterwards. Without this the ladder is
+        # amnesiac — recomputed from the current number every turn.
+        followups = await self._merge_standing_intentions(npc.id, listener_ref, followups)
 
         is_request = _looks_like_request(utterance)
         share, hide = await self._disclosure(npc.id, idx)
@@ -163,6 +170,23 @@ class NPCDecisionService:
         )
         validate_decision(decision)
         return decision
+
+    async def _merge_standing_intentions(
+        self, npc_id: str, listener_ref: str, followups: list[str],
+    ) -> list[str]:
+        """Fold already-persisted intentions about this listener into the derived list,
+        preserving the ladder's order and never duplicating."""
+        from app.npcs.intention_service import NPCIntentionService
+
+        standing = await NPCIntentionService(self.session).pending_for(
+            npc_id=npc_id, subject_ref=listener_ref)
+        merged = list(followups)
+        for intention in standing:
+            if intention.description and intention.description not in merged:
+                merged.append(intention.description)
+        # Keep the ladder's escalation order rather than derived-then-remembered.
+        order = {label: i for i, (_, label) in enumerate(_FOLLOWUP_LADDER)}
+        return sorted(merged, key=lambda label: order.get(label, len(order)))
 
     async def _listener_character(self, listener_ref: str) -> Character | None:
         from app.core.ids import parse_entity_ref

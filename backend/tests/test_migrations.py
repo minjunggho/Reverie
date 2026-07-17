@@ -27,7 +27,7 @@ from pathlib import Path
 import pytest
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
-HEAD_REVISION = "20260726_scene_pacing"
+HEAD_REVISION = "20260727_npc_intentions"
 PRE_REVAMP_REVISION = "20260710_canon"
 
 

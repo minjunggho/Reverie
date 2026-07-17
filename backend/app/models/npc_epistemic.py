@@ -12,7 +12,7 @@ and persistent across sessions.
 """
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Float, Index, Integer, String, Text
+from sqlalchemy import Boolean, Float, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, fk_id, pk_column
@@ -92,3 +92,63 @@ class NPCMemory(Base, TimestampMixin):
     # believed excuse resolves the question while the memory, and the damage it did to
     # trust, remain on the record.
     resolved: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+# When an intention comes due.
+#   ON_NEXT_MEETING — the next time this NPC and its subject are face to face.
+#   AFTER_TIME      — at `trigger_game_time`, whether or not the party is present.
+#                     This is the one that lets an NPC act while the party is elsewhere.
+#   IMMEDIATELY     — on the NPC's next opportunity to act at all.
+INTENTION_TRIGGERS = ("ON_NEXT_MEETING", "AFTER_TIME", "IMMEDIATELY")
+
+# PENDING → FULFILLED (it happened) | ABANDONED (the NPC gave it up) |
+#           EXPIRED (the world moved past it).
+INTENTION_STATES = ("PENDING", "FULFILLED", "ABANDONED", "EXPIRED")
+
+
+class NPCIntention(Base, TimestampMixin):
+    """What an NPC MEANS TO DO — persisted, so it survives the turn that formed it.
+
+    NPCDecisionService already derived follow-ups from suspicion and unresolved
+    questions ("watch them closely", "call for help"), on an escalating engine-owned
+    ladder. But they were recomputed every turn, rendered into one prompt, and thrown
+    away. So an NPC could remember and could react when spoken to, and could never:
+    carry a plan across turns, act while the party was elsewhere, or initiate anything.
+    "NPC attitudes change numerically without changing behavior" was exact — the
+    numbers persisted in NPCRelationship, the behavior they implied did not
+    (docs/progression-audit.md, RC6).
+
+    An intention is engine-derived and engine-owned. The model renders one into words;
+    it never authors, edits, or retires one.
+    """
+
+    __tablename__ = "npc_intentions"
+    __table_args__ = (
+        # Recall is always "what does this NPC intend, and about whom".
+        Index("ix_npc_intentions_npc_subject", "npc_id", "subject_ref"),
+        # The world clock sweeps due intentions across all NPCs.
+        Index("ix_npc_intentions_due", "state", "trigger", "trigger_game_time"),
+        # One live intention of a kind per (npc, subject): re-deriving the same plan on
+        # the next turn must not stack six copies of "watch them closely".
+        UniqueConstraint("npc_id", "subject_ref", "kind", "state",
+                         name="uq_npc_intention_live"),
+    )
+
+    id: Mapped[str] = pk_column()
+    npc_id: Mapped[str] = fk_id("npcs.id")
+    # Who the intention is ABOUT. NULL for a plan aimed at no one in particular (an
+    # NPC pursuing its own goal), which is why this is not part of the FK.
+    subject_ref: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # A stable machine label ("WATCH", "QUESTION", "CALL_HELP", "PURSUE_GOAL") — what
+    # the engine reasons about. Distinct from `description`, which is the player-facing
+    # line the NPC would think in.
+    kind: Mapped[str] = mapped_column(String(32))
+    description: Mapped[str] = mapped_column(Text, default="")
+    trigger: Mapped[str] = mapped_column(String(20), default="ON_NEXT_MEETING")
+    trigger_game_time: Mapped[int] = mapped_column(Integer, default=0)
+    state: Mapped[str] = mapped_column(String(16), default="PENDING", index=True)
+    # 0..100. Orders competing intentions — a cornered NPC calls for help before it
+    # gets around to asking you about the ledger.
+    urgency: Mapped[int] = mapped_column(Integer, default=10)
+    # The memory that produced this intention, when there is one.
+    source_memory_id: Mapped[str | None] = mapped_column(String(32), nullable=True)

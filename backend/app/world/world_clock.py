@@ -30,6 +30,8 @@ class TimeAdvanceResult:
     ticked_threats: list[str] = field(default_factory=list)
     fired_events: list[str] = field(default_factory=list)
     perceivable_notes: list[str] = field(default_factory=list)
+    # NPC plans that came due and were carried out on this advance.
+    acted_intentions: list[str] = field(default_factory=list)
 
 
 class WorldClockService:
@@ -61,7 +63,50 @@ class WorldClockService:
         result = TimeAdvanceResult(minutes=minutes, new_game_time=after)
         await self._tick_threats(campaign_id, after, session_id, result)
         await self._fire_events(campaign_id, after, session_id, result)
+        await self._act_on_intentions(campaign_id, after, session_id, result)
         return result
+
+    async def _act_on_intentions(self, campaign_id, now, session_id, result) -> None:
+        """NPCs carry out the plans they can carry out alone.
+
+        This is where an NPC stops being a thing that answers questions and starts
+        being someone who does things: the innkeeper who decided to move the strongbox
+        moves it, whether or not the party is in the room to see it. Firing on the
+        CLOCK rather than on being spoken to is the whole point — an NPC that only ever
+        acts when addressed cannot create movement.
+
+        Scoped to this campaign's NPCs (intentions hang off npc_id, which has no
+        campaign column) and DM-scoped: the party learns an NPC acted by finding the
+        strongbox gone, not by being told.
+        """
+        from app.models.npc import NPC
+        from app.npcs.intention_service import NPCIntentionService
+
+        service = NPCIntentionService(self.session)
+        due = await service.due(game_time=now)
+        if not due:
+            return
+        npc_ids = {i.npc_id for i in due}
+        mine = {
+            n.id for n in (await self.session.execute(
+                select(NPC).where(NPC.id.in_(npc_ids), NPC.campaign_id == campaign_id)
+            )).scalars().all()
+        }
+        for intention in due:
+            if intention.npc_id not in mine:
+                continue
+            await service.fulfil(intention)
+            await self.events.record(
+                campaign_id=campaign_id, session_id=session_id,
+                event_type=EventType.NPC_STATE_CHANGED,
+                actor_entity=f"npc:{intention.npc_id}",
+                target_entities=[intention.subject_ref] if intention.subject_ref else [],
+                campaign_time=now, visibility=Visibility.DM_ONLY,
+                payload={"intention": intention.kind, "summary": intention.description,
+                         "subject": intention.subject_ref},
+                narrative_significance=35,
+            )
+            result.acted_intentions.append(intention.id)
 
     async def _tick_threats(self, campaign_id, now, session_id, result) -> None:
         due = (
