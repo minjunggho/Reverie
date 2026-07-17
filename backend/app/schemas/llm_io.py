@@ -78,6 +78,11 @@ class ActionInterpretation(BaseModel):
     goal: str
     method: str
     target_references: list[str] = Field(default_factory=list)
+    # The OBJECT the action is aimed at, as the player named it ("แผนที่", "the map").
+    # Descriptive only — the engine never treats it as proof the object exists. It is
+    # what lets a witness remember "she reached for MY MAP" rather than the useless
+    # "she reached for a thing"; a grudge needs to be about something.
+    object_reference: str = ""
     declared_constraints: list[str] = Field(default_factory=list)
     risk_awareness: list[str] = Field(default_factory=list)
     intent_confidence: float = Field(ge=0.0, le=1.0)
@@ -120,6 +125,15 @@ class ActionInterpretation(BaseModel):
     spell_reference: str = ""
     slot_level: int | None = None
     metamagic: str = ""
+    # PARAMETERS of the cast, for spells whose declared effect needs the player's own
+    # description (an illusion's content). These are DESCRIPTIVE only: the engine
+    # still validates them against the spell's declared limits — e.g. Minor Illusion
+    # allows an image OR a sound, so asking for both is corrected by the engine and
+    # explained, never honoured. The model reports what the player asked for; it
+    # never decides what the spell is allowed to do.
+    spell_description: str = ""
+    # Which forms the player asked for: "image" (a visual) and/or "sound".
+    spell_modes: list[Literal["image", "sound"]] = Field(default_factory=list)
     # Activating a CLASS FEATURE ("ใช้ Second Wind", "เข้าโหมดเกรี้ยวกราด"). The engine
     # resolves the feature against the character's granted features + spends its
     # resource; the LLM only names the feature. `feature_reference` is that name.
@@ -138,6 +152,12 @@ class ActionInterpretation(BaseModel):
     give_intent: bool = False
     give_item_reference: str = ""
     give_target_reference: str = ""
+    # True when a social_intent action is coercive/deceptive/persuasive AND the NPC's
+    # decision is genuinely uncertain (intimidation, deception, bargaining against the
+    # NPC's interest). Such actions route to normal adjudication (a real check) instead
+    # of always becoming free NPCSocialService dialogue. False for simple asking/
+    # greeting/thanking/informing that doesn't need a roll.
+    social_uncertain: bool = False
     # Ordered compound steps, when the action is more than one thing ("A แล้ว B แล้ว
     # C"). Empty for a simple single action (the common case) — the pipeline then
     # uses the flat flags above exactly as before (fully backward compatible).
@@ -153,6 +173,12 @@ class AdjudicationDecision(BaseModel):
     ability: Optional[str] = None   # "str"|"dex"|"con"|"int"|"wis"|"cha"
     skill: Optional[str] = None     # e.g. "stealth", "perception"
     dc_band: Optional[DifficultyBand] = None
+    # The band is the INTRINSIC difficulty of the task. What makes it harder or easier
+    # HERE is named — not priced — by these keys, drawn from a closed vocabulary
+    # (tabletop.adjudication.difficulty.SITUATIONAL_FACTORS). The engine owns each
+    # delta, which skills it applies to, and the total cap; an unknown key is dropped.
+    # The model reports the situation, never the number.
+    situational_factors: list[str] = Field(default_factory=list)
     advantage: bool = False
     disadvantage: bool = False
     # Opposed checks name the opponent whose passive score the engine reads.
@@ -203,6 +229,15 @@ class Narration(BaseModel):
     decision_prompt: Optional[str] = None  # one open question, Thai, or None
     # Entities this narration introduces (committed by the engine BEFORE delivery).
     introduced_npcs: list[IntroducedNPC] = Field(default_factory=list)
+
+
+# --- Pre-roll fiction-first setup (issue #1, item D) --------------------------
+class CheckSetup(BaseModel):
+    """The fiction-first beat narrated BEFORE the dice prompt. It may establish what
+    is at risk, use canonical/observable facts and relevant character context, but it
+    may never reveal the outcome, imply success/failure, or commit any state — the
+    engine has not rolled yet when this runs."""
+    text: str
 
 
 # --- Recap -------------------------------------------------------------------

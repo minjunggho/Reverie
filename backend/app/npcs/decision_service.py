@@ -24,7 +24,7 @@ from app.core.errors import RulesViolation
 from app.models.character import Character
 from app.models.enums import KnowledgeStatus
 from app.models.npc import NPC
-from app.models.npc_epistemic import RELATIONSHIP_DIMENSIONS, NPCRelationship
+from app.models.npc_epistemic import RELATIONSHIP_DIMENSIONS, NPCMemory, NPCRelationship
 from app.npcs.knowledge_service import NPCKnowledgeService
 from app.npcs.memory_service import NPCMemoryService, classify_interaction
 
@@ -67,6 +67,13 @@ class NPCDecision:
     requires_mechanical_resolution: bool = False
     bias_applied: str | None = None
     reason: str = ""
+    # Threads this NPC is still carrying about the listener — the questions a change
+    # of subject does not answer. Present here so the dialogue generator is TOLD the
+    # NPC is still waiting, rather than being left to infer it from prose it never saw.
+    open_questions: list[str] = field(default_factory=list)
+    # What the NPC intends to DO about them (watch, question, search, alert…). Engine-
+    # derived from suspicion; the model renders it, it does not choose it.
+    followups: list[str] = field(default_factory=list)
 
     def as_prompt_block(self, listener_name: str) -> str:
         """A compact, authoritative constraint block for the dialogue generator: the
@@ -74,13 +81,24 @@ class NPCDecision:
         share = ", ".join(self.information_to_share) or "(ไม่มี)"
         hide = ", ".join(self.information_to_hide) or "(ไม่มี)"
         rec = "จำได้" if self.recognized_listener else "ไม่คุ้นหน้า"
-        return (
+        block = (
             f"DECISION (เอนจินกำหนด — ต้องแสดงตามนี้ ห้ามขัด):\n"
             f"- ต่อ {listener_name}: {rec}; stance={self.current_stance}; "
             f"อารมณ์={self.emotional_response}; ท่าที={self.willingness}\n"
             f"- ตั้งใจจะ: {self.intended_action}; เป้าหมายเฉพาะหน้า: {self.immediate_goal}\n"
             f"- เปิดเผยได้: {share}\n- ปิดไว้ (ห้ามหลุด): {hide}"
         )
+        if self.open_questions:
+            # Stated as an explicit prohibition because the failure mode is precisely
+            # that a new topic makes the old one disappear.
+            block += (
+                "\n- ยังค้างคาใจ (ห้ามลืม ห้ามปล่อยผ่านเพราะเปลี่ยนเรื่อง):\n"
+                + "\n".join(f"  · {q}" for q in self.open_questions)
+            )
+        if self.followups:
+            block += ("\n- จะทำต่อไปนี้กับ " + listener_name + ": "
+                      + ", ".join(self.followups))
+        return block
 
 
 class NPCDecisionService:
@@ -110,11 +128,22 @@ class NPCDecisionService:
         idx = _willingness_index(rel, escalation=escalation, bias_delta=bias_delta)
         willingness = _WILLINGNESS[idx]
 
+        # Threads still open about THIS listener. An unanswered question is the reason
+        # a caught thief does not get a clean slate by changing the subject.
+        unresolved = await NPCMemoryService(self.session).unresolved(
+            npc_id=npc.id, subject_ref=listener_ref)
+        open_questions = [m.open_question for m in unresolved if m.open_question]
+        followups = _followups(rel, unresolved)
+
         is_request = _looks_like_request(utterance)
         share, hide = await self._disclosure(npc.id, idx)
         emotional = _emotional_response(rel)
         action = _intended_action(idx, is_request, rel)
-        goal = _immediate_goal(npc, stance)
+        # An open thread overrides the pleasantries: whatever the listener just said,
+        # the NPC's immediate goal is to get its answer.
+        if open_questions:
+            action = "กดดันให้ตอบเรื่องที่ยังค้างอยู่ก่อน"
+        goal = open_questions[0] if open_questions else _immediate_goal(npc, stance)
         needs_roll = bool(is_request and 1 <= idx <= 4)
 
         decision = NPCDecision(
@@ -129,6 +158,8 @@ class NPCDecisionService:
             requires_mechanical_resolution=needs_roll,
             bias_applied=bias_desc,
             reason=_reason(recognized, stance, willingness, escalation, bias_desc),
+            open_questions=open_questions,
+            followups=followups,
         )
         validate_decision(decision)
         return decision
@@ -176,6 +207,36 @@ def validate_decision(decision: NPCDecision) -> None:
 
 
 # --- deterministic helpers ------------------------------------------------------
+
+# What a suspicious NPC DOES about it, by how suspicious it is. Escalating and
+# cumulative: a mildly wary goblin watches you; a convinced one moves the map and
+# fetches help. Engine-owned, so an NPC's response to being robbed is not left to
+# whatever the narrator felt like writing.
+_FOLLOWUP_LADDER: tuple[tuple[int, str], ...] = (
+    (15, "จับตาดูอย่างใกล้ชิด"),
+    (25, "ซักถามให้ได้ความ"),
+    (40, "ขอตรวจค้นตัว"),
+    (55, "ย้ายของมีค่าให้พ้นมือ"),
+    (70, "เรียกพวกมาเสริม"),
+    (85, "ปิดทางออกไม่ให้ไปไหน"),
+)
+
+
+def _followups(rel: NPCRelationship | None,
+               unresolved: list["NPCMemory"]) -> list[str]:
+    """The NPC's intended follow-ups. Driven by SUSPICION (the feeling that something
+    is wrong about this person), not by anger — a furious innkeeper who trusts you
+    shouts; a quietly suspicious one watches your hands."""
+    if rel is None:
+        return []
+    suspicion = int(rel.suspicion or 0)
+    out = [label for threshold, label in _FOLLOWUP_LADDER if suspicion >= threshold]
+    # An unanswered question is itself a reason to keep pressing, even if the
+    # suspicion has been talked down.
+    if unresolved and not out:
+        out = [_FOLLOWUP_LADDER[0][1]]
+    return out
+
 
 def _willingness_index(rel: NPCRelationship | None, *, escalation: int, bias_delta: int) -> int:
     if rel is None:

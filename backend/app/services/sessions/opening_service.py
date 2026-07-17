@@ -295,6 +295,24 @@ class SessionOpeningService:
             )
             scene_id = scene.id
 
+        # An opening is the ONE moment a scene is created from nothing rather than
+        # continued. If the party ever reports being thrown back to the start, this
+        # record answers "did an opening run, which one, and why" without guesswork —
+        # `initialization_reason` distinguishes the cinematic (once per campaign) from
+        # session 1 from an ordinary continuation.
+        log.info(
+            "session opening delivered",
+            extra={"campaign_id": campaign_id, "session_id": session_id,
+                   "channel_id": channel_id, "scene_id": scene_id,
+                   "location_id": location_id, "session_number": number,
+                   "state_version": row.version,
+                   "initialization_reason": (
+                       "cinematic_prologue" if prologue is not None
+                       else "first_session" if number == 1
+                       else "continuation"),
+                   "cinematic_played_before": cinematic_played,
+                   "attendance": list(attendance_member_ids or [])})
+
         # 5. assemble the kinded message sequence.
         messages: list[OutboundMessage] = [OutboundMessage(
             channel_id, "", kind=MessageKind.SESSION_TITLE,
@@ -361,6 +379,18 @@ class SessionOpeningService:
                     reminders.append(f"{char.name} บาดเจ็บอยู่ (HP {char.hp}/{char.max_hp})")
                 for cond in char.conditions or []:
                     reminders.append(f"{char.name} มีสภาวะ: {cond}")
+
+            present_npc_names: list[str] = []
+            if location_id:
+                from sqlalchemy import select
+
+                from app.models.npc import NPC
+
+                npcs_here = (await read.execute(
+                    select(NPC).where(NPC.campaign_id == campaign_id,
+                                       NPC.current_location_id == location_id)
+                )).scalars().all()
+                present_npc_names = [n.name for n in npcs_here]
         return {
             "profile": profile,
             "characters": chars,
@@ -370,6 +400,9 @@ class SessionOpeningService:
             "location_focused": location.description_focused if location else "",
             "game_time": campaign.current_game_time if campaign else 0,
             "reminders": reminders,
+            "brief": campaign.brief if campaign else "",
+            "central_question": campaign.central_question if campaign else "",
+            "present_npc_names": present_npc_names,
         }
 
     async def _resolve_npc_refs(self, campaign_id: str, names: list[str]) -> list[str]:
@@ -395,7 +428,8 @@ class SessionOpeningService:
         for c in ctx["characters"]:
             hooks = c.hooks or {}
             hook_str = "; ".join(f"{k}={v}" for k, v in hooks.items() if v) or "-"
-            char_lines.append(f"- {c.name} ({c.char_class}): {hook_str}")
+            appearance = f"; appearance={c.appearance}" if c.appearance else ""
+            char_lines.append(f"- {c.name} ({c.char_class}): {hook_str}{appearance}")
         profile = ctx["profile"]
         prep = prep or {}
         # Imported prep constrains the story facts the opening MUST honour.
@@ -408,14 +442,23 @@ class SessionOpeningService:
                 f"- allowed_clues: {', '.join(prep.get('allowed_clues') or []) or '-'}\n"
                 f"- do_not_reveal: {', '.join(prep.get('do_not_reveal') or []) or '-'}"
             )
+        brief_block = f"\nCAMPAIGN_BRIEF: {ctx['brief']}" if ctx.get("brief") else ""
+        question_block = (
+            f"\nCENTRAL_QUESTION: {ctx['central_question']}"
+            if ctx.get("central_question") else ""
+        )
+        present_npcs = ctx.get("present_npc_names") or []
+        npc_block = f"\nPRESENT_NPCS: {', '.join(present_npcs)}" if present_npcs else ""
         messages: list[LLMMessage] = [
             {"role": "system", "content": THAI_DM_STYLE + "\n" + OPENING_SYSTEM},
             {"role": "user", "content": (
+                f"NARRATIVE_PACING: CINEMATIC\n"
                 f"PROFILE: โทน={profile.get('tone', 'ผจญภัยคลาสสิก')}; "
                 f"สไตล์={profile.get('balance', 'สมดุล')}\n"
                 f"CHARACTERS:\n" + "\n".join(char_lines) + "\n"
                 f"LOCATION: {ctx['location_name']} — {ctx['location_desc']}\n"
-                f"PURPOSE: {scene_purpose or '-'}" + prep_block
+                f"PURPOSE: {scene_purpose or '-'}"
+                + brief_block + question_block + npc_block + prep_block
             )},
         ]
         try:
@@ -510,7 +553,8 @@ class SessionOpeningService:
         for c in ctx["characters"]:
             hooks = c.hooks or {}
             hook_str = "; ".join(f"{k}={v}" for k, v in hooks.items() if v) or "-"
-            char_lines.append(f"- {c.name} ({c.char_class}): {hook_str}")
+            appearance = f"; appearance={c.appearance}" if c.appearance else ""
+            char_lines.append(f"- {c.name} ({c.char_class}): {hook_str}{appearance}")
         prep = prep or {}
         lore_block = "\n".join(f"- {f}" for f in world["lore"]) or "-"
         powers_block = ", ".join(world["powers"]) or "-"

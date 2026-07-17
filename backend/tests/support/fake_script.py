@@ -22,6 +22,7 @@ from app.schemas.llm_io import (
     ActionStep,
     AdjudicationDecision,
     CampaignPrologue,
+    CheckSetup,
     ClassificationResult,
     ConsequenceProposal,
     CreationGuidance,
@@ -563,6 +564,13 @@ def _campaign_proposal(messages, _model) -> dict:
     }
 
 
+def _check_setup(messages, _model) -> CheckSetup:
+    """A minimal, outcome-neutral pre-roll beat naming the pending check."""
+    pending = _marker(messages, "PENDING_CHECK") or "การเช็ค"
+    action = _marker(messages, "ACTION") or ""
+    return CheckSetup(text=f"{action} — ทุกอย่างแขวนอยู่บนความไม่แน่นอนของ {pending}".strip(" —"))
+
+
 def _npc_response(messages, _model) -> NPCResponse:
     # Default: cautious in-character reply, no proposed deltas. The utterance may echo
     # only what the NPC was told is KNOWN_TO_NPC. Tests override to propose deltas.
@@ -575,6 +583,7 @@ def install_default_script(fake: FakeLLMProvider) -> FakeLLMProvider:
     fake.on("adjudicate_uncertain_action", _adjudicate)
     fake.on("plan_consequence", _consequence)
     fake.on("generate_dm_narration", _narrate)
+    fake.on("generate_check_setup", _check_setup)
     fake.on("generate_safe_recap", _recap)
     fake.on("process_post_session_continuity", _post_session)
     fake.on("generate_npc_response", _npc_response)

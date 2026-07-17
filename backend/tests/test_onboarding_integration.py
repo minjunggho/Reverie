@@ -94,8 +94,9 @@ async def test_full_onboarding_then_play(db, provider):
 
     # A committed Thai action now pauses at the dice ritual (PLAYER_CLICK default):
     r = await table.send("! ผมค่อยๆ ย่องไปดูหน้าต่าง ไม่ให้ยามเห็น", author="u-p1", name="กี้")
-    assert r.responses[0].kind == MessageKind.CHECK_PROMPT
-    assert "🎲 ทอย d20" in r.responses[0].choices
+    assert r.responses[0].kind == MessageKind.CHECK_SETUP     # fiction-first, no outcome leak
+    check_prompt = next(m for m in r.responses if m.kind == MessageKind.CHECK_PROMPT)
+    assert "🎲 ทอย d20" in check_prompt.choices
     assert r.state_mutated is False                  # nothing rolled yet
 
     # The player taps the die: SERVER rolls; ROLL and NARRATION arrive separately.

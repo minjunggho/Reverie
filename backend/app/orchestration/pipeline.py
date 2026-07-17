@@ -24,13 +24,16 @@ from sqlalchemy import select
 from app.ai.jobs import (
     ActionInterpreter,
     AdjudicationJudge,
+    CheckSetupGenerator,
     ConsequencePlanner,
     DMNarrator,
 )
+from app.ai.pacing import select_pacing
 from app.core.errors import RulesViolation, ValidationError
 from app.core.ids import SYSTEM_ACTOR, entity_ref, parse_entity_ref
 from app.core.logging import get_logger
 from app.discord_bridge.dto import BridgeResult, OutboundMessage
+from app.memory.character_context import build_character_narrative_context
 from app.models.character import Character
 from app.models.enums import (
     ActivePlayState,
@@ -74,6 +77,7 @@ class CommittedActionPipeline:
         self.adjudicator = AdjudicationJudge(provider)
         self.consequence = ConsequencePlanner(provider)
         self.narrator = DMNarrator(provider)
+        self.check_setup = CheckSetupGenerator(provider)
         from app.world.travel_service import TravelService
 
         self.travel = TravelService(db, provider)
@@ -226,8 +230,19 @@ class CommittedActionPipeline:
         # NPC — never the generic narrator, which must not invent NPC dialogue or
         # facts (Fix 3). Targets come from the SAME resolved-mention list used
         # everywhere else; no first-NPC fallback.
+        # A coercive/deceptive social action whose outcome is genuinely uncertain
+        # (social_uncertain) is NOT free dialogue — it falls through to the normal
+        # adjudication/dice-ritual path below, same as any other contested action.
         npc_targets = [e for e in resolution.resolved if e.entity_type != PLAYER_CHARACTER]
-        if interpretation.social_intent and npc_targets and ctx.character_id:
+        # ENGINE GATE: speaking to someone who is waiting for an explanation is never
+        # free dialogue. Caught reaching for the map and then talking about a
+        # cockroach is an ATTEMPT to explain, and it has to be contested — otherwise
+        # a change of subject is a free pass, which is exactly the reported bug.
+        # The model decides `social_uncertain` from the words alone and cannot see the
+        # open thread; the engine can, so the engine overrides.
+        owed_explanation = await self._has_open_question(ctx, npc_targets)
+        if (interpretation.social_intent and npc_targets and ctx.character_id
+                and not interpretation.social_uncertain and not owed_explanation):
             return await self._handle_social(ctx, action_text=action_text, npc_targets=npc_targets)
 
         # Step 10d: ordinary clarification gate.
@@ -254,12 +269,14 @@ class CommittedActionPipeline:
             ctx, action_text=action_text, goal=interpretation.goal,
             method=interpretation.method, decision=decision,
             character=character, resolved_targets=resolution.resolved, ritual=False,
+            object_name=interpretation.object_reference,
         )
 
     async def _resolve_commit_narrate(
         self, ctx: ResolvedContext, *, action_text: str, goal: str, method: str,
         decision, character: Character | None,
         resolved_targets: list[EntityContext], ritual: bool,
+        object_name: str = "",
     ) -> BridgeResult:
         # The NPC that a consequence may act on: the explicitly RESOLVED NPC target
         # if the player named one, otherwise the scene's immediate THREAT (the danger
@@ -267,8 +284,22 @@ class CommittedActionPipeline:
         # entity by list order.
         npc_targets = [e for e in resolved_targets if e.entity_type != PLAYER_CHARACTER]
         target_ref = npc_targets[0].entity_ref if npc_targets else None
-        # Steps 11-12: deterministic resolution (server dice + modifiers + DC).
-        check_result, outcome = self._resolve_mechanics(decision, character)
+        # Steps 11-12: deterministic resolution (server dice + modifiers + DC), plus
+        # any dice active effects owe this roll (Guidance). The grants are resolved
+        # from committed state, never from the narration or the model.
+        bonus_grants = await self._bonus_grants_for_check(ctx, decision, character)
+        composed_dc = await self._compose_dc(ctx, decision, resolved_targets)
+        check_result, outcome = self._resolve_mechanics(
+            decision, character, bonus_grants, composed_dc)
+
+        # The scene this action STARTED from. Captured before any commit so the
+        # diagnostic below can prove an ordinary action continued the scene it found,
+        # rather than silently landing in a new one.
+        async with self.db.session() as read:
+            scene_before = (await SceneService(read).get_active_scene(ctx.session_id)
+                            if ctx.session_id else None)
+        scene_id_before = scene_before.id if scene_before else None
+        scene_version_before = scene_before.version if scene_before else None
 
         # Step 13: consequence proposal (typed targets, so an NPC delta can never
         # land on a player character just because a name looked NPC-ish).
@@ -288,25 +319,56 @@ class CommittedActionPipeline:
             scene_id = scene_row.id if scene_row else None
             actor = entity_ref("character", ctx.character_id) if ctx.character_id else SYSTEM_ACTOR
 
-            await events.record(
+            # WHO the world saw do this, and what they made of it. Resolved BEFORE the
+            # event is recorded so the ledger carries the witness list rather than
+            # leaving `Event.witnesses` empty, as it always has on this path.
+            witnessed = await self._witness_action(
+                s, ctx, decision=decision, outcome=outcome, scene_row=scene_row,
+                character=character, object_name=object_name,
+                resolved_targets=resolved_targets)
+
+            action_event = await events.record(
                 campaign_id=ctx.campaign_id, session_id=ctx.session_id, scene_id=scene_id,
                 event_type=EventType.PLAYER_ACTION_COMMITTED, actor_entity=actor,
                 target_entities=[t.entity_ref for t in resolved_targets],
+                location_id=scene_row.location_id if scene_row else None,
+                witnesses=witnessed.witnesses if witnessed else [],
                 payload={"action_text": action_text, "goal": goal,
                          "method": method, "summary": goal,
+                         "action_class": witnessed.action_class if witnessed else None,
+                         "detection": witnessed.detection if witnessed else None,
+                         "outcome": outcome,
                          "targets": [{"ref": t.entity_ref, "type": t.entity_type,
                                       "name": t.canonical_name} for t in resolved_targets]},
                 visibility=Visibility.PARTY, narrative_significance=20,
             )
+            # The memory loop: every witness now REMEMBERS this, in the same store the
+            # NPC decision path reads. Without this the action is invisible to every
+            # NPC that watched it happen.
+            witness_result = await self._record_witness_memories(
+                s, ctx, witnessed=witnessed, event_id=action_event.id,
+                scene_row=scene_row, character=character)
+            # If this action was an attempt to explain an open thread, settle it here —
+            # in the same transaction as the roll that decided whether it was believed.
+            settled = await self._settle_open_questions(
+                s, ctx, npc_targets=npc_targets, outcome=outcome, decision=decision)
             if check_result is not None:
                 await events.record(
                     campaign_id=ctx.campaign_id, session_id=ctx.session_id, scene_id=scene_id,
                     event_type=EventType.ABILITY_CHECK_RESOLVED, actor_entity=actor,
                     mechanical_changes=check_result.as_dict(),
                     payload={"ability": check_result.ability, "skill": check_result.skill,
-                             "summary": f"เช็ค {check_result.skill or check_result.ability} -> {outcome}"},
+                             "summary": f"เช็ค {check_result.skill or check_result.ability} -> {outcome}",
+                             # How this DC was arrived at — the record of why the
+                             # number was what it was, for the log and for later
+                             # narration that wants to know the world pushed back.
+                             "dc": composed_dc.as_dict() if composed_dc else None},
                     visibility=Visibility.PARTY, narrative_significance=15,
                 )
+
+            # A consumed buff is spent HERE, in the same transaction as the roll it
+            # paid for — so a roll that never commits never spends the die.
+            await self._consume_used_grants(s, check_result, bonus_grants)
 
             applier = DeltaApplier(
                 s, campaign_id=ctx.campaign_id, session_id=ctx.session_id,
@@ -325,7 +387,7 @@ class CommittedActionPipeline:
                 # restate it if narration/delivery later fails (never re-execute).
                 pm.result = {
                     "outcome": outcome,
-                    "roll_line": self._roll_line(check_result, outcome),
+                    "roll_line": self._roll_line(check_result, outcome, composed_dc),
                 }
 
             session_row = await s.get(Session, ctx.session_id) if ctx.session_id else None
@@ -343,24 +405,92 @@ class CommittedActionPipeline:
             log.warning("dropped %d illegal consequence delta(s): %s",
                         len(rejected), [r[1] for r in rejected])
 
+        # Scene continuity, per committed action. An ordinary action must CONTINUE the
+        # scene it found; `scene_id_before` != `scene_id_after` on a plain action is
+        # the signature of the reported "the story restarted" bug, and this is the
+        # line that makes it visible in a log rather than only in a screenshot.
+        if scene_id_before and scene_id != scene_id_before:
+            log.warning(
+                "scene changed during an ordinary action",
+                extra={"campaign_id": ctx.campaign_id, "session_id": ctx.session_id,
+                       "channel_id": ctx.channel_id, "user_id": ctx.member_id,
+                       "discord_message_id": ctx.inbound.discord_message_id,
+                       "scene_id_before": scene_id_before, "scene_id_after": scene_id,
+                       "action_text": action_text})
+        log.info(
+            "action committed",
+            extra={"campaign_id": ctx.campaign_id, "session_id": ctx.session_id,
+                   "channel_id": ctx.channel_id, "user_id": ctx.member_id,
+                   "discord_message_id": ctx.inbound.discord_message_id,
+                   "processed_message_id": ctx.processed_message_id,
+                   "scene_id_before": scene_id_before, "scene_id_after": scene_id,
+                   "scene_version_before": scene_version_before,
+                   "outcome": outcome, "ritual": ritual,
+                   "bonus_dice": [b.label for b in
+                                  (getattr(check_result, "bonus_dice", None) or [])],
+                   "dc_band": str(composed_dc.band) if composed_dc else None,
+                   "dc_base": composed_dc.base if composed_dc else None,
+                   "dc_total": composed_dc.total if composed_dc else None,
+                   "dc_factors": [f.key for f in composed_dc.factors]
+                                 if composed_dc else [],
+                   # The continuity record: what the world saw, and who now
+                   # remembers it. An action that should have been memorable but
+                   # recorded no witnesses is visible here.
+                   "action_class": witnessed.action_class if witnessed else None,
+                   "detection": witnessed.detection if witnessed else None,
+                   "witnesses": witnessed.witnesses if witnessed else [],
+                   "memory_type": witness_result.memory_type if witness_result else None,
+                   "open_questions": witness_result.open_questions
+                                     if witness_result else [],
+                   "questions_settled": settled})
+
         # Step 17: narration from the committed result — with typed actor/targets so
-        # it never swaps names or makes another player's character act.
+        # it never swaps names or makes another player's character act. The narrator
+        # ALSO receives the full authorized consequence context (class + hint), the
+        # engine-selected pacing tier, and the bounded character narrative context —
+        # never proposed deltas, only what was actually validated and committed above.
         result_summary = self._result_summary(check_result, outcome, decision)
         async with self.db.session() as read:
             scene3 = await SceneService(read).get_active_scene(ctx.session_id) if ctx.session_id else None
             directory3 = await SceneEntityDirectory(read).build(
                 scene3, actor_character_id=ctx.character_id, campaign_id=ctx.campaign_id
             )
+            from app.memory.progression_context import ProgressionContextBuilder
             from app.memory.scene_context import SceneContextBuilder
 
             scene_ctx = await SceneContextBuilder(read).build(
                 campaign_id=ctx.campaign_id, scene=scene3, actor_character_id=ctx.character_id
             )
+            # The campaign's direction, on EVERY turn — not just the Session 1 prologue.
+            progression_ctx = await ProgressionContextBuilder(read).build(
+                campaign_id=ctx.campaign_id
+            )
+            target_name = npc_targets[0].canonical_name if npc_targets else ""
+            character_context = await build_character_narrative_context(
+                read, character=character, action_text=action_text,
+                target_name=target_name, location_name=scene_ctx.location_name,
+                threat_name=target_name, consequence_hint=consequence.narration_hint,
+                is_saving_throw=decision.resolution_type == ResolutionType.SAVING_THROW,
+                campaign_id=ctx.campaign_id,
+            )
+            critical = bool(check_result and check_result.natural_roll in (1, 20))
+            pacing = select_pacing(
+                resolution_type=decision.resolution_type,
+                consequence_class=consequence.consequence_class,
+                is_saving_throw=decision.resolution_type == ResolutionType.SAVING_THROW,
+                critical=critical,
+                scene_mode=scene3.mode if scene3 else None,
+                hook_connected=bool(character_context.relevant_hooks),
+            )
             narration = await self.narrator.run(
                 read, action_text=action_text, outcome=outcome,
                 result_summary=result_summary, scene=scene3, target_ref=target_ref,
                 directory=directory3, resolved_targets=resolved_targets,
-                scene_context=scene_ctx,
+                scene_context=scene_ctx, pacing=pacing,
+                consequence_class=consequence.consequence_class,
+                narration_hint=consequence.narration_hint,
+                character_context=character_context,
+                progression_context=progression_ctx,
             )
         # Anti-hallucination: never let the DM ask the player to author the world.
         from app.ai.narration_guard import screen_decision_prompt, screen_narration
@@ -374,7 +504,7 @@ class CommittedActionPipeline:
         # "infected woman" becomes a real NPC at this scene's location, listed in the
         # scene's visible entities, so approaching her next turn resolves instead of
         # looping on "which direction?". Nothing already present is duplicated.
-        roll_line = self._roll_line(check_result, outcome)
+        roll_line = self._roll_line(check_result, outcome, composed_dc)
         async with self.db.unit_of_work() as s:
             if narration.introduced_npcs:
                 await self._commit_introduced_npcs(
@@ -911,10 +1041,31 @@ class CommittedActionPipeline:
         npc_targets = [e for e in resolved_targets if e.entity_type != PLAYER_CHARACTER]
         pc_targets = [e for e in resolved_targets if e.entity_type == PLAYER_CHARACTER]
         needs_target = spell.attack != "none" or spell.save_ability is not None
-        target_ec = (npc_targets or pc_targets or [None])[0]
+        # An OFFENSIVE spell prefers the NPC; a spell whose declared effect lands on a
+        # creature (Guidance, Bless, Shield of Faith) is cast on an ALLY, so it prefers
+        # the named player character. Picking the NPC first for a buff is how "Guidance
+        # on Neneko" would silently buff the nearest guard instead.
+        buffs_a_creature = any(
+            e.target_scope in ("self", "single") for e in spell.effects)
+        if buffs_a_creature and not needs_target:
+            target_ec = (pc_targets or npc_targets or [None])[0]
+        else:
+            target_ec = (npc_targets or pc_targets or [None])[0]
         if needs_target and target_ec is None:
             return await self._enter_clarification(
                 ctx, action_text, f"จะร่าย {spell.name_th_hint} ใส่ใคร?")
+
+        # WHO the declared effects land on. Kept separate from the combat stat
+        # lookup: a buff has no AC/save numbers, and deriving its subject from those
+        # is exactly why the target used to be dropped and the die never arrived.
+        # `self`-scoped effects always land on the caster regardless of who was named.
+        caster_ref = entity_ref("character", ctx.character_id) if ctx.character_id else None
+        if any(e.target_scope == "self" for e in spell.effects):
+            effect_targets = [caster_ref] if caster_ref else []
+        elif target_ec is not None:
+            effect_targets = [target_ec.entity_ref]
+        else:
+            effect_targets = [caster_ref] if caster_ref else []
 
         async with self.db.session() as read:
             stats = await self._target_combat_stats(read, ctx.session_id, target_ec)
@@ -929,19 +1080,32 @@ class CommittedActionPipeline:
         target_acs = {stats["ref"]: stats["ac"]} if (stats and spell.attack != "none") else {}
         target_save_mods = ({stats["ref"]: stats["save_mods"].get(spell.save_ability, 0)}
                             if (stats and spell.save_ability) else {})
+        # What the player asked the spell to create (an illusion's content/form).
+        # Descriptive only — SpellEngine validates it against the spell's declared
+        # limits and reports any correction in outcome.adjustments.
+        effect_params = {
+            "description": (interpretation.spell_description or "").strip(),
+            "modes": list(interpretation.spell_modes or []),
+        }
         try:
             async with self.db.unit_of_work() as s:
                 caster = await s.get(Character, ctx.character_id)
                 engine = SpellEngine(s, self.dice)
+                scene_row = (await SceneService(s).get_active_scene(ctx.session_id)
+                             if ctx.session_id else None)
                 outcome = await engine.cast(
                     character=caster, spell_key=spell.name,
                     slot_level=interpretation.slot_level,
                     target_acs=target_acs, target_save_mods=target_save_mods,
                     session_id=ctx.session_id, campaign_id=ctx.campaign_id,
-                    scene_id=(await SceneService(s).get_active_scene(ctx.session_id)).id
-                    if ctx.session_id else None)
+                    scene_id=scene_row.id if scene_row else None,
+                    effect_targets=effect_targets, effect_params=effect_params,
+                    location_id=scene_row.location_id if scene_row else None)
                 # Apply the committed damage/healing to the authoritative target model.
                 await self._apply_spell_effects(s, ctx, outcome, stats, target_ec, spell)
+                # Who NOTICED a world effect, decided by the engine from perception,
+                # co-location and the observer's own mind — not by the narrator.
+                await self._observe_world_effects(s, ctx, outcome, scene_row)
                 pm = await s.get(ProcessedMessage, ctx.processed_message_id) if ctx.processed_message_id else None
                 if pm is not None:
                     pm.stage = ProcessingStage.SENT.value
@@ -951,21 +1115,72 @@ class CommittedActionPipeline:
                 if session_row is not None:
                     session_row.active_play_state = ActivePlayState.TABLE_OPEN.value
                     session_row.version += 1
+                log.info(
+                    "spell cast committed",
+                    extra={"campaign_id": ctx.campaign_id, "session_id": ctx.session_id,
+                           "channel_id": ctx.channel_id, "user_id": ctx.member_id,
+                           "discord_message_id": ctx.inbound.discord_message_id,
+                           "scene_id": scene_row.id if scene_row else None,
+                           "spell": spell.name, "caster": caster_ref,
+                           "effect_targets": effect_targets,
+                           "effects_created": [e.effect_id for e in outcome.effects],
+                           "observers": len(outcome.observations),
+                           "adjustments": outcome.adjustments})
         except (RulesViolation, ValidationError) as exc:
             # Illegal cast (not known/prepared, no slot, etc.) — nothing consumed.
+            log.info("spell cast rejected",
+                     extra={"campaign_id": ctx.campaign_id, "spell": spell.name,
+                            "reason": str(exc)})
             return self._table_note(ctx, f"ร่าย {spell.name_th_hint} ไม่ได้: {exc}")
 
         # 4. Narration from the committed result (facts fixed; prose cannot contradict).
+        body = outcome.line_th
+        # A rules limit the engine applied is explained here, in the same breath as
+        # the result — the player asked for something the spell cannot do and is told
+        # why, rather than quietly receiving something else.
+        for note in outcome.adjustments:
+            body += f"\n{note}"
+        witnesses = [o["npc_name"] for o in outcome.observations if o.get("noticed")]
+        if witnesses:
+            body += f"\nผู้ที่สังเกตเห็น: {', '.join(dict.fromkeys(witnesses))}"
         return BridgeResult(
             handled=True, category=MessageCategory.COMMITTED_ACTION, state_mutated=True,
             responses=[OutboundMessage(
-                ctx.channel_id, outcome.line_th, kind=MessageKind.CHECK_RESOLUTION,
+                ctx.channel_id, body, kind=MessageKind.CHECK_RESOLUTION,
                 title=spell.name_th_hint,
                 data={"roll_line": outcome.line_th,
                       "decision_prompt": self._cast_decision_prompt(outcome, target_ec),
                       "outcome": "success" if (outcome.damage or outcome.healing
+                                               or outcome.effects
                                                or not needs_target) else "resolved"})],
-            note=f"cast {spell.name}: dmg={outcome.damage} heal={outcome.healing}")
+            note=f"cast {spell.name}: dmg={outcome.damage} heal={outcome.healing} "
+                 f"effects={len(outcome.effects)}")
+
+    async def _observe_world_effects(self, s, ctx: ResolvedContext, outcome,
+                                     scene_row) -> None:
+        """Decide who noticed each world effect this cast created, and record it on
+        the effect so later turns (and the narrator) can use it.
+
+        The caster is excluded — they know what they made."""
+        world = [e for e in outcome.effects if e.kind == "world_effect"]
+        if not world or scene_row is None:
+            return
+        from app.models.progression import ActiveEffect as _AE
+        from app.npcs.observer_service import ObserverService
+
+        observer = ObserverService(s, self.dice)
+        for granted in world:
+            effect = await s.get(_AE, granted.effect_id)
+            if effect is None:
+                continue
+            seen = await observer.observe(
+                campaign_id=ctx.campaign_id, effect=effect,
+                exclude_refs=[outcome.caster_ref])
+            data = dict(effect.data or {})
+            data["observers"] = [o.as_dict() for o in seen.noticed_by]
+            effect.data = data
+            outcome.observations.extend(
+                {"effect_id": granted.effect_id, **o.as_dict()} for o in seen.noticed_by)
 
     async def _target_combat_stats(self, read, session_id: str | None, target_ec) -> dict | None:
         """Authoritative combat-relevant stats for a target, or None if unavailable.
@@ -1097,12 +1312,21 @@ class CommittedActionPipeline:
     ) -> BridgeResult:
         from app.core.ids import new_id
 
+        # Fiction-first CHECK_SETUP: narrate up to the point uncertainty matters,
+        # BEFORE any pending-action state is persisted and BEFORE the roll. No
+        # outcome/DC leak — the schema/prompt structurally excludes both.
+        check_setup_text = await self._build_check_setup(
+            ctx, action_text=action_text, decision=decision, character=character,
+            resolved_targets=resolved_targets,
+        )
+
         pending = {
             "id": new_id(), "kind": "check",
             "member_id": ctx.member_id, "character_id": ctx.character_id,
             "action_text": action_text,
             "goal": interpretation.goal, "method": interpretation.method,
             "decision": decision.model_dump(mode="json"),
+            "object_name": interpretation.object_reference,
             # Resolved identities survive the pause so the roll doesn't re-resolve.
             "targets": [t.to_public() for t in resolved_targets],
         }
@@ -1120,16 +1344,62 @@ class CommittedActionPipeline:
                 pm.category = MessageCategory.COMMITTED_ACTION.value
                 pm.pending_action_id = pending["id"]
 
-        label, mod_line = self._check_label_and_mods(decision, character)
+        bonus_grants = await self._bonus_grants_for_check(ctx, decision, character)
+        label, mod_line = self._check_label_and_mods(decision, character, bonus_grants)
+        responses = []
+        if check_setup_text:
+            responses.append(OutboundMessage(
+                ctx.channel_id, check_setup_text, kind=MessageKind.CHECK_SETUP,
+            ))
+        responses.append(OutboundMessage(
+            ctx.channel_id, mod_line, kind=MessageKind.CHECK_PROMPT,
+            title=label, choices=["🎲 ทอย d20"],
+            data={"footer": "โชคชะตาอยู่ในมือเจ้า"},
+        ))
         return BridgeResult(
             handled=True, category=MessageCategory.COMMITTED_ACTION, state_mutated=False,
-            responses=[OutboundMessage(
-                ctx.channel_id, mod_line, kind=MessageKind.CHECK_PROMPT,
-                title=label, choices=["🎲 ทอย d20"],
-                data={"footer": "โชคชะตาอยู่ในมือเจ้า"},
-            )],
+            responses=responses,
             note="pending check (dice ritual)",
         )
+
+    async def _build_check_setup(
+        self, ctx: ResolvedContext, *, action_text: str, decision, character: Character,
+        resolved_targets: list[EntityContext],
+    ) -> str:
+        """Read-only: builds the bounded context and asks the CheckSetupGenerator
+        for the pre-roll fiction beat. Never persists anything, never rolls."""
+        label, _ = self._check_label_and_mods(decision, character)
+        npc_targets = [e for e in resolved_targets if e.entity_type != PLAYER_CHARACTER]
+        target_name = npc_targets[0].canonical_name if npc_targets else ""
+        async with self.db.session() as read:
+            scene = await SceneService(read).get_active_scene(ctx.session_id) if ctx.session_id else None
+            directory = await SceneEntityDirectory(read).build(
+                scene, actor_character_id=ctx.character_id, campaign_id=ctx.campaign_id
+            )
+            from app.memory.scene_context import SceneContextBuilder
+
+            scene_ctx = await SceneContextBuilder(read).build(
+                campaign_id=ctx.campaign_id, scene=scene, actor_character_id=ctx.character_id
+            )
+            is_saving_throw = decision.resolution_type == ResolutionType.SAVING_THROW
+            character_context = await build_character_narrative_context(
+                read, character=character, action_text=action_text,
+                target_name=target_name, location_name=scene_ctx.location_name,
+                threat_name=target_name, is_saving_throw=is_saving_throw,
+                campaign_id=ctx.campaign_id,
+            )
+            pacing = select_pacing(
+                resolution_type=decision.resolution_type,
+                is_saving_throw=is_saving_throw,
+                scene_mode=scene.mode if scene else None,
+                hook_connected=bool(character_context.relevant_hooks),
+            )
+            setup = await self.check_setup.run(
+                read, action_text=action_text, check_label=label, scene=scene,
+                directory=directory, scene_context=scene_ctx,
+                character_context=character_context, pacing=pacing,
+            )
+        return setup.text
 
     async def _resume_check(
         self, ctx: ResolvedContext, *, answer_text: str, pending: dict
@@ -1162,9 +1432,11 @@ class CommittedActionPipeline:
             goal=pending.get("goal", ""), method=pending.get("method", ""),
             decision=decision, character=character,
             resolved_targets=resolved_targets, ritual=True,
+            object_name=pending.get("object_name", ""),
         )
 
-    def _check_label_and_mods(self, decision, character: Character) -> tuple[str, str]:
+    def _check_label_and_mods(self, decision, character: Character,
+                              bonus_grants: list | None = None) -> tuple[str, str]:
         skill = normalize_skill(decision.skill)
         ability = normalize_ability(decision.ability) or (
             ability_for_skill(skill) if skill else "wis"
@@ -1174,7 +1446,12 @@ class CommittedActionPipeline:
         th = self._SKILL_TH.get(name, "")
         label = f"{name.replace('_', ' ').title()}{f' ({th})' if th else ''}"
         prof_note = " · ถนัด" if proficient else ""
-        return label, f"{character.name} — โมดิฟายเออร์ {modifier:+d}{prof_note}"
+        mod_line = f"{character.name} — โมดิฟายเออร์ {modifier:+d}{prof_note}"
+        # Show the help BEFORE the roll, so the player knows the die is coming and
+        # can see it was actually applied afterwards.
+        for grant in bonus_grants or []:
+            mod_line += f"\n{grant.label}: +{grant.expression}"
+        return label, mod_line
 
     @classmethod
     def _check_title(cls, check_result) -> str:
@@ -1218,11 +1495,21 @@ class CommittedActionPipeline:
             note="clarification required",
         )
 
-    def _resolve_mechanics(self, decision, character: Character | None):
+    def _resolve_mechanics(self, decision, character: Character | None,
+                           bonus_grants: list | None = None,
+                           composed_dc=None):
         """Deterministic. Returns (check_result_or_None, outcome_str).
 
         Tolerant of real-LLM vocabulary: ability/skill names are normalized, and any
         unexpected value degrades to a safe WIS check rather than crashing the turn.
+
+        `bonus_grants` are the extra dice active effects owe this roll (Guidance's
+        1d4). They are rolled by the dice engine as part of the check, so the total
+        the table sees already includes them.
+
+        `composed_dc` is the situational DC (band + capped factors). Without one the
+        band's bare rung is used, which is the old fixed-ladder behaviour and stays
+        correct — just less responsive.
         """
         rt = decision.resolution_type
         if rt == ResolutionType.AUTOMATIC_SUCCESS:
@@ -1242,23 +1529,239 @@ class CommittedActionPipeline:
             if ability is None:
                 ability = ability_for_skill(skill) if skill else "wis"
             modifier, proficient = check_modifier(character, ability, skill)
-            dc = resolve_dc(decision.dc_band)
+            dc = composed_dc.total if composed_dc is not None else resolve_dc(
+                decision.dc_band)
             if rt == ResolutionType.SAVING_THROW:
                 result = self.dice.resolve_saving_throw(
                     modifier=modifier, dc=dc, ability=ability,
                     advantage=decision.advantage, disadvantage=decision.disadvantage,
+                    bonus_grants=bonus_grants,
                 )
             else:
                 result = self.dice.resolve_ability_check(
                     modifier=modifier, dc=dc, ability=ability, skill=skill, proficient=proficient,
                     advantage=decision.advantage, disadvantage=decision.disadvantage,
+                    bonus_grants=bonus_grants,
                 )
             return result, result.outcome
         except Exception as exc:  # noqa: BLE001 - never crash a turn on odd AI output
             log.warning("mechanics resolution fell back to a WIS check: %s", exc)
             modifier, _ = check_modifier(character, "wis", None)
-            result = self.dice.resolve_ability_check(modifier=modifier, dc=15, ability="wis")
+            result = self.dice.resolve_ability_check(
+                modifier=modifier, dc=15, ability="wis", bonus_grants=bonus_grants)
             return result, result.outcome
+
+    # --- unresolved threads ------------------------------------------------------
+    async def _has_open_question(self, ctx: ResolvedContext,
+                                 npc_targets: list[EntityContext]) -> bool:
+        """Is any NPC here still waiting for this character to explain something?"""
+        if not ctx.character_id or not npc_targets:
+            return False
+        try:
+            from app.npcs.memory_service import NPCMemoryService
+
+            subject = entity_ref("character", ctx.character_id)
+            async with self.db.session() as read:
+                service = NPCMemoryService(read)
+                for target in npc_targets:
+                    kind, npc_id = parse_entity_ref(target.entity_ref)
+                    if kind != "npc" or not npc_id:
+                        continue
+                    if await service.unresolved(npc_id=npc_id, subject_ref=subject):
+                        return True
+        except Exception as exc:  # noqa: BLE001
+            log.warning("open-question lookup failed: %s", exc)
+        return False
+
+    async def _settle_open_questions(self, s, ctx: ResolvedContext, *,
+                                     npc_targets: list[EntityContext], outcome: str,
+                                     decision) -> list[str]:
+        """Apply the result of an attempt to explain an open thread.
+
+        A believed excuse CLOSES the question and eases suspicion — it never repays
+        the trust the act itself cost, and the memory stays on the record. A failed
+        one leaves the thread open and adds a lie to it. Either way the theft is
+        still something this NPC watched happen.
+        """
+        if not ctx.character_id or not npc_targets:
+            return []
+        skill = normalize_skill(decision.skill)
+        # Only an attempt to TALK your way out settles a thread; picking a lock in
+        # front of the guard does not answer his question.
+        if skill not in ("deception", "persuasion", "performance"):
+            return []
+        settled: list[str] = []
+        try:
+            from app.npcs.memory_service import NPCMemoryService
+
+            service = NPCMemoryService(s)
+            subject = entity_ref("character", ctx.character_id)
+            believed = outcome == "success"
+            for target in npc_targets:
+                kind, npc_id = parse_entity_ref(target.entity_ref)
+                if kind != "npc" or not npc_id:
+                    continue
+                for memory in await service.unresolved(npc_id=npc_id,
+                                                       subject_ref=subject):
+                    await service.resolve_question(
+                        memory, believed=believed,
+                        # Relief, not absolution: a good story takes the edge off.
+                        suspicion_relief=15 if believed else 0)
+                    settled.append(
+                        f"{target.canonical_name}: "
+                        f"{'ยอมเชื่อไปก่อน' if believed else 'ไม่เชื่อ'}")
+            if settled:
+                log.info("open questions settled",
+                         extra={"campaign_id": ctx.campaign_id, "actor": subject,
+                                "believed": believed, "settled": settled})
+        except Exception as exc:  # noqa: BLE001
+            log.warning("settling open questions failed: %s", exc)
+        return settled
+
+    # --- the action memory loop -------------------------------------------------
+    async def _witness_action(self, s, ctx: ResolvedContext, *, decision,
+                              outcome: str, scene_row, character: Character | None,
+                              object_name: str = "",
+                              resolved_targets: list[EntityContext] | None = None):
+        """How the world perceived this action, and who was there to perceive it.
+
+        Returns None when the action is not the kind the world remembers — which is
+        most of them. Walking across a room leaves no mark; reaching into someone's
+        pack does.
+        """
+        if character is None or not ctx.character_id:
+            return None
+        try:
+            from app.npcs.witness_service import ActionWitnessService
+
+            skill = normalize_skill(decision.skill)
+            targets = resolved_targets or []
+            return await ActionWitnessService(s).build(
+                campaign_id=ctx.campaign_id, skill=skill, outcome=outcome,
+                actor_ref=entity_ref("character", ctx.character_id),
+                actor_name=character.name,
+                # Naming the object is what turns "why were you reaching for the
+                # thing?" into "why were you reaching for MY MAP?" — the difference
+                # between a generic grudge and a specific one.
+                object_name=object_name,
+                target_name=targets[0].canonical_name if targets else "",
+                location_id=scene_row.location_id if scene_row else None,
+                # A SUCCESSFUL covert act is unnoticed: the check is what decided
+                # whether anyone clocked it, and the engine does not re-litigate it.
+                passive_noticed=False,
+            )
+        except Exception as exc:  # noqa: BLE001 — witnessing must not break a turn
+            log.warning("witness resolution failed: %s", exc)
+            return None
+
+    async def _record_witness_memories(self, s, ctx: ResolvedContext, *, witnessed,
+                                       event_id: str, scene_row,
+                                       character: Character | None):
+        if witnessed is None or not witnessed.memorable:
+            return None
+        try:
+            from app.npcs.witness_service import ActionWitnessService
+            from app.tabletop.effects import EffectService
+
+            game_time = await EffectService(s).game_time(ctx.campaign_id)
+            return await ActionWitnessService(s).record(
+                campaign_id=ctx.campaign_id, action=witnessed, event_id=event_id,
+                location_id=scene_row.location_id if scene_row else None,
+                game_time=game_time, session_id=ctx.session_id,
+                scene_id=scene_row.id if scene_row else None,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("witness memory recording failed: %s", exc)
+            return None
+
+    # --- situational difficulty ------------------------------------------------
+    async def _compose_dc(self, ctx: ResolvedContext, decision,
+                          resolved_targets: list[EntityContext] | None = None):
+        """The DC this check is actually rolled against.
+
+        The band is the task's intrinsic difficulty; the factors are what makes it
+        harder or easier HERE — half read from committed state (an NPC's earned
+        feeling, the weather, a fog cloud in the room), half named by the adjudicator
+        from a closed vocabulary whose deltas the engine owns. The model never
+        supplies a number.
+        """
+        from app.tabletop.adjudication import (
+            SituationReader, compose_dc, factors_from_keys,
+        )
+
+        skill = normalize_skill(decision.skill)
+        try:
+            npc_targets = [e for e in (resolved_targets or [])
+                           if e.entity_type != PLAYER_CHARACTER]
+            target_ref = npc_targets[0].entity_ref if npc_targets else None
+            actor_ref = (entity_ref("character", ctx.character_id)
+                         if ctx.character_id else None)
+            async with self.db.session() as read:
+                scene = (await SceneService(read).get_active_scene(ctx.session_id)
+                         if ctx.session_id else None)
+                engine_factors = await SituationReader(read).factors(
+                    campaign_id=ctx.campaign_id, actor_ref=actor_ref, skill=skill,
+                    target_ref=target_ref, scene=scene,
+                    location_id=scene.location_id if scene else None)
+            proposed = factors_from_keys(
+                getattr(decision, "situational_factors", None), skill=skill)
+            return compose_dc(decision.dc_band, engine_factors + proposed)
+        except Exception as exc:  # noqa: BLE001 — never break a turn over a DC
+            log.warning("DC composition failed; using the bare band: %s", exc)
+            return compose_dc(decision.dc_band, [])
+
+    # --- active-effect integration -------------------------------------------
+    def _roll_type_for(self, decision) -> str:
+        from app.tabletop.effects import (
+            ROLL_ABILITY_CHECK, ROLL_ATTACK, ROLL_SAVING_THROW,
+        )
+
+        rt = decision.resolution_type
+        if rt == ResolutionType.SAVING_THROW:
+            return ROLL_SAVING_THROW
+        if rt == ResolutionType.ATTACK:
+            return ROLL_ATTACK
+        return ROLL_ABILITY_CHECK
+
+    async def _bonus_grants_for_check(
+        self, ctx: ResolvedContext, decision, character: Character | None,
+    ) -> list:
+        """The extra dice this character's active effects owe THIS check.
+
+        Queried fresh from committed state every time — the effect layer is the
+        authority on what is active, so a stale prompt can never grant a die that
+        has since been consumed or expired.
+        """
+        if character is None or not ctx.campaign_id:
+            return []
+        try:
+            skill = normalize_skill(decision.skill)
+            ability = normalize_ability(decision.ability) or (
+                ability_for_skill(skill) if skill else "wis")
+            from app.tabletop.effects import EffectService
+
+            async with self.db.session() as read:
+                return await EffectService(read).bonus_grants_for(
+                    campaign_id=ctx.campaign_id,
+                    subject_ref=entity_ref("character", character.id),
+                    roll_type=self._roll_type_for(decision), ability=ability,
+                )
+        except Exception as exc:  # noqa: BLE001 — a buff must never break the turn
+            log.warning("bonus grants lookup failed; rolling without them: %s", exc)
+            return []
+
+    async def _consume_used_grants(self, session, check_result, grants: list) -> None:
+        """End the effects that actually fed this roll. Runs inside the commit txn,
+        so a die is never spent by a roll that was not committed."""
+        if check_result is None or not grants:
+            return
+        consumable = {g.source for g in grants if g.consumed_on_use}
+        used = [b.source for b in getattr(check_result, "bonus_dice", []) or []
+                if b.source in consumable]
+        if used:
+            from app.tabletop.effects import EffectService
+
+            await EffectService(session).consume(used, reason="spent_on_roll")
 
     # --- PC agency + presence + spotlight -------------------------------------
     async def _agency_safe_response(
@@ -1338,7 +1841,7 @@ class CommittedActionPipeline:
     }
 
     @classmethod
-    def _roll_line(cls, check_result, outcome: str) -> str:
+    def _roll_line(cls, check_result, outcome: str, composed_dc=None) -> str:
         """The player-visible mechanical line, built ONLY from committed numbers."""
         verdict = "สำเร็จ ✓" if outcome == "success" else "พลาด ✗"
         if check_result is None:
@@ -1346,10 +1849,21 @@ class CommittedActionPipeline:
         name = check_result.skill or check_result.ability
         th = cls._SKILL_TH.get(name, "")
         label = f"{name.capitalize()}{f' ({th})' if th else ''}"
-        return (
-            f"{label}: {check_result.natural_roll} + {check_result.modifier} = "
+        # Each contributing effect is named and shown with what it rolled — the die
+        # is visible in the arithmetic, not silently folded into the total.
+        bonus = "".join(
+            f" + {b.label} {b.expression}({b.total})"
+            for b in getattr(check_result, "bonus_dice", []) or []
+        )
+        line = (
+            f"{label}: {check_result.natural_roll} + {check_result.modifier}{bonus} = "
             f"{check_result.total} vs DC {check_result.dc} — {verdict}"
         )
+        # A DC that moved says why. Without this the number looks arbitrary — and a
+        # world that quietly rewards a trusted friendship teaches nobody anything.
+        if composed_dc is not None and composed_dc.factors:
+            line += f"\n{composed_dc.explain_th()}"
+        return line
 
     @staticmethod
     def _result_summary(check_result, outcome: str, decision) -> str:

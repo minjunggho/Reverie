@@ -17,6 +17,7 @@ class MessageKind(StrEnum):
     PLAYER_SAFE_RECAP = "PLAYER_SAFE_RECAP"
     SCENE_FRAME = "SCENE_FRAME"
     NPC_DIALOGUE = "NPC_DIALOGUE"
+    CHECK_SETUP = "CHECK_SETUP"             # fiction-first beat BEFORE the roll
     CHECK_PROMPT = "CHECK_PROMPT"          # the dice ritual: [🎲 ทอย d20]
     CHECK_RESOLUTION = "CHECK_RESOLUTION"
     ATTACK_RESOLUTION = "ATTACK_RESOLUTION"
@@ -45,6 +46,7 @@ KIND_STYLE: dict[MessageKind, tuple[str, int]] = {
     MessageKind.PLAYER_SAFE_RECAP: ("📖", 0x7A9E7E),
     MessageKind.SCENE_FRAME: ("🌄", 0x5B7C99),
     MessageKind.NPC_DIALOGUE: ("💬", 0xC0A16B),
+    MessageKind.CHECK_SETUP: ("🌒", 0x6B5B8C),
     MessageKind.CHECK_PROMPT: ("🎲", 0xB8860B),
     MessageKind.CHECK_RESOLUTION: ("🎲", 0x5B7C99),
     MessageKind.ATTACK_RESOLUTION: ("⚔️", 0xA85751),

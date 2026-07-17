@@ -74,7 +74,22 @@ async def test_stealth_failure_raises_guard_suspicion(db, provider):
     async with db.session() as s:
         guard = await s.get(NPC, world.guard_npc_id)
         assert guard.emotional_state == "ระแวง"
-        assert (guard.attitudes or {}).get("suspicion_level") == 1
+
+    # Suspicion lands on the per-character relationship — the store the NPC decision
+    # path, recall, and the situational DC reader all actually read. It used to go to
+    # a campaign-wide `attitudes["suspicion_level"]` counter that nothing consulted,
+    # so the guard could be "suspicious" and still greet the culprit like a stranger.
+    from sqlalchemy import select
+
+    from app.models.npc_epistemic import NPCRelationship
+
+    async with db.session() as s:
+        rel = (await s.execute(select(NPCRelationship).where(
+            NPCRelationship.npc_id == world.guard_npc_id,
+            NPCRelationship.entity_ref == f"character:{world.kael_id}",
+        ))).scalars().first()
+    assert rel is not None, "suspicion must be about SOMEONE, not a bare counter"
+    assert rel.suspicion > 0
 
 
 async def test_the_roll_not_the_llm_determines_outcome(db, provider):

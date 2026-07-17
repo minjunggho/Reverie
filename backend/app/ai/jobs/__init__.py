@@ -5,6 +5,7 @@ validates the structured output, and has a safe fallback on model failure. Jobs
 never write to the database and never produce authoritative numbers.
 """
 from app.ai.jobs.adjudicator import AdjudicationJudge
+from app.ai.jobs.check_setup import CheckSetupGenerator
 from app.ai.jobs.classifier import TableMessageClassifier
 from app.ai.jobs.consequence import ConsequencePlanner
 from app.ai.jobs.interpreter import ActionInterpreter
@@ -16,6 +17,7 @@ __all__ = [
     "TableMessageClassifier",
     "ActionInterpreter",
     "AdjudicationJudge",
+    "CheckSetupGenerator",
     "ConsequencePlanner",
     "DMNarrator",
     "NPCResponseGenerator",

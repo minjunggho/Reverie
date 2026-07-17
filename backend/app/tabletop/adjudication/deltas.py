@@ -234,18 +234,48 @@ class DeltaApplier:
         )
 
     async def _raise_suspicion(self, delta: ProposedDelta) -> Event:
+        """Raise this NPC's suspicion OF THE ACTOR.
+
+        This used to write a campaign-wide `attitudes["suspicion_level"]` counter that
+        nothing ever read: NPCDecisionService derives stance, willingness and intent
+        purely from NPCRelationship + NPCMemory. So suspicion could be raised and the
+        NPC would still greet the culprit like a stranger. Worse, a bare counter has
+        no idea WHO it is suspicious of.
+
+        It now accumulates into the per-character relationship that the decision
+        service, the recall path and the situational-DC reader all already read — one
+        store, and suspicion that is about someone.
+        """
         _, npc_id = parse_entity_ref(delta.target)
         npc = await self.session.get(NPC, npc_id)
         if npc is None:
             raise ValidationError(f"unknown npc target {delta.target!r}")
         amount = int(delta.payload.get("amount", 1))
-        attitudes = dict(npc.attitudes or {})
-        before_level = int(attitudes.get("suspicion_level", 0))
-        after_level = before_level + amount
-        attitudes["suspicion_level"] = after_level
-        npc.attitudes = attitudes
         before_state = npc.emotional_state
         npc.emotional_state = "ระแวง"
+
+        subject = self.actor_entity if (self.actor_entity or "").startswith(
+            "character:") else None
+        before_level = after_level = 0
+        stance = None
+        if subject:
+            from app.npcs.memory_service import NPCMemoryService, _derive_stance
+
+            rel = await NPCMemoryService(self.session)._relationship(npc_id, subject)
+            before_level = int(rel.suspicion or 0)
+            after_level = max(-100, min(100, before_level + amount))
+            rel.suspicion = after_level
+            rel.current_stance = stance = _derive_stance(rel)
+            rel.attitude = stance
+        else:
+            # No identifiable actor: keep the legacy scene-level counter so the DM
+            # signal is not lost, but it drives no per-character behaviour.
+            attitudes = dict(npc.attitudes or {})
+            before_level = int(attitudes.get("suspicion_level", 0))
+            after_level = before_level + amount
+            attitudes["suspicion_level"] = after_level
+            npc.attitudes = attitudes
+
         # NPC suspicion is DM-scoped: players do not automatically learn of it.
         return await self.events.record(
             campaign_id=self.campaign_id, session_id=self.session_id, scene_id=self.scene_id,
@@ -253,6 +283,6 @@ class DeltaApplier:
             target_entities=[delta.target], visibility=Visibility.DM_ONLY,
             mechanical_changes={"suspicion": {"from": before_level, "to": after_level}},
             payload={"emotional_state": {"from": before_state, "to": "ระแวง"},
-                     "reason": delta.reason},
+                     "reason": delta.reason, "subject": subject, "stance": stance},
             narrative_significance=30,
         )

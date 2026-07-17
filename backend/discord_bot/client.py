@@ -16,7 +16,7 @@ import discord
 from app.core.logging import get_logger
 from app.discord_bridge import AdminBridge, DiscordBridge, InboundAttachment, InboundMessage, is_admin_command
 from app.discord_bridge.dto import BridgeResult, OutboundMessage
-from discord_bot.render import ChoiceView, _chunks, build_embed
+from discord_bot.render import ChoiceView, _chunks, build_embeds
 
 log = get_logger(__name__)
 
@@ -111,13 +111,14 @@ class ReverieClient(discord.Client):
 
     async def _send_one(self, channel, out: OutboundMessage) -> None:  # pragma: no cover
         view = self._view_for(out)
-        embed = build_embed(out)
+        embeds = build_embeds(out)
         target = channel
         if out.private_to_discord_id is not None:
             target = await self.fetch_user(int(out.private_to_discord_id))
         try:
-            if embed is not None:
-                await target.send(embed=embed, view=view)
+            if embeds:
+                for i, embed in enumerate(embeds):
+                    await target.send(embed=embed, view=view if i == len(embeds) - 1 else None)
             else:
                 chunks = _chunks(out.content)
                 for i, chunk in enumerate(chunks):

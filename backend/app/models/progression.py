@@ -76,3 +76,18 @@ class ActiveEffect(Base, TimestampMixin):
     duration_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+    # What KIND of effect this is, from the spell's declared SpellEffectDef
+    # ("roll_bonus" | "world_effect" | "ac_bonus" | …). Empty for the pre-existing
+    # rows written by rage/wild-shape/bare concentration, which stay untouched.
+    kind: Mapped[str] = mapped_column(String(24), default="", index=True)
+    # WHO the effect acts on — an entity ref. Distinct from `character_id`, which is
+    # the maintainer: Hamu casts Guidance on Neneko, so character_id=Hamu (he holds
+    # concentration) but subject_ref=character:Neneko (she gets the die). The roll
+    # path looks up effects by SUBJECT, which is why this is a real indexed column
+    # and not a JSON scan.
+    subject_ref: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # WHERE a world_effect exists. An illusion is anchored in the world, so observers
+    # can be resolved by co-location and it can be found again on later turns.
+    scene_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    location_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)

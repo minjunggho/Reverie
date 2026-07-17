@@ -140,7 +140,10 @@ async def test_two_player_full_journey(db, provider):
                               payload={"secret_id": secret_id})],
     ))
     r = await table.send("! ฉันย่องเข้าไปใกล้ๆ แอบดูข้อมือของยาม ไม่ให้เขาเห็น", OWNER, "นิค")
-    assert r.responses[0].kind == MessageKind.CHECK_PROMPT   # the table holds its breath
+    # A fiction-first CHECK_SETUP beat precedes the CHECK_PROMPT (dice ritual).
+    assert r.responses[0].kind == MessageKind.CHECK_SETUP
+    check_prompt = next(m for m in r.responses if m.kind == MessageKind.CHECK_PROMPT)
+    assert check_prompt is not None                          # the table holds its breath
     assert r.state_mutated is False
     r = await table.send("🎲 ทอย d20", OWNER, "นิค")          # the player rolls
     public = [m for m in r.responses if m.private_to_discord_id is None]

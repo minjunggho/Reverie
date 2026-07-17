@@ -108,9 +108,11 @@ async def test_believer_button_reaches_primary_deity(db, provider):
     assert card.choices                              # a real, choosable legal list
 
 
-# 2 — believer with NO deity named + empty pantheon: explicit choice, never a dead end -
-async def test_believer_no_deity_empty_pantheon_offers_explicit_resolution(db, provider):
-    world = await build_world(db)  # no pantheon activated
+# 2 — believer with no pantheon activated yet: the default (Forgotten Realms — Core)
+# auto-activates the first time the belief step runs, so PRIMARY_DEITY offers real
+# deity choices instead of the empty-pantheon placeholder — never a dead end -----------
+async def test_believer_with_no_active_pantheon_auto_activates_the_default(db, provider):
+    world = await build_world(db)  # no pantheon activated yet
     await _seed_belief(db, world.p1_member_id, world.campaign_id)
     table = Table(db, provider)
 
@@ -119,13 +121,27 @@ async def test_believer_no_deity_empty_pantheon_offers_explicit_resolution(db, p
     assert _stage(d) == "deity"
     card = r.responses[0]
     assert card.kind == MessageKind.CHARACTER_CREATION       # NOT TECHNICAL_ERROR
-    assert BELIEF_NO_NAMED_DEITY in card.choices
+    assert card.choices                                      # real deities offered
+    assert BELIEF_NO_NAMED_DEITY not in card.choices          # the empty-pantheon fallback did not fire
 
-    r2 = await table.send(BELIEF_NO_NAMED_DEITY)
-    d2 = await _draft(db, world.p1_member_id)
-    assert _stage(d2) == "details"
-    assert _profile(d2)["stance"] == "BELIEVER"
-    assert _profile(d2)["primary_deity_key"] is None         # believer, no canon deity
+    async with db.session() as s:
+        active = await FaithService(s).list_active_pantheons(world.campaign_id)
+    assert [p.key for p in active] == ["forgotten_realms"]    # auto-activated, persisted
+
+
+# 2b — the explicit "no named deity" resolution still exists as a safety net if the
+# default pack were ever unavailable/disabled (defensive path, not the normal case) ----
+async def test_believer_no_deity_named_is_still_a_valid_explicit_choice(db, provider):
+    world = await build_world(db)
+    await _activate_fr(db, world.campaign_id)
+    await _seed_belief(db, world.p1_member_id, world.campaign_id, stage="deity")
+    table = Table(db, provider)
+
+    r = await table.send(BELIEF_NO_NAMED_DEITY)
+    d = await _draft(db, world.p1_member_id)
+    assert _stage(d) == "details"
+    assert _profile(d)["stance"] == "BELIEVER"
+    assert _profile(d)["primary_deity_key"] is None          # believer, no canon deity chosen
 
 
 # 3 — believer names Bahamut (unavailable in this pantheon): flow survives, offers path -
@@ -326,3 +342,26 @@ async def test_finish_does_not_duplicate_profile(db, provider):
     # Finishing advances OUT of belief (to review); the single profile is unchanged.
     assert d.data["_build"]["step"] == "review"
     assert _profile(d) == before
+
+
+# 18 — exact live-playtest regression: a Cleric on a brand-new campaign (no pantheon ever
+# activated) must reach the cleric power-source card, never the "class=cleric;
+# pool=cleric_deity; legal_count=0" dead-end diagnostic ---------------------------------
+async def test_cleric_on_fresh_campaign_reaches_power_source_selection(db, provider):
+    world = await build_world(db)  # no pantheon activated — the exact reported scenario
+    await _seed_belief(db, world.p1_member_id, world.campaign_id, char_class="cleric",
+                       stage="cleric_deity")
+    table = Table(db, provider)
+
+    r = await table.send("hello")   # any input re-renders the current belief step
+    card = r.responses[0]
+    assert card.kind == MessageKind.CHARACTER_CREATION
+    assert "สร้างตัวละครต่อไม่ได้" not in card.content       # NOT the dead-end diagnostic
+    assert "legal_count=0" not in card.content
+    assert card.choices                                       # real cleric-capable deities
+    assert any("Tyr" in c or "ทีร์" in c for c in card.choices)
+
+    r2 = await table.send("Tyr")
+    d = await _draft(db, world.p1_member_id)
+    assert _stage(d) == "cleric_domain"                       # advances past the old dead-end
+    assert r2.responses[0].kind == MessageKind.CHARACTER_CREATION

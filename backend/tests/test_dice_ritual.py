@@ -44,11 +44,12 @@ async def test_check_pauses_until_the_player_rolls(db, provider):
     bridge = build_bridge(db, provider=provider, rng=SequenceRandomness([16]))
 
     r = await bridge.handle_inbound(_msg("! ผมย่องไปดูหน้าต่าง ไม่ให้ยามเห็น"))
-    assert r.responses[0].kind == MessageKind.CHECK_PROMPT
-    assert r.responses[0].choices == ["🎲 ทอย d20"]
-    assert "Stealth" in (r.responses[0].title or "")
-    assert "+5" in r.responses[0].content                 # modifier shown, DC hidden
-    assert "15" not in r.responses[0].content
+    assert r.responses[0].kind == MessageKind.CHECK_SETUP     # fiction-first, no outcome leak
+    check_prompt = next(m for m in r.responses if m.kind == MessageKind.CHECK_PROMPT)
+    assert check_prompt.choices == ["🎲 ทอย d20"]
+    assert "Stealth" in (check_prompt.title or "")
+    assert "+5" in check_prompt.content                   # modifier shown, DC hidden
+    assert "15" not in check_prompt.content
     # NOTHING has been rolled or committed yet.
     async with db.session() as s:
         count = (await s.execute(select(func.count(Event.id)).where(

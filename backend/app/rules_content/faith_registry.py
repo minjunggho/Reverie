@@ -47,6 +47,7 @@ VALID_DOMAINS = frozenset({
     "Light",
     "Nature",
     "Order",
+    "Tempest",
     "Trickery",
     "Twilight",
     "War",

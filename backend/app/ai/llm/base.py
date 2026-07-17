@@ -18,6 +18,7 @@ from app.schemas.llm_io import (
     AdjudicationDecision,
     ClassificationResult,
     CampaignPrologue,
+    CheckSetup,
     ConsequenceProposal,
     CreationGuidance,
     LocationDraft,
@@ -91,6 +92,12 @@ class LLMProvider(ABC):
         return await self.structured_complete(
             response_model=Narration, messages=messages,
             task="generate_dm_narration", temperature=0.7,
+        )
+
+    async def generate_check_setup(self, messages: list[LLMMessage]) -> CheckSetup:
+        return await self.structured_complete(
+            response_model=CheckSetup, messages=messages,
+            task="generate_check_setup", temperature=0.7,
         )
 
     async def generate_npc_response(self, messages: list[LLMMessage]) -> NPCResponse:

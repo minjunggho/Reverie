@@ -6,6 +6,7 @@ touches the database or the LLM.
 from __future__ import annotations
 
 import json
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Literal
@@ -89,6 +90,104 @@ class SkillDef(_Def):
     explain_th: str
 
 
+# The plural must be allowed explicitly: without `s?` the word boundary after
+# "minute" cannot match in "10 minutes", the whole pattern fails, and the duration
+# silently becomes None — i.e. an effect that never expires.
+_DURATION_RE = re.compile(r"(\d+)\s*(round|minute|min|hour|hr|day|m|h|d)s?\b", re.I)
+_DURATION_UNIT_MINUTES = {
+    "round": 1, "minute": 1, "min": 1, "m": 1,
+    "hour": 60, "hr": 60, "h": 60, "day": 1440, "d": 1440,
+}
+
+
+def _duration_minutes(duration: str | None) -> int | None:
+    """'1m' -> 1; '10 minutes' -> 10; 'concentration, up to 1 hour' -> 60;
+    'instant'/'' -> None. A round is tracked as the smallest unit (1 minute), which
+    is the granularity the game clock keeps.
+
+    Unparseable content returns None (untracked) rather than a wrong number — an
+    effect that never expires is a visible bug; one that expires early is a silent
+    one."""
+    if not duration:
+        return None
+    text = duration.strip().lower()
+    if text.startswith("instant") or text in ("", "special", "until dispelled"):
+        return None
+    m = _DURATION_RE.search(text)
+    if not m:
+        return None
+    unit = _DURATION_UNIT_MINUTES.get(m.group(2).lower())
+    return int(m.group(1)) * unit if unit else None
+
+
+class SpellEffectDef(BaseModel):
+    """What a spell DOES beyond damage/healing — declared as data, resolved by the
+    engine.
+
+    Before this existed, SpellDef could only express attack/save/damage/healing, so
+    every utility spell (Guidance, Minor Illusion, Mage Hand, Light…) resolved to a
+    bare name with no mechanical or world consequence. A spell declares its effects
+    here; SpellEngine creates them; the roll path and the NPC observer model read
+    them. Nothing about a specific spell is hardcoded in engine code.
+
+    ROLL_BONUS   — an extra die on a later roll by the subject (Guidance, Bless).
+    WORLD_EFFECT — a thing that now exists in the scene (Minor Illusion, Light).
+    AC_BONUS     — a bonus to the subject's armour class (Shield, Shield of Faith).
+    CONDITION    — a condition applied to the subject (Sleep → unconscious).
+    SENSE        — a perception the subject gains (Detect Magic, Identify).
+    MOVEMENT     — the subject's movement is altered (Feather Fall).
+
+    Integration status is deliberately explicit: roll_bonus, ac_bonus and
+    world_effect are read by the roll path, AC derivation and the NPC observer
+    model respectively. condition/sense/movement are persisted, described and
+    expired like any other effect, but have no automatic rules integration yet —
+    they inform the narrator's context rather than driving a mechanic. See
+    EFFECT_KINDS_WITH_RULES_INTEGRATION.
+    """
+    kind: Literal["roll_bonus", "world_effect", "ac_bonus", "condition", "sense",
+                  "movement"]
+    # WHO the effect lands on. "self" ignores stated targets; "single" needs one.
+    target_scope: Literal["self", "single", "point"] = "single"
+
+    # --- roll_bonus ----------------------------------------------------------
+    dice: str | None = None                  # "1d4" — rolled by the DiceEngine only
+    # Which rolls it can modify. Empty = none (a def that grants nothing is invalid).
+    applies_to: list[Literal["ability_check", "saving_throw", "attack_roll"]] = Field(
+        default_factory=list)
+    # Restrict to specific abilities (e.g. Bless-like defs). Empty = any ability.
+    abilities: list[str] = Field(default_factory=list)
+    consumed_on_use: bool = False            # Guidance: spent by the first eligible roll
+
+    # --- world_effect --------------------------------------------------------
+    category: str | None = None              # "illusion" | "light" | "sound"
+    # The forms the effect may take. `choose_one_mode` enforces the SRD limit that
+    # Minor Illusion creates EITHER an image OR a sound, never both at once.
+    modes: list[str] = Field(default_factory=list)   # "image" | "sound"
+    choose_one_mode: bool = False
+    max_size_ft: int | None = None
+    # How an observer sees through it. detect_dc="caster_save_dc" reads the caster's
+    # spell save DC; a plain integer string is a flat DC.
+    detect_ability: str | None = None        # "int"
+    detect_skill: str | None = None          # "investigation"
+    detect_dc: str | None = None
+    # Physical-interaction tell: an illusion has no substance, so touching reveals it.
+    insubstantial: bool = False
+
+    # --- ac_bonus / condition / movement -------------------------------------
+    bonus: int = 0                           # ac_bonus: +N to armour class
+    condition: str | None = None             # condition: "unconscious", "charmed"…
+    # Free-text Thai gloss for what the subject gains, used in narration context for
+    # kinds without automatic rules integration.
+    note_th: str = ""
+
+
+# Kinds the ENGINE acts on automatically. A kind outside this set still persists,
+# describes and expires correctly — but no rule reads it, so narration is its only
+# consumer. Kept here (not in a docstring) so a test can assert the boundary and
+# nobody can quietly assume a `condition` effect is being enforced.
+EFFECT_KINDS_WITH_RULES_INTEGRATION = frozenset({"roll_bonus", "ac_bonus", "world_effect"})
+
+
 class SpellDef(_Def):
     name: str
     name_en: str | None = None
@@ -116,6 +215,11 @@ class SpellDef(_Def):
     save_effect: str = ""
     half_on_save: bool = False
     scales_with_slot: bool = False   # extra damage/effect when cast at a higher slot
+    # What the spell does BEYOND damage/healing (buffs, illusions, light…). Empty is
+    # legitimate for a pure damage spell (Fire Bolt); it is NOT legitimate for a
+    # utility spell, which would otherwise resolve to a bare name — `has_resolution`
+    # is what startup validation checks.
+    effects: list[SpellEffectDef] = Field(default_factory=list)
     # Optional explicit UI declaration.  When present it must be a subset of the
     # authoritative legal ``classes`` list or startup validation fails.
     display_classes: list[str] | None = None
@@ -128,6 +232,21 @@ class SpellDef(_Def):
     @property
     def is_cantrip(self) -> bool:
         return self.level == 0
+
+    @property
+    def has_resolution(self) -> bool:
+        """True when the engine can express SOMETHING this spell does. A spell that
+        resolves to nothing can only ever emit its own name back at the player, so
+        content declaring one is rejected at load rather than discovered in play."""
+        return bool(
+            self.attack != "none" or self.save_ability or self.damage
+            or self.healing or self.effects
+        )
+
+    @property
+    def duration_minutes(self) -> int | None:
+        """The declared duration in minutes; None = instantaneous or untracked."""
+        return _duration_minutes(self.duration)
 
 
 class RulesContentManifest(BaseModel):
@@ -643,20 +762,57 @@ class RulesRegistry:
 
         # Every spell must be RESOLVABLE by the engine (honest selection): a cantrip
         # or a leveled spell that has at least one concrete effect the engine runs.
+        #
+        # This check used to accept `ux_category` as evidence of resolvability. That
+        # field is a REQUIRED UI label, so the condition was always true and the
+        # check never fired — which is how half the spell list shipped with nothing
+        # to resolve, each one emitting only its own name back at the caster. A UI
+        # label is not an effect; `has_resolution` asks whether the ENGINE can run
+        # something.
         for spell in self.spells.values():
             if spell.content_type != "spell":
                 continue
-            resolvable = bool(spell.damage or spell.healing or spell.attack != "none"
-                              or spell.save_ability or spell.ux_category)
-            if not resolvable:
+            if not spell.has_resolution:
                 add_issue(",".join(spell.classes) or "*", "spell_resolution",
                           f"spell {spell.name!r} has no resolvable effect",
-                          "every spell to have damage/healing/attack/save/utility")
+                          "every spell to declare damage/healing/attack/save or an "
+                          "`effects` entry the engine can execute")
             if spell.save_ability and spell.save_ability.lower() not in (
                     "str", "dex", "con", "int", "wis", "cha"):
                 add_issue(",".join(spell.classes) or "*", "spell_save",
                           f"spell {spell.name!r} save {spell.save_ability!r}",
                           "a valid saving-throw ability")
+            for eff in spell.effects:
+                self._validate_spell_effect(spell, eff, add_issue)
+
+    def _validate_spell_effect(self, spell: SpellDef, eff: SpellEffectDef,
+                               add_issue) -> None:
+        """A declared effect must be executable. An effect the engine would silently
+        skip is worse than no effect at all — it reads as working content."""
+        owner = ",".join(spell.classes) or "*"
+        if eff.kind == "roll_bonus":
+            if not eff.dice:
+                add_issue(owner, "spell_effect",
+                          f"{spell.name!r} roll_bonus without dice",
+                          "a roll_bonus to declare the die it grants (e.g. '1d4')")
+            if not eff.applies_to:
+                add_issue(owner, "spell_effect",
+                          f"{spell.name!r} roll_bonus applies to nothing",
+                          "a roll_bonus to declare which rolls it modifies")
+            for ability in eff.abilities:
+                if ability.lower() not in ("str", "dex", "con", "int", "wis", "cha"):
+                    add_issue(owner, "spell_effect",
+                              f"{spell.name!r} roll_bonus ability {ability!r}",
+                              "a valid ability abbreviation")
+        elif eff.kind == "world_effect":
+            if not eff.category:
+                add_issue(owner, "spell_effect",
+                          f"{spell.name!r} world_effect without a category",
+                          "a world_effect to declare its category (illusion/light/…)")
+            if eff.choose_one_mode and len(eff.modes) < 2:
+                add_issue(owner, "spell_effect",
+                          f"{spell.name!r} choose_one_mode with {len(eff.modes)} mode(s)",
+                          "choose_one_mode to offer at least two modes to choose from")
 
     # --- queries ---------------------------------------------------------------
     def get_class(self, name: str) -> ClassDef:

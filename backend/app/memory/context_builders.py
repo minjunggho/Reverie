@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai.llm.base import LLMMessage
 from app.ai.prompts.system_prompts import (
     ADJUDICATOR_SYSTEM,
+    CHECK_SETUP_SYSTEM,
     CLASSIFIER_SYSTEM,
     CONSEQUENCE_SYSTEM,
     INTERPRETER_SYSTEM,
@@ -190,7 +191,9 @@ async def build_consequence_context(
 async def build_narration_context(
     session: AsyncSession, *, action_text: str, outcome: str, result_summary: str,
     scene: Scene | None, target_ref: str | None = None, directory=None,
-    resolved_targets=None, scene_context=None,
+    resolved_targets=None, scene_context=None, pacing=None,
+    consequence_class=None, narration_hint: str = "", character_context=None,
+    progression_context=None,
 ) -> list[LLMMessage]:
     lines = []
     if scene_context is not None:
@@ -199,17 +202,63 @@ async def build_narration_context(
     else:
         brief = await scene_brief(session, scene)
         lines.append(f"SCENE: {brief.as_text()}")
+    # Where the campaign is going. Without this the narrator can only react to the
+    # last message — it has no way to know the campaign has a direction at all.
+    if progression_context is not None:
+        block = progression_context.as_block()
+        if block:
+            lines.append(block)
     dir_block = _directory_block(directory)
     if dir_block:
         lines.append(dir_block)
+    if pacing is not None:
+        lines.append(f"NARRATIVE_PACING: {pacing}")
     lines += [f"ACTION: {action_text}", f"OUTCOME: {outcome}", f"RESULT: {result_summary}"]
+    if consequence_class is not None:
+        lines.append(f"CONSEQUENCE_CLASS: {consequence_class}")
+    if narration_hint:
+        lines.append(f"NARRATION_HINT: {narration_hint}")
     tgt = _targets_block(resolved_targets)
     if tgt:
         lines.append(tgt)
     elif target_ref:
         lines.append(f"TARGET: {target_ref}")
+    if character_context is not None:
+        block = character_context.as_block()
+        if block:
+            lines.append(block)
     return [
         {"role": "system", "content": THAI_DM_STYLE + "\n" + NARRATOR_SYSTEM_EXTRA},
+        {"role": "user", "content": "\n".join(lines)},
+    ]
+
+
+# --- E: fiction-first pre-roll setup ------------------------------------------
+async def build_check_setup_context(
+    session: AsyncSession, *, action_text: str, check_label: str, scene: Scene | None,
+    directory=None, scene_context=None, character_context=None, pacing=None,
+) -> list[LLMMessage]:
+    """Deliberately excludes DC/outcome — the roll has not happened yet. Only
+    canonical/observable facts and the bounded character context are supplied."""
+    lines = []
+    if scene_context is not None:
+        lines.append(scene_context.location_block())
+    else:
+        brief = await scene_brief(session, scene)
+        lines.append(f"SCENE: {brief.as_text()}")
+    dir_block = _directory_block(directory)
+    if dir_block:
+        lines.append(dir_block)
+    if pacing is not None:
+        lines.append(f"NARRATIVE_PACING: {pacing}")
+    lines.append(f"ACTION: {action_text}")
+    lines.append(f"PENDING_CHECK: {check_label}")
+    if character_context is not None:
+        block = character_context.as_block()
+        if block:
+            lines.append(block)
+    return [
+        {"role": "system", "content": THAI_DM_STYLE + "\n" + CHECK_SETUP_SYSTEM},
         {"role": "user", "content": "\n".join(lines)},
     ]
 

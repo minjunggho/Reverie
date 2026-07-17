@@ -41,6 +41,29 @@ EXPECTED_DEITIES = (
     "Tymora",
     "Beshaba",
     "Silvanus",
+    "Auril",
+    "Azuth",
+    "Chauntea",
+    "Cyric",
+    "Deneir",
+    "Eldath",
+    "Gond",
+    "Helm",
+    "Ilmater",
+    "Leira",
+    "Lliira",
+    "Loviatar",
+    "Malar",
+    "Mask",
+    "Mielikki",
+    "Milil",
+    "Savras",
+    "Sune",
+    "Talona",
+    "Talos",
+    "Tempus",
+    "Umberlee",
+    "Waukeen",
 )
 
 
@@ -117,7 +140,7 @@ def test_complete_owner_markdown_parses_and_every_deity_loads():
 
     assert tuple(entry.canonical_name_en for entry in parsed) == EXPECTED_DEITIES
     assert tuple(deity.canonical_name_en for deity in registry.deities.values()) == EXPECTED_DEITIES
-    assert len(registry.deities) == 15
+    assert len(registry.deities) == 38
     assert "แดนพิพากษาอันเที่ยงธรรมและไร้อคติ" in (
         registry.deities["kelemvor"].full_owner_provided_lore
     )
@@ -125,7 +148,7 @@ def test_complete_owner_markdown_parses_and_every_deity_loads():
     assert registry.warnings  # optional absent fields warn; they do not block loading
     normalized = source.rstrip("\r\n").replace("\r\n", "\n")
     assert hashlib.sha256(normalized.encode("utf-8")).hexdigest() == (
-        "1a4077681b134abf92ec4559b057f510da5053248932e7f106c1c3f44e41aa83"
+        "fb7dcf7e428ab266743d95e9e75dc35bafd697b3b2fccc012d9e0c5f359992d8"
     )
 
 
@@ -206,7 +229,7 @@ async def test_activation_cleric_rules_and_defined_relationships(db):
         cleric_deities = await faith.list_cleric_compatible_deities(world.campaign_id)
 
         assert [pantheon.key for pantheon in active] == ["forgotten_realms"]
-        assert len(selectable) == 15
+        assert len(selectable) == 38
         assert any(deity.key == "ao" for deity in selectable)
         assert not await faith.grants_cleric_powers(world.campaign_id, "ao")
         assert all(deity.domains for deity in cleric_deities)
@@ -247,10 +270,10 @@ async def test_campaign_activation_is_isolated_and_inactive_content_unavailable(
         assert await faith.list_selectable_deities(other.id) == []
 
         await faith.activate_pantheon(other.id, "forgotten_realms")
-        assert len(await faith.list_selectable_deities(other.id)) == 15
+        assert len(await faith.list_selectable_deities(other.id)) == 38
         await faith.deactivate_pantheon(other.id, "forgotten_realms")
         assert await faith.list_selectable_deities(other.id) == []
-        assert len(await faith.list_selectable_deities(world.campaign_id)) == 15
+        assert len(await faith.list_selectable_deities(world.campaign_id)) == 38
 
 
 @pytest.mark.asyncio

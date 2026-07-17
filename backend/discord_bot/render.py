@@ -118,27 +118,44 @@ def _field_lines(data: dict, key: str) -> str | None:
 
 
 def build_embed(msg: OutboundMessage) -> discord.Embed | None:
-    """Render a kinded message as an embed. Returns None for plain-text messages."""
+    """Render a kinded message as an embed. Returns None for plain-text messages.
+
+    Back-compat single-embed entry point — kept for callers/tests that only need
+    the first embed. `build_embeds()` is the safe path for potentially long content."""
+    embeds = build_embeds(msg)
+    return embeds[0] if embeds else None
+
+
+def build_embeds(msg: OutboundMessage) -> list[discord.Embed]:
+    """Render a kinded message as one or more embeds, split on line boundaries so a
+    long cinematic scene never gets silently truncated mid-sentence at the 4000-char
+    embed description limit. Structured fields (roll/decision/fields/footer) are
+    attached to the LAST embed only, so they still read as "what happens next"."""
     if msg.kind is None:
-        return None
+        return []
     emoji, color = KIND_STYLE.get(msg.kind, ("", 0x999999))
     title = f"{emoji} {msg.title}" if msg.title else (emoji or None)
-    desc = (msg.content or "")[:EMBED_DESC_LIMIT]
-    embed = discord.Embed(title=title, description=desc or None, colour=color)
+
+    parts = _chunks(msg.content or "", size=EMBED_DESC_LIMIT) or [""]
+    embeds = [
+        discord.Embed(title=(title if i == 0 else None), description=(part or None), colour=color)
+        for i, part in enumerate(parts)
+    ]
 
     d = msg.data or {}
+    last = embeds[-1]
     # Common structured fields, rendered consistently across kinds.
     if roll := d.get("roll_line"):
-        embed.add_field(name="🎲", value=str(roll)[:1024], inline=False)
+        last.add_field(name="🎲", value=str(roll)[:1024], inline=False)
     if decision := d.get("decision_prompt"):
-        embed.add_field(name="—", value=f"*{decision}*"[:1024], inline=False)
+        last.add_field(name="—", value=f"*{decision}*"[:1024], inline=False)
     if fields := d.get("fields"):  # list of {"name":…, "value":…, "inline":bool}
         for f in list(fields)[:23]:
-            embed.add_field(
+            last.add_field(
                 name=str(f.get("name", "​"))[:256],
                 value=str(f.get("value", "​"))[:1024],
                 inline=bool(f.get("inline", False)),
             )
     if footer := d.get("footer"):
-        embed.set_footer(text=str(footer)[:2048])
-    return embed
+        last.set_footer(text=str(footer)[:2048])
+    return embeds

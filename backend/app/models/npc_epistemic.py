@@ -83,3 +83,12 @@ class NPCMemory(Base, TimestampMixin):
     game_time: Mapped[int] = mapped_column(Integer, default=0)
     last_recalled_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # What this NPC still wants explained about the memory ("why were you reaching
+    # for my map?"). This is what survives a change of subject: an unanswered
+    # question is a thread the NPC is still pulling on, so a new topic cannot quietly
+    # retire it. Empty for memories that ask nothing.
+    open_question: Mapped[str] = mapped_column(Text, default="")
+    # Whether the question has been ADDRESSED — not whether the NPC is satisfied. A
+    # believed excuse resolves the question while the memory, and the damage it did to
+    # trust, remain on the record.
+    resolved: Mapped[bool] = mapped_column(Boolean, default=False)

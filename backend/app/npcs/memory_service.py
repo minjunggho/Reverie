@@ -185,11 +185,15 @@ class NPCMemoryService:
         source_ref: str, location_id: str | None = None, game_time: int = 0,
         witnessed_directly: bool = True,
         relationship_deltas: dict[str, int] | None = None,
+        open_question: str = "",
     ) -> NPCMemory:
         """Commit a validated domain memory through the existing memory system.
 
         ``event_id`` is mandatory and is the idempotency boundary. Callers own the
         domain vocabulary; this method owns relationship accumulation and clamps.
+
+        ``open_question`` marks the memory as an unresolved thread the NPC is still
+        carrying — the mechanism that stops a change of subject from retiring it.
         """
         existing = (await self.session.execute(select(NPCMemory).where(
             NPCMemory.npc_id == npc_id, NPCMemory.event_id == event_id
@@ -202,6 +206,7 @@ class NPCMemoryService:
             emotional_valence=max(-3, min(3, valence)),
             witnessed_directly=witnessed_directly, source_ref=source_ref,
             location_id=location_id, game_time=game_time,
+            open_question=open_question, resolved=False,
         )
         self.session.add(memory)
         rel = await self._relationship(npc_id, subject_ref)
@@ -215,6 +220,54 @@ class NPCMemoryService:
         rel.last_interaction_event_id = event_id
         await self.session.flush()
         return memory
+
+    async def unresolved(
+        self, *, npc_id: str, subject_ref: str, limit: int = 3
+    ) -> list[NPCMemory]:
+        """Threads this NPC is still pulling on about this character.
+
+        An unanswered question outlives a change of subject — which is exactly what
+        was missing: a player could talk about anything else and the NPC would move
+        on as though nothing had happened.
+        """
+        return list((await self.session.execute(
+            select(NPCMemory).where(
+                NPCMemory.npc_id == npc_id, NPCMemory.subject_ref == subject_ref,
+                NPCMemory.active.is_(True), NPCMemory.resolved.is_(False),
+                NPCMemory.open_question != "",
+            ).order_by(NPCMemory.importance.desc(), NPCMemory.game_time.desc())
+            .limit(limit)
+        )).scalars())
+
+    async def resolve_question(
+        self, memory: NPCMemory, *, believed: bool, suspicion_relief: int = 0,
+    ) -> NPCRelationship:
+        """Close (or harden) an open thread after the character addressed it.
+
+        A BELIEVED explanation stops the NPC asking, and eases suspicion — but never
+        clears it, and never repays the trust the act itself cost. "I believe you"
+        is not "I forgot". The memory stays on the record, still recallable, still
+        colouring every future interaction.
+
+        A DISBELIEVED explanation leaves the thread open AND adds a lie to the
+        record: trying to talk your way out and failing is worse than saying nothing.
+        """
+        rel = await self._relationship(memory.npc_id, memory.subject_ref)
+        if believed:
+            memory.resolved = True
+            if suspicion_relief:
+                rel.suspicion = max(
+                    _CLAMP_LO, min(_CLAMP_HI,
+                                   int(rel.suspicion or 0) - abs(suspicion_relief)))
+        else:
+            # The question stays open; the failed excuse is its own wound.
+            for dim, delta in (("suspicion", 20), ("trust", -15), ("anger", 10)):
+                current = int(getattr(rel, dim) or 0)
+                setattr(rel, dim, max(_CLAMP_LO, min(_CLAMP_HI, current + delta)))
+        rel.current_stance = _derive_stance(rel)
+        rel.attitude = rel.current_stance
+        await self.session.flush()
+        return rel
 
     async def recall(
         self, *, npc_id: str, listener_ref: str, limit: int = 5, game_time: int = 0

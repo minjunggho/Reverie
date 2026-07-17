@@ -200,21 +200,37 @@ async def test_concentration_effect_persists_and_second_replaces_first(db, provi
         spell_reference="bless", target_references=[]))
     table = Table(db, provider, rng=SequenceRandomness(default=4))
     await table.send("! ร่าย bless")
+    # A concentration spell writes TWO kinds of row: the concentration marker (what
+    # the caster is holding — at most one) and the effect(s) it sustains (Bless can
+    # bless several allies from one concentration). Asserting a bare row count would
+    # conflate the two, so each is checked for what it means.
     async with db.session() as s:
-        active = (await s.execute(select(ActiveEffect).where(
+        conc = (await s.execute(select(ActiveEffect).where(
             ActiveEffect.character_id == world.kael_id,
+            ActiveEffect.requires_concentration.is_(True),
             ActiveEffect.active.is_(True)))).scalars().all()
-        assert len(active) == 1 and active[0].spell_key == "bless"
-    # A second concentration spell replaces the first (SRD: one at a time).
+        assert len(conc) == 1 and conc[0].spell_key == "bless"
+        buffs = (await s.execute(select(ActiveEffect).where(
+            ActiveEffect.spell_key == "bless", ActiveEffect.kind == "roll_bonus",
+            ActiveEffect.active.is_(True)))).scalars().all()
+        assert len(buffs) == 1, "bless must grant a real, queryable roll bonus"
+    # A second concentration spell replaces the first (SRD: one at a time) — and the
+    # effects the first was sustaining end with it, or a dropped Bless would keep
+    # handing out dice forever.
     provider.on("interpret_committed_action", lambda m, model: ActionInterpretation(
         goal="ปกป้อง", method="ร่าย", intent_confidence=0.9, cast_intent=True,
         spell_reference="shield_of_faith", target_references=[]))
     await table.send("! ร่าย shield_of_faith")
     async with db.session() as s:
-        active = (await s.execute(select(ActiveEffect).where(
+        conc = (await s.execute(select(ActiveEffect).where(
             ActiveEffect.character_id == world.kael_id,
+            ActiveEffect.requires_concentration.is_(True),
             ActiveEffect.active.is_(True)))).scalars().all()
-        assert len(active) == 1 and active[0].spell_key == "shield_of_faith"
+        assert len(conc) == 1 and conc[0].spell_key == "shield_of_faith"
+        stale = (await s.execute(select(ActiveEffect).where(
+            ActiveEffect.spell_key == "bless",
+            ActiveEffect.active.is_(True)))).scalars().all()
+        assert stale == [], "replacing concentration must end the effects it held up"
 
 
 async def test_leveled_spell_consumes_exactly_one_slot(db, provider):
@@ -286,14 +302,26 @@ async def test_spell_effects_and_resources_survive_restart(tmp_path, provider):
     restarted = Database(url, echo=False)
     try:
         async with restarted.session() as s:
-            eff = (await s.execute(select(ActiveEffect).where(
+            conc = (await s.execute(select(ActiveEffect).where(
                 ActiveEffect.character_id == world.kael_id,
+                ActiveEffect.requires_concentration.is_(True),
                 ActiveEffect.active.is_(True)))).scalars().all()
-            assert len(eff) == 1 and eff[0].spell_key == "bless"   # effect persisted
+            assert len(conc) == 1 and conc[0].spell_key == "bless"  # effect persisted
             slot = (await s.execute(select(ResourceState).where(
                 ResourceState.character_id == world.kael_id,
                 ResourceState.resource_id == "resource:spell_slots_1"))).scalar_one()
             assert slot.current == slot.max_value - 1              # slot spend persisted
+
+            # The BUFF itself — not merely some row — must come back usable: a worker
+            # restart that loses the die is indistinguishable to the player from the
+            # bug where the die never existed.
+            from app.tabletop.effects import EffectService
+
+            grants = await EffectService(s).bonus_grants_for(
+                campaign_id=world.campaign_id,
+                subject_ref=f"character:{world.kael_id}",
+                roll_type="attack_roll", ability="str")
+            assert [g.expression for g in grants] == ["1d4"]
     finally:
         await restarted.dispose()
 

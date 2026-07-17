@@ -63,6 +63,10 @@ BELIEF_EDIT = "✏️ แก้ความเชื่อ"
 # character believes without naming a canon deity (a valid BELIEVER profile). This is
 # an explicit player choice, never a silent assignment or a skip.
 BELIEF_NO_NAMED_DEITY = "🙏 ศรัทธาโดยยังไม่ระบุเทพองค์ใด"
+# Reverie Integration Rule #2 (deity catalog): Forgotten Realms – Core is the default
+# setting module, enabled automatically so belief/cleric selection never dead-ends on
+# an empty pantheon. The owner may still deactivate/switch it later.
+_DEFAULT_PANTHEON_KEY = "forgotten_realms"
 
 # Which belief CONTROL buttons belong to which sub-stage. A control that arrives for a
 # DIFFERENT stage is a stale button from an earlier card and must not be reinterpreted
@@ -1093,6 +1097,26 @@ class BuildFlow:
             return True
         return False
 
+    async def _ensure_default_pantheon_active(self, campaign_id: str) -> None:
+        """Lazily activate the default pantheon the first time a campaign reaches
+        the belief step, so PRIMARY_DEITY and Cleric power source selection have
+        real deities to offer instead of dead-ending. Idempotent: a no-op once any
+        pantheon is active, and safe if the default pack is unavailable."""
+        from app.rules_content.faith_registry import FaithContentError
+        from app.services.faith import FaithService
+
+        async with self.db.session() as read:
+            already_active = bool(await FaithService(read).list_active_pantheons(campaign_id))
+        if already_active:
+            return
+        async with self.db.unit_of_work() as s:
+            try:
+                await FaithService(s).activate_pantheon(campaign_id, _DEFAULT_PANTHEON_KEY)
+            except FaithContentError:
+                # Content pack missing/disabled — belief flow still degrades safely
+                # to "believe without naming a deity" further down.
+                pass
+
     async def _belief_step(
         self,
         data: dict,
@@ -1105,6 +1129,8 @@ class BuildFlow:
         from app.rules_content.faith_registry import FaithContentError
         from app.services.beliefs import BeliefService
         from app.services.faith import FaithService
+
+        await self._ensure_default_pantheon_active(campaign_id)
 
         build = data["_build"]
         stage = build.get("belief_stage", "broad")

@@ -69,6 +69,18 @@
       "bard",
       "sorcerer",
       "warlock"
+    ],
+    "effects": [
+      {
+        "kind": "world_effect",
+        "target_scope": "point",
+        "category": "force",
+        "modes": [
+          "image"
+        ],
+        "max_size_ft": 5,
+        "note_th": "มือพลังจิตลอยหยิบ/ขยับของเบาได้"
+      }
     ]
   },
   {
@@ -87,6 +99,18 @@
       "cleric",
       "bard",
       "sorcerer"
+    ],
+    "effects": [
+      {
+        "kind": "world_effect",
+        "target_scope": "single",
+        "category": "light",
+        "modes": [
+          "image"
+        ],
+        "max_size_ft": 20,
+        "note_th": "วัตถุเปล่งแสงสว่างรัศมี 20 ฟุต"
+      }
     ]
   },
   {
@@ -105,6 +129,19 @@
       "bard",
       "sorcerer",
       "warlock"
+    ],
+    "effects": [
+      {
+        "kind": "world_effect",
+        "target_scope": "point",
+        "category": "trick",
+        "modes": [
+          "image",
+          "sound"
+        ],
+        "max_size_ft": 5,
+        "note_th": "กลเวทเล็ก ๆ — กลิ่น ประกายไฟ ทำความสะอาด"
+      }
     ]
   },
   {
@@ -123,6 +160,24 @@
       "bard",
       "sorcerer",
       "warlock"
+    ],
+    "effects": [
+      {
+        "kind": "world_effect",
+        "target_scope": "point",
+        "category": "illusion",
+        "modes": [
+          "image",
+          "sound"
+        ],
+        "choose_one_mode": true,
+        "max_size_ft": 5,
+        "note_th": "สร้างภาพหรือเสียงลวงขนาดไม่เกิน 5 ฟุต",
+        "detect_ability": "int",
+        "detect_skill": "investigation",
+        "detect_dc": "caster_save_dc",
+        "insubstantial": true
+      }
     ]
   },
   {
@@ -141,6 +196,22 @@
       "wizard",
       "bard",
       "sorcerer"
+    ],
+    "effects": [
+      {
+        "kind": "world_effect",
+        "target_scope": "point",
+        "category": "light",
+        "modes": [
+          "image"
+        ],
+        "max_size_ft": 5,
+        "note_th": "ดวงไฟลอยได้สี่ดวง ให้แสงสลัว",
+        "detect_ability": "int",
+        "detect_skill": "investigation",
+        "detect_dc": "caster_save_dc",
+        "insubstantial": true
+      }
     ]
   },
   {
@@ -177,6 +248,18 @@
     "classes": [
       "cleric",
       "druid"
+    ],
+    "effects": [
+      {
+        "kind": "roll_bonus",
+        "target_scope": "single",
+        "dice": "1d4",
+        "applies_to": [
+          "ability_check"
+        ],
+        "consumed_on_use": true,
+        "note_th": "ได้ 1d4 เพิ่มในการตรวจความสามารถครั้งถัดไป"
+      }
     ]
   },
   {
@@ -192,6 +275,18 @@
     "mech_summary_th": "เสียงกระหึ่ม ประตูเปิดเอง เปลวไฟวูบวาบ — สัญญาณแห่งศรัทธา",
     "classes": [
       "cleric"
+    ],
+    "effects": [
+      {
+        "kind": "world_effect",
+        "target_scope": "point",
+        "category": "trick",
+        "modes": [
+          "sound"
+        ],
+        "max_size_ft": 30,
+        "note_th": "เสียงกัมปนาท เปลวไฟสั่นไหว หรือแผ่นดินสะเทือนเบา ๆ"
+      }
     ]
   },
   {
@@ -286,6 +381,14 @@
     "classes": [
       "wizard",
       "sorcerer"
+    ],
+    "effects": [
+      {
+        "kind": "ac_bonus",
+        "target_scope": "self",
+        "bonus": 5,
+        "note_th": "AC +5 จนจบเทิร์นถัดไป"
+      }
     ]
   },
   {
@@ -302,6 +405,14 @@
     "classes": [
       "wizard",
       "sorcerer"
+    ],
+    "effects": [
+      {
+        "kind": "ac_bonus",
+        "target_scope": "single",
+        "bonus": 3,
+        "note_th": "AC ฐาน 13 + โมดิฟายเออร์ DEX เมื่อไม่สวมเกราะ"
+      }
     ]
   },
   {
@@ -322,6 +433,13 @@
       "cleric",
       "bard",
       "ranger"
+    ],
+    "effects": [
+      {
+        "kind": "sense",
+        "target_scope": "self",
+        "note_th": "รับรู้เวทมนตร์ในรัศมี 30 ฟุต และสำนักเวทของมัน"
+      }
     ]
   },
   {
@@ -338,6 +456,13 @@
     "mech_summary_th": "รู้คุณสมบัติของวัตถุวิเศษที่แตะ (พิธีกรรมได้)",
     "classes": [
       "wizard"
+    ],
+    "effects": [
+      {
+        "kind": "sense",
+        "target_scope": "single",
+        "note_th": "รู้คุณสมบัติเวทของวัตถุหรือคาถาที่ผูกอยู่"
+      }
     ]
   },
   {
@@ -356,6 +481,14 @@
       "wizard",
       "bard",
       "sorcerer"
+    ],
+    "effects": [
+      {
+        "kind": "condition",
+        "target_scope": "point",
+        "condition": "unconscious",
+        "note_th": "สิ่งมีชีวิตในรัศมีหลับใหลจนกว่าจะถูกปลุกหรือได้รับดาเมจ"
+      }
     ]
   },
   {
@@ -395,6 +528,13 @@
       "wizard",
       "bard",
       "sorcerer"
+    ],
+    "effects": [
+      {
+        "kind": "movement",
+        "target_scope": "single",
+        "note_th": "ร่วงช้าลงเหลือ 60 ฟุต/รอบ และไม่ได้รับดาเมจจากการตก"
+      }
     ]
   },
   {
@@ -450,6 +590,19 @@
     "classes": [
       "cleric",
       "paladin"
+    ],
+    "effects": [
+      {
+        "kind": "roll_bonus",
+        "target_scope": "single",
+        "dice": "1d4",
+        "applies_to": [
+          "attack_roll",
+          "saving_throw"
+        ],
+        "consumed_on_use": false,
+        "note_th": "ได้ 1d4 เพิ่มในการโจมตีและการเซฟ"
+      }
     ]
   },
   {
@@ -489,6 +642,14 @@
     "classes": [
       "cleric",
       "paladin"
+    ],
+    "effects": [
+      {
+        "kind": "ac_bonus",
+        "target_scope": "single",
+        "bonus": 2,
+        "note_th": "AC +2 ตลอดระยะเวลา"
+      }
     ]
   },
   {
@@ -544,6 +705,18 @@
       "ranger",
       "sorcerer",
       "druid"
+    ],
+    "effects": [
+      {
+        "kind": "world_effect",
+        "target_scope": "point",
+        "category": "obscurement",
+        "modes": [
+          "image"
+        ],
+        "max_size_ft": 20,
+        "note_th": "หมอกหนาบดบังการมองเห็นในรัศมี 20 ฟุต"
+      }
     ]
   },
   {
@@ -602,6 +775,14 @@
     "mech_summary_th": "สาปเป้าหมายหนึ่ง เพิ่มดาเมจ necrotic 1d6 ต่อการโจมตีของเจ้า (ต้องเพ่งสมาธิ)",
     "classes": [
       "warlock"
+    ],
+    "effects": [
+      {
+        "kind": "condition",
+        "target_scope": "single",
+        "condition": "hexed",
+        "note_th": "เป้าหมายมีข้อเสียเปรียบในการตรวจความสามารถของค่าที่เลือก"
+      }
     ]
   },
   {
@@ -662,6 +843,19 @@
     "mech_summary_th": "เล่นกลธรรมชาติเล็กๆ ทำนายอากาศ/บานดอกไม้",
     "classes": [
       "druid"
+    ],
+    "effects": [
+      {
+        "kind": "world_effect",
+        "target_scope": "point",
+        "category": "nature",
+        "modes": [
+          "image",
+          "sound"
+        ],
+        "max_size_ft": 5,
+        "note_th": "ลางธรรมชาติ — ดอกไม้บาน ประกายไฟ กลิ่นป่า"
+      }
     ]
   },
   {
