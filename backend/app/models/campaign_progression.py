@@ -20,7 +20,9 @@ spell slots). This module is CAMPAIGN progression. They are unrelated.
 """
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Integer, String, Text, UniqueConstraint
+from typing import Any
+
+from sqlalchemy import JSON, Boolean, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, fk_id, pk_column
@@ -52,3 +54,58 @@ class Chapter(Base, TimestampMixin):
     # A chapter the party may skip entirely without stalling the campaign — it is not
     # required for the chapter after it to open.
     optional: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+# What learning a clue can DO. Each kind names an existing engine capability — a clue
+# reveal is never a new mutation path, only a trigger for one that already exists.
+#   location  — a place becomes routable (Location.discovery_state → KNOWN)
+#   route     — an edge becomes usable (ConsequenceService.discover_route)
+#   objective — an objective becomes known work (Quest UNKNOWN → DISCOVERED)
+#   fact      — a world fact becomes party-visible (CampaignCanonRecord)
+#   npc       — a person becomes someone the party knows to look for
+#   secret    — points at an authored Secret (does NOT reveal it; reveal_secret does)
+CLUE_REVEAL_KINDS = ("location", "route", "objective", "fact", "npc", "secret")
+
+
+class Clue(Base, TimestampMixin):
+    """A discoverable piece of information that CHANGES something when learned.
+
+    Clues were `list[str]` on a Secret, on a Scene, and in main_story — free text, in
+    three places, linked to nothing. So "the engine does not reliably know what clues
+    unlock which destinations" was literally true: no field existed that could hold
+    that edge, and a revealed clue was narrated and forgotten
+    (docs/progression-audit.md, RC3).
+
+    `reveals` is that missing edge: a list of {"kind": ..., "ref": ...} where kind is
+    one of CLUE_REVEAL_KINDS. Learning the clue applies them through the existing
+    consequence services, so a torn ledger page can actually open a route rather than
+    just being read aloud.
+    """
+
+    __tablename__ = "clues"
+    __table_args__ = (
+        UniqueConstraint("campaign_id", "key", name="uq_clue_campaign_key"),
+    )
+
+    id: Mapped[str] = pk_column()
+    campaign_id: Mapped[str] = fk_id("campaigns.id")
+    key: Mapped[str] = mapped_column(String(80))
+    # The authored fragment the party actually receives. This is the text the narrator
+    # may surface verbatim — it is never generated.
+    text: Mapped[str] = mapped_column(Text)
+
+    # --- where it can be found (all optional; a clue may be findable many ways) ---
+    location_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    npc_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    # The authored Secret this clue is evidence for, if any. Learning the clue does NOT
+    # reveal the secret — it points at it. Revealing stays on the reveal_secret path.
+    secret_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+
+    # --- what learning it does ----------------------------------------------------
+    reveals: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+
+    # --- runtime state ------------------------------------------------------------
+    discovered: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    discovered_game_time: Mapped[int] = mapped_column(Integer, default=0)
+    # Importance for retrieval ranking when several clues could surface at once.
+    importance: Mapped[int] = mapped_column(Integer, default=10)

@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.campaign_progression import Chapter
+from app.models.campaign_progression import Chapter, Clue
 from app.models.consequences import (
     ACTIONABLE_QUEST_STATES,
     TERMINAL_QUEST_STATES,
@@ -148,7 +148,27 @@ class ProgressionService:
     async def _open_chapter_objectives(self, chapter: Chapter) -> None:
         """An opening chapter's UNKNOWN objectives become DISCOVERED — the party now
         knows the work exists. Objectives already past UNKNOWN are left alone: the
-        party may have found one early, and that discovery is not undone."""
+        party may have found one early, and that discovery is not undone.
+
+        EXCEPT clue-gated objectives. "Dive to the sunken dock" cannot be known work
+        before the party learns the dock exists, so an objective some clue reveals stays
+        UNKNOWN until that clue is found. The gate is DERIVED from the clue's own edge
+        rather than a second flag the author has to remember to set — declaring
+        `- objective: obj-dive` under a clue's `reveals` IS the statement that the
+        objective is gated, and the two can never drift out of sync.
+        """
+        gated = await self._clue_gated_objective_keys(chapter.campaign_id)
         for q in await self._chapter_objectives(chapter):
-            if q.state == "UNKNOWN":
+            if q.state == "UNKNOWN" and q.key not in gated:
                 q.state = "DISCOVERED"
+
+    async def _clue_gated_objective_keys(self, campaign_id: str) -> set[str]:
+        rows = (await self.session.execute(
+            select(Clue).where(Clue.campaign_id == campaign_id)
+        )).scalars().all()
+        return {
+            edge["ref"]
+            for clue in rows
+            for edge in (clue.reveals or [])
+            if edge.get("kind") == "objective" and edge.get("ref")
+        }

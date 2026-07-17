@@ -58,6 +58,9 @@ class DeltaApplier:
         self.allowed_quest_keys: list[str] = []
         # Chapter movement caused by this action's objective updates, for the pipeline.
         self.chapter_advances: list = []
+        # What discovered clues OPENED this action (routes/places/objectives), so the
+        # pipeline and narrator can reflect a map that just changed.
+        self.clue_effects: list = []
 
     def validate(self, delta: ProposedDelta) -> None:
         if delta.kind not in ALLOWED_DELTA_KINDS:
@@ -247,15 +250,41 @@ class DeltaApplier:
     async def _reveal_fragment(self, delta: ProposedDelta) -> Event:
         """A PARTY-visible partial clue (e.g. overheard '...ไม่ใช่ของมนุษย์') —
         validated against the scene's authored clues; usually the teeth of a
-        failed-but-interesting check."""
+        failed-but-interesting check.
+
+        If the fragment corresponds to an authored Clue, learning it also APPLIES that
+        clue's reveals: a route opens, a place becomes routable, an objective becomes
+        known work. This is the difference between a clue that is read aloud and a clue
+        that changes the map — previously every reveal was the former.
+        """
+        from app.services.campaigns.clue_service import ClueService
+
         fragment = delta.payload["text"].strip()
         self.revealed_fragments.append(fragment)
+
+        clues = ClueService(self.session)
+        clue = await clues.match_text(self.campaign_id, fragment)
+        effect = None
+        if clue is not None:
+            effect = await clues.discover(
+                campaign_id=self.campaign_id, clue=clue, session_id=self.session_id,
+                scene_id=self.scene_id, actor_entity=self.actor_entity,
+            )
+            if effect.opened_anything:
+                self.clue_effects.append(effect)
+
+        payload = {"fragment": fragment, "summary": f"ได้ยินมาแว่วๆ: “{fragment}”"}
+        if effect is not None:
+            payload["clue_key"] = clue.key
+            payload["opened"] = {
+                "locations": effect.revealed_locations, "routes": effect.revealed_routes,
+                "objectives": effect.revealed_objectives, "facts": effect.revealed_facts,
+            }
         return await self.events.record(
             campaign_id=self.campaign_id, session_id=self.session_id, scene_id=self.scene_id,
             event_type=EventType.KNOWLEDGE_GAINED, actor_entity=self.actor_entity,
-            visibility=Visibility.PARTY,
-            payload={"fragment": fragment, "summary": f"ได้ยินมาแว่วๆ: “{fragment}”"},
-            narrative_significance=30,
+            visibility=Visibility.PARTY, payload=payload,
+            narrative_significance=40 if (effect and effect.opened_anything) else 30,
         )
 
     async def _raise_suspicion(self, delta: ProposedDelta) -> Event:

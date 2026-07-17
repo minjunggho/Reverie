@@ -23,7 +23,7 @@ from sqlalchemy import select
 
 from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.models.campaign import Campaign
-from app.models.campaign_progression import Chapter
+from app.models.campaign_progression import CLUE_REVEAL_KINDS, Chapter, Clue
 from app.models.canon_import import CanonImport
 from app.models.consequences import Quest
 from app.models.enums import Visibility
@@ -59,9 +59,34 @@ class ExitProposal(BaseModel):
     access_state: str = Field(default="open", max_length=20)
 
 
+_LEGAL_DISCOVERY = {"KNOWN", "DISCOVERABLE", "HIDDEN", "SECRET"}
+
+
+class ClueRevealProposal(BaseModel):
+    """What learning this clue opens. `ref` is an authored key (location/objective),
+    a `from->to` pair (route), or the fact text itself (fact)."""
+
+    kind: str = Field(min_length=1, max_length=16)
+    ref: str = Field(min_length=1, max_length=400)
+
+
+class ClueProposal(BaseModel):
+    key: str = Field(min_length=1, max_length=80, pattern=KEY)
+    text: str = Field(min_length=1, max_length=4000)
+    location: str | None = Field(default=None, max_length=80)   # where it can be found
+    npc: str | None = Field(default=None, max_length=80)        # who can tell it
+    secret: str | None = Field(default=None, max_length=80)     # what it is evidence for
+    reveals: list[ClueRevealProposal] = Field(default_factory=list, max_length=20)
+    importance: int = Field(default=10, ge=0, le=100)
+
+
 class LocationProposal(BaseModel):
     key: str = Field(min_length=1, max_length=80, pattern=KEY)
     name: str = Field(min_length=1, max_length=160)
+    # KNOWN (routable from the start) | DISCOVERABLE | HIDDEN | SECRET. A campaign
+    # whose places are all KNOWN has nothing for a clue to unlock — the map is simply
+    # open, and discovery stops meaning anything.
+    discovery: str = Field(default="KNOWN", max_length=20)
     # Every other name this place answers to (Thai/English/colloquial). These feed
     # Location.aliases so "wine cellar", "ห้องใต้ดิน", and "ห้องเก็บไวน์" resolve to
     # ONE canonical place instead of spawning duplicates.
@@ -169,6 +194,7 @@ class CampaignProposal(BaseModel):
     world_facts: list[WorldFactProposal] = Field(default_factory=list, max_length=300)
     chapters: list[ChapterProposal] = Field(default_factory=list, max_length=100)
     objectives: list[ObjectiveProposal] = Field(default_factory=list, max_length=500)
+    clues: list[ClueProposal] = Field(default_factory=list, max_length=500)
     locations: list[LocationProposal] = Field(min_length=1, max_length=500)
     factions: list[FactionProposal] = Field(default_factory=list, max_length=100)
     npcs: list[NPCProposal] = Field(default_factory=list, max_length=300)
@@ -248,10 +274,34 @@ def _parse_exits(body: str) -> list[dict]:
     return exits
 
 
+def _parse_reveals(body: str) -> list[dict]:
+    """`- kind: ref` bullets under `### reveals`.
+
+    Examples an author actually writes:
+        - location: sunken-dock
+        - route: old-harbor->sunken-dock
+        - objective: obj-confront
+        - fact: นายท่ารู้มาตลอดว่าเรือออกไม่ได้เพราะอะไร
+
+    An unknown kind is dropped here rather than failing the import: the whole document
+    must not be rejected over one mistyped edge. `_validate` surfaces it as a warning
+    so the author still hears about it.
+    """
+    out = []
+    for ln in _bullets(body):
+        kind, sep, ref = ln.partition(":")
+        if not sep:
+            continue
+        kind, ref = kind.strip().casefold(), ref.strip()
+        if kind in CLUE_REVEAL_KINDS and ref:
+            out.append({"kind": kind, "ref": ref})
+    return out
+
+
 def _parse_markdown(text: str) -> dict:
     prop: dict = {"version": 1, "locations": [], "world_facts": [], "factions": [],
                   "npcs": [], "secrets": [], "threats": [], "protocols": [],
-                  "chapters": [], "objectives": [], "session_prep": {}}
+                  "chapters": [], "objectives": [], "clues": [], "session_prep": {}}
     m = re.search(r"(?m)^#\s+Campaign:\s*(.+)$", text)
     if m:
         prop["identity_name"] = m.group(1).strip()
@@ -266,6 +316,7 @@ def _parse_markdown(text: str) -> dict:
             conns = [x.strip() for x in re.split(r"[,\n]", f.get("connections", "")) if x.strip()]
             prop["locations"].append({
                 "key": key, "name": name, "location_type": (f.get("type") or "LOCATION").upper(),
+                "discovery": (f.get("discovery") or "KNOWN").strip().upper(),
                 "aliases": _bullets(f.get("aliases", "")),
                 "parent": (f.get("parent") or None), "obvious": f.get("obvious", ""),
                 "focused": f.get("focused", ""), "hidden": f.get("hidden", ""),
@@ -304,6 +355,18 @@ def _parse_markdown(text: str) -> dict:
             prop["secrets"].append({"key": f.get("key") or _slug(name),
                                     "fact": f.get("_", "") or f.get("truth", "") or name,
                                     "clues": _bullets(f.get("clues", ""))})
+        elif low.startswith("clue:"):
+            name = header.split(":", 1)[1].strip()
+            f = _subfields(body)
+            prop["clues"].append({
+                "key": f.get("key") or _slug(name),
+                "text": f.get("text", "") or f.get("_", "") or name,
+                "location": (f.get("location") or None),
+                "npc": (f.get("npc") or None),
+                "secret": (f.get("secret") or None),
+                "reveals": _parse_reveals(f.get("reveals", "")),
+                "importance": _int(f.get("importance", "10")) or 10,
+            })
         elif low.startswith("chapter:"):
             name = header.split(":", 1)[1].strip()
             f = _subfields(body)
@@ -582,10 +645,12 @@ class CanonImportService:
         # 1. locations (two passes: create, then link parents + connections/exits).
         by_key: dict[str, Location] = {}
         for item in proposal.locations:
+            discovery = (item.discovery or "KNOWN").upper()
             loc = Location(
                 campaign_id=campaign_id, name=item.name, aliases=list(item.aliases),
                 description_obvious=item.obvious, description_focused=item.focused,
                 description_hidden=item.hidden, location_type=item.location_type,
+                discovery_state=discovery if discovery in _LEGAL_DISCOVERY else "KNOWN",
                 weather=item.weather, current_activity=item.current_activity,
                 provenance=loc_provenance, connections=[],
                 state={"canon_import_id": row.id, "source_key": item.key})
@@ -627,6 +692,7 @@ class CanonImportService:
                     scope_type="secret", scope_id=s.id, importance=30))
 
         # 4. NPCs at their canonical location.
+        npc_by_key: dict[str, NPC] = {}
         for n in proposal.npcs:
             mode = n.communication_mode if n.communication_mode in _LEGAL_COMMUNICATION_MODES else "SPOKEN"
             npc = NPC(
@@ -636,6 +702,7 @@ class CanonImportService:
                 communication_mode=mode)
             self.session.add(npc)
             await self.session.flush()
+            npc_by_key[n.key] = npc
             profile = n.belief_profile
             if profile is not None:
                 profile = profile.model_copy(update={
@@ -702,9 +769,59 @@ class CanonImportService:
                 optional=o.optional, state="UNKNOWN", progress=0,
             ))
         await self.session.flush()
-        # Open chapter one. An imported campaign must start with an active chapter, or
-        # the party arrives with a goal and no objective — the "dropped in without a
+
+        # 5c. clues → discoverable information that OPENS something. Refs are resolved
+        # to ids here, while `by_key` is in hand: an authored key means nothing at
+        # runtime, and re-resolving one on every reveal would be a scan per clue.
+        def _resolve_reveal(kind: str, ref: str) -> str:
+            if kind == "location":
+                target = by_key.get(ref)
+                return target.id if target is not None else ref
+            if kind == "route":
+                a, _, b = ref.partition("->")
+                ta, tb = by_key.get(a.strip()), by_key.get(b.strip())
+                return (f"{ta.id if ta is not None else a.strip()}"
+                        f"->{tb.id if tb is not None else b.strip()}")
+            return ref   # objective keys are stable; fact refs ARE the text
+
+        for c in proposal.clues:
+            loc = by_key.get(c.location or "")
+            npc_row = npc_by_key.get(c.npc or "")
+            sec_row = secret_by_key.get(c.secret or "")
+            self.session.add(Clue(
+                campaign_id=campaign_id, key=c.key, text=c.text,
+                location_id=loc.id if loc is not None else None,
+                npc_id=npc_row.id if npc_row is not None else None,
+                secret_id=sec_row.id if sec_row is not None else None,
+                reveals=[{"kind": r.kind, "ref": _resolve_reveal(r.kind, r.ref)}
+                         for r in c.reveals],
+                importance=c.importance, discovered=False,
+            ))
+        # A Secret's own `clues:` bullets become Clue rows too, so the reveal path can
+        # recognise them and track that the party has found one. They open nothing on
+        # their own — a bullet under a secret says what the evidence IS, never what it
+        # unlocks; an author who wants an edge writes a `## Clue:` block.
+        authored_clue_keys = {c.key for c in proposal.clues}
+        for sec in proposal.secrets:
+            sec_row = secret_by_key.get(sec.key)
+            for i, text in enumerate(sec.clues, start=1):
+                key = f"{sec.key}-clue-{i}"
+                if key in authored_clue_keys:
+                    continue   # an explicit `## Clue:` block owns this key
+                self.session.add(Clue(
+                    campaign_id=campaign_id, key=key, text=text,
+                    secret_id=sec_row.id if sec_row is not None else None,
+                    reveals=[], importance=30, discovered=False,
+                ))
+        await self.session.flush()
+
+        # 5d. Open chapter one. An imported campaign must start with an active chapter,
+        # or the party arrives with a goal and no objective — the "dropped in without a
         # clear immediate objective" symptom.
+        #
+        # This MUST run after clues are committed: opening a chapter skips objectives
+        # that a clue gates, and it reads the clue rows to know which those are. Opened
+        # before them, every gated objective would be handed to the party for free.
         if proposal.chapters:
             from app.services.campaigns.progression_service import ProgressionService
 

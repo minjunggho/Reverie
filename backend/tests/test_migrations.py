@@ -27,7 +27,7 @@ from pathlib import Path
 import pytest
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
-HEAD_REVISION = "20260724_campaign_progression"
+HEAD_REVISION = "20260725_clues"
 PRE_REVAMP_REVISION = "20260710_canon"
 
 
