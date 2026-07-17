@@ -193,7 +193,7 @@ async def build_narration_context(
     scene: Scene | None, target_ref: str | None = None, directory=None,
     resolved_targets=None, scene_context=None, pacing=None,
     consequence_class=None, narration_hint: str = "", character_context=None,
-    progression_context=None,
+    progression_context=None, stall_state=None,
 ) -> list[LLMMessage]:
     lines = []
     if scene_context is not None:
@@ -202,6 +202,11 @@ async def build_narration_context(
     else:
         brief = await scene_brief(session, scene)
         lines.append(f"SCENE: {brief.as_text()}")
+    # Only present when the party has actually been circling; silent otherwise.
+    if stall_state is not None:
+        block = stall_state.as_block()
+        if block:
+            lines.append(block)
     # Where the campaign is going. Without this the narrator can only react to the
     # last message — it has no way to know the campaign has a direction at all.
     if progression_context is not None:

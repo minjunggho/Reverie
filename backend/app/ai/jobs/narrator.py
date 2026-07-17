@@ -27,7 +27,7 @@ class DMNarrator:
         result_summary: str, scene: Scene | None, target_ref: str | None = None,
         directory=None, resolved_targets=None, scene_context=None, pacing=None,
         consequence_class=None, narration_hint: str = "", character_context=None,
-        progression_context=None,
+        progression_context=None, stall_state=None,
     ) -> Narration:
         messages = await build_narration_context(
             session, action_text=action_text, outcome=outcome,
@@ -37,6 +37,7 @@ class DMNarrator:
             consequence_class=consequence_class, narration_hint=narration_hint,
             character_context=character_context,
             progression_context=progression_context,
+            stall_state=stall_state,
         )
         try:
             return await self.provider.generate_dm_narration(messages)

@@ -90,6 +90,10 @@ class Database:
             ("physical_state", "VARCHAR(40) NOT NULL DEFAULT 'healthy'"),
             ("available", "BOOLEAN NOT NULL DEFAULT 1"),
         ],
+        "scenes": [
+            ("low_progress_turns", "INTEGER NOT NULL DEFAULT 0"),
+            ("purpose_satisfied", "BOOLEAN NOT NULL DEFAULT 0"),
+        ],
         "quests": [
             ("chapter_id", "VARCHAR(32)"),
             ("sort_order", "INTEGER NOT NULL DEFAULT 0"),

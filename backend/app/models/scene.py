@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import JSON, Integer, String
+from sqlalchemy import JSON, Boolean, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, fk_id, pk_column
@@ -50,3 +50,13 @@ class Scene(Base, TimestampMixin):
     # from the DM's awareness. {"last_actor": ref, "action_counts": {ref: n}}.
     # Presence != participation != spotlight != turn order (docs/multiplayer-identity.md).
     spotlight: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+    # Consecutive committed actions that changed nothing the campaign tracks — no clue
+    # found, no objective moved, no place reached, no world state altered. Reset by any
+    # real progress. This is how the engine knows the party is going in circles without
+    # asking the narrator's opinion of the fiction, and it is what lets the world push
+    # back instead of waiting forever (docs/progression-audit.md, RC5).
+    low_progress_turns: Mapped[int] = mapped_column(Integer, default=0)
+    # Whether the scene has already done what it was opened to do. A scene whose
+    # purpose is spent should hand off, not run until someone types 'leave'.
+    purpose_satisfied: Mapped[bool] = mapped_column(Boolean, default=False)

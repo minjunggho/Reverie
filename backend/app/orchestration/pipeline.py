@@ -52,6 +52,7 @@ from app.orchestration.context import ResolvedContext
 from app.presentation import MessageKind
 from app.services.events import EventService
 from app.services.scenes import SceneService
+from app.services.scenes.stall_service import StallService, TurnProgress
 from app.services.sessions.session_service import SessionService
 from app.tabletop.adjudication import (
     DeltaApplier,
@@ -63,6 +64,8 @@ from app.tabletop.adjudication import (
 )
 from app.tabletop.dice import DiceEngine
 from app.tabletop.rules import ability_for_skill
+from app.world.turn_clock import minutes_for_turn
+from app.world.world_clock import WorldClockService
 
 log = get_logger(__name__)
 
@@ -376,9 +379,38 @@ class CommittedActionPipeline:
             )
             applier.allowed_clues = list(scene_row.allowed_clues or []) if scene_row else []
             applier.allowed_quest_keys = await self._authored_quest_keys(s, ctx.campaign_id)
-            _, rejected = await applier.apply_valid(consequence.deltas)
+            applied_events, rejected = await applier.apply_valid(consequence.deltas)
             private_reveals = list(applier.private_reveals)
             fragments = list(applier.revealed_fragments)
+
+            # Did this turn accomplish anything the campaign tracks? Decided from
+            # committed state only — never from the narrator's opinion of the fiction.
+            progress = TurnProgress(
+                clue_opened=any(e.opened_anything for e in applier.clue_effects),
+                chapter_moved=bool(applier.chapter_advances),
+                objective_moved=any(
+                    d.kind == "update_quest" for d in consequence.deltas
+                ) and not rejected,
+                world_changed=bool(applied_events),
+                secret_revealed=bool(applier.private_reveals),
+            )
+            stall = StallService.record(scene_row, progress)
+
+            # A party going in circles no longer freezes the world. Travel and rest
+            # already charge for productive play; this covers the case they never did —
+            # standing in one room repeating low-progress actions, where the clock never
+            # moved and the consequence engine could never fire. Pressure then arrives
+            # because time passed and the world's own scheduled beats came due, not
+            # because the DM announced it.
+            minutes = minutes_for_turn(
+                scene_mode=scene_row.mode if scene_row else None,
+                stalled=stall.stalled,
+            )
+            if minutes > 0:
+                await WorldClockService(s).advance_time(
+                    campaign_id=ctx.campaign_id, minutes=minutes,
+                    session_id=ctx.session_id, scene_id=scene_id, actor_entity=actor,
+                )
 
             pm = await s.get(ProcessedMessage, ctx.processed_message_id) if ctx.processed_message_id else None
             if pm is not None:
@@ -459,8 +491,17 @@ class CommittedActionPipeline:
             from app.memory.progression_context import ProgressionContextBuilder
             from app.memory.scene_context import SceneContextBuilder
 
+            # NOTE: pressure is deliberately NOT pulled into narration when stalled.
+            # SceneContext.pressure_block carries threats' next_action and progress —
+            # DM planning material, and this prompt produces player-facing prose. The
+            # world leans in through the CLOCK instead: a stalled turn costs more
+            # minutes, the clock fires the threats and faction beats that were already
+            # scheduled, and those land as committed events. Pressure the party feels is
+            # pressure that actually happened.
+            stall_state = StallService.state(scene3)
             scene_ctx = await SceneContextBuilder(read).build(
-                campaign_id=ctx.campaign_id, scene=scene3, actor_character_id=ctx.character_id
+                campaign_id=ctx.campaign_id, scene=scene3,
+                actor_character_id=ctx.character_id,
             )
             # The campaign's direction, on EVERY turn — not just the Session 1 prologue.
             progression_ctx = await ProgressionContextBuilder(read).build(
@@ -492,6 +533,7 @@ class CommittedActionPipeline:
                 narration_hint=consequence.narration_hint,
                 character_context=character_context,
                 progression_context=progression_ctx,
+                stall_state=stall_state,
             )
         # Anti-hallucination: never let the DM ask the player to author the world.
         from app.ai.narration_guard import screen_decision_prompt, screen_narration
