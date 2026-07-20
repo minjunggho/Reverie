@@ -41,11 +41,15 @@ class Settings(BaseSettings):
 
     # --- Discord ---
     discord_bot_token: str | None = Field(default=None, alias="DISCORD_BOT_TOKEN")
-    # Render migrated interactive screens (deity, spell preparation) as native
-    # Discord Components V2 LayoutViews. When false, the SAME declarative screens
-    # flatten to plain text + a ChoiceView — no legacy embeds either way. This is a
-    # rollout valve, not a second permanent UI. Default on.
-    discord_components_v2_enabled: bool = Field(default=True)
+    # Render migrated interactive screens (deity, spell preparation, the cinematic
+    # session opening) as native Discord Components V2 LayoutViews. When false, the
+    # SAME declarative screens flatten to plain text + a ChoiceView — no legacy embeds
+    # either way, and every word still reaches the channel. This is a rollout valve,
+    # not a second permanent UI. Default OFF: native V2 requires a discord.py 2.6+
+    # gateway build and can silently fail on older/edge hosts (openings then vanish),
+    # so the reliable text path is the safe default; flip on with
+    # REVERIE_DISCORD_COMPONENTS_V2_ENABLED=true once the host is verified.
+    discord_components_v2_enabled: bool = Field(default=False)
 
     # --- Discord Activity (E6) ---
     # Public application/client id — the ONLY Discord credential the frontend may see.

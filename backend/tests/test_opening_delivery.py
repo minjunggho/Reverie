@@ -8,12 +8,22 @@ renders, which is why 'มีเซสชันที่กำลังเล่
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import discord
 
 from app.discord_bridge.dto import OutboundMessage
 from app.presentation import MessageKind
 from app.presentation.screens import cinematic_scene_screen
 from discord_bot.client import ReverieClient
+
+
+def _force_v2(monkeypatch, enabled: bool) -> None:
+    """Pin the Components V2 flag for this test, independent of the global default."""
+    monkeypatch.setattr(
+        "discord_bot.client.get_settings",
+        lambda: SimpleNamespace(discord_components_v2_enabled=enabled),
+    )
 
 
 class _Recorder:
@@ -46,7 +56,8 @@ def _opening_message() -> OutboundMessage:
         "chan-1", screen.to_text(), kind=MessageKind.SCENE_FRAME, screen=screen)
 
 
-async def test_v2_failure_falls_back_to_text_so_opening_never_vanishes():
+async def test_v2_failure_falls_back_to_text_so_opening_never_vanishes(monkeypatch):
+    _force_v2(monkeypatch, True)
     client = ReverieClient(object(), object())
     channel = _Recorder(fail_views=True)
 
@@ -57,7 +68,8 @@ async def test_v2_failure_falls_back_to_text_so_opening_never_vanishes():
     assert "พวกคุณจะทำอย่างไร?" in "\n".join(channel.text_sends)
 
 
-async def test_v2_success_sends_a_single_layout_view():
+async def test_v2_success_sends_a_single_layout_view(monkeypatch):
+    _force_v2(monkeypatch, True)
     client = ReverieClient(object(), object())
     channel = _Recorder(fail_views=False)
 
@@ -65,3 +77,16 @@ async def test_v2_success_sends_a_single_layout_view():
 
     assert channel.view_sends == 1
     assert channel.text_sends == []                 # no redundant text when V2 works
+
+
+async def test_default_flatten_path_renders_opening_as_text(monkeypatch):
+    """With V2 off (the safe default), the opening renders as text+buttons directly —
+    the native LayoutView is never attempted, so it cannot silently vanish."""
+    _force_v2(monkeypatch, False)
+    client = ReverieClient(object(), object())
+    channel = _Recorder(fail_views=True)  # would raise IF a view were ever sent
+
+    await client._send_one(channel, _opening_message())
+
+    assert channel.view_sends == 0
+    assert "พวกคุณจะทำอย่างไร?" in "\n".join(channel.text_sends)
