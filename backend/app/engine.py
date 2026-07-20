@@ -14,6 +14,7 @@ from app.orchestration import (
     MessageRouter,
     SessionSerializer,
 )
+from app.rounds import RoundResolver
 
 
 def build_bridge(
@@ -33,6 +34,7 @@ def build_bridge(
     return DiscordBridge(
         db, router=router, pipeline=pipeline,
         serializer=serializer or SessionSerializer(),
+        round_resolver=RoundResolver(db, provider, rng),
         creation_flow=CreationFlowService(db, provider),
         session_zero=SessionZeroService(db),
     )

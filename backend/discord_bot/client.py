@@ -13,10 +13,12 @@ from datetime import datetime, timezone
 
 import discord
 
+from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.discord_bridge import AdminBridge, DiscordBridge, InboundAttachment, InboundMessage, is_admin_command
 from app.discord_bridge.dto import BridgeResult, OutboundMessage
-from discord_bot.render import ChoiceView, _chunks, build_embeds
+from discord_bot.components_v2 import build_layout_view
+from discord_bot.render import ChoiceView, _chunks, build_embeds, flatten_screen
 
 log = get_logger(__name__)
 
@@ -110,12 +112,31 @@ class ReverieClient(discord.Client):
             await self._send_one(channel, out)
 
     async def _send_one(self, channel, out: OutboundMessage) -> None:  # pragma: no cover
-        view = self._view_for(out)
-        embeds = build_embeds(out)
         target = channel
         if out.private_to_discord_id is not None:
             target = await self.fetch_user(int(out.private_to_discord_id))
         try:
+            # A declarative screen renders as native Components V2 (or, when the flag
+            # is off, flattens to text + a ChoiceView) — never a legacy embed. A V2 send
+            # that fails (unsupported gateway build, component limits, API rejection)
+            # MUST NOT make the whole message vanish: fall back to flattened text+buttons
+            # so a cinematic opening always reaches the table.
+            if out.screen is not None:
+                on_choice = self._make_on_choice(out)
+                if get_settings().discord_components_v2_enabled:
+                    try:
+                        await target.send(view=build_layout_view(out.screen, on_choice))
+                        return
+                    except discord.Forbidden:
+                        raise
+                    except Exception:
+                        log.exception(
+                            "Components V2 screen send failed; falling back to text+buttons")
+                await self._send_flattened_screen(target, out, on_choice)
+                return
+
+            view = self._view_for(out)
+            embeds = build_embeds(out)
             if embeds:
                 for i, embed in enumerate(embeds):
                     await target.send(embed=embed, view=view if i == len(embeds) - 1 else None)
@@ -129,9 +150,20 @@ class ReverieClient(discord.Client):
             else:
                 raise
 
-    def _view_for(self, out: OutboundMessage):  # pragma: no cover
-        if not out.choices and not out.select_menus and not out.action_buttons:
-            return None
+    async def _send_flattened_screen(self, target, out, on_choice):  # pragma: no cover
+        """Render a declarative screen as plain text + a legacy ChoiceView. Used when
+        Components V2 is disabled OR when a native V2 send failed — the safety net that
+        keeps a scene from silently disappearing."""
+        content, buttons, menus = flatten_screen(out.screen)
+        view = ChoiceView([], on_choice, select_menus=menus, action_buttons=buttons)
+        chunks = _chunks(content) or [""]
+        for i, chunk in enumerate(chunks):
+            await target.send(chunk, view=view if i == len(chunks) - 1 else None)
+
+    def _make_on_choice(self, out: OutboundMessage):  # pragma: no cover
+        """One closure both the V2 LayoutView and the legacy ChoiceView reuse: a
+        clicked value re-enters normal routing as if typed. Identity comes from
+        `interaction.user`, never the message — the single authorization seam."""
 
         async def on_choice(interaction: discord.Interaction, label: str) -> None:
             await interaction.response.defer()
@@ -150,9 +182,14 @@ class ReverieClient(discord.Client):
                 return
             await self._deliver(interaction.channel, result)
 
+        return on_choice
+
+    def _view_for(self, out: OutboundMessage):  # pragma: no cover
+        if not out.choices and not out.select_menus and not out.action_buttons:
+            return None
         return ChoiceView(
             out.choices,
-            on_choice,
+            self._make_on_choice(out),
             select_menus=out.select_menus,
             action_buttons=out.action_buttons,
         )

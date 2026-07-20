@@ -21,6 +21,7 @@ from app.ai.prompts.system_prompts import (
     RECAP_SYSTEM,
 )
 from app.ai.prompts.thai_dm_style import THAI_DM_STYLE
+from app.ai.prompts.thai_narration_templates import narration_template
 from app.models.character import Character
 from app.models.enums import Visibility
 from app.models.location import Location
@@ -193,7 +194,7 @@ async def build_narration_context(
     scene: Scene | None, target_ref: str | None = None, directory=None,
     resolved_targets=None, scene_context=None, pacing=None,
     consequence_class=None, narration_hint: str = "", character_context=None,
-    progression_context=None, stall_state=None,
+    progression_context=None, stall_state=None, previous_narration: str | None = None,
 ) -> list[LLMMessage]:
     lines = []
     if scene_context is not None:
@@ -202,6 +203,14 @@ async def build_narration_context(
     else:
         brief = await scene_brief(session, scene)
         lines.append(f"SCENE: {brief.as_text()}")
+    # The paragraph the table saw LAST turn — supplied so this turn continues the scene
+    # instead of restating it. Bounded to keep the packet small; the narrator is told
+    # to move the scene forward, never to echo these lines.
+    if previous_narration:
+        prev = previous_narration.strip()
+        if len(prev) > 600:
+            prev = prev[:600] + "…"
+        lines.append("PREVIOUS_NARRATION (ฉากที่เพิ่งเล่าไป — เล่าต่อ อย่าเล่าซ้ำ):\n" + prev)
     # Only present when the party has actually been circling; silent otherwise.
     if stall_state is not None:
         block = stall_state.as_block()
@@ -232,8 +241,23 @@ async def build_narration_context(
         block = character_context.as_block()
         if block:
             lines.append(block)
+    template_name = "exploration"
+    scene_mode = str(getattr(scene, "mode", "") or "").upper()
+    consequence = str(consequence_class or "").upper()
+    if "COMBAT" in scene_mode:
+        template_name = "round_summary"
+    elif "SOCIAL" in scene_mode:
+        template_name = "social_interaction"
+    elif "FAILURE" in consequence or outcome == "failure":
+        template_name = "failed_check_with_complication"
     return [
-        {"role": "system", "content": THAI_DM_STYLE + "\n" + NARRATOR_SYSTEM_EXTRA},
+        {
+            "role": "system",
+            "content": (
+                THAI_DM_STYLE + "\n" + NARRATOR_SYSTEM_EXTRA + "\n"
+                + narration_template(template_name)
+            ),
+        },
         {"role": "user", "content": "\n".join(lines)},
     ]
 

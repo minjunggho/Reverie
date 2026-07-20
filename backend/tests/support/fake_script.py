@@ -442,27 +442,60 @@ def _location_expansion(messages, _model) -> LocationDraft:
 
 
 def _session_opening(messages, _model) -> OpeningScene:
-    """Fake opening that provably uses a character hook from the context."""
+    """Grounded cinematic fixture built from the v2 SCENE_PACKET markers."""
     blob = _joined(messages)
-    used = []
-    hook_line = ""
+    import ast
+
+    def marker(name, default=""):
+        for line in blob.splitlines():
+            if line.startswith(f"{name}:"):
+                return line.split(":", 1)[1].strip()
+        return default
+
+    location = marker("location", "สถานที่ปัจจุบัน")
+    obvious = marker("location_description", "")
+    weather = marker("weather", "")
+    activity = marker("current_activity", "")
+    reason = marker("reason_party_is_here", "")
+    characters = []
+    in_characters = False
     for line in blob.splitlines():
-        if line.strip().startswith("- ") and "desire=" in line:
-            frag = line.split("desire=", 1)[1].split(";", 1)[0].strip()
-            if frag:
-                used.append(f"desire:{frag}")
-                hook_line = frag
+        if line == "player_characters:":
+            in_characters = True
+            continue
+        if in_characters and line.startswith("- {"):
+            try:
+                characters.append(ast.literal_eval(line[2:]))
+            except (SyntaxError, ValueError):
+                pass
+        elif in_characters and line and not line.startswith("- {"):
             break
+    char_lines, used = [], []
+    for char in characters:
+        detail = char.get("appearance") or ""
+        equipment = list(char.get("equipment") or [])
+        if equipment:
+            detail += (" " if detail else "") + f"มี{equipment[0]}อยู่กับตัว"
+        facts = dict(char.get("relevant_facts") or {})
+        if facts:
+            key, fact = next(iter(facts.items()))
+            detail += (" " if detail else "") + fact
+            used.append(f"{char.get('name')}.{key}")
+        char_lines.append(f"{char.get('name')}อยู่ที่{location}" + (f" — {detail}" if detail else ""))
+    party = "\n".join(char_lines) or f"พวกคุณอยู่ที่{location}"
+    world_activity = activity or "สิ่งที่อยู่รอบตัวไม่ได้หยุดนิ่งเพื่อรอการตัดสินใจ"
+    purpose = f"พวกคุณมาที่นี่เพราะ{reason}" if reason else ""
     return OpeningScene(
-        title="ฝนแรกที่ประตูเมืองเก่า",
-        situation_lines=[
-            "ฝนเพิ่งหยุด กลิ่นดินเปียกลอยทั่วลาน",
-            "พวกเจ้ายืนอยู่หน้าประตูเมืองที่ปิดเร็วกว่าปกติ",
-            f"มีคนจำหน้าเจ้าได้ — เรื่องที่ว่า{hook_line or 'พวกเจ้ามีธุระในเมือง'} ไปถึงหูใครบางคนแล้ว",
-        ],
-        pressure="ยามบนกำแพงเริ่มชี้มือมาทางนี้ และประตูจะปิดสนิทในไม่ช้า",
-        decision_prompt="ประตูกำลังจะปิด — พวกเจ้าจะทำยังไง?",
+        title=f"เปิดฉาก ณ {location}",
+        narration="\n\n".join(x for x in (
+            f"{obvious or location}" + (f"\n{weather}" if weather else ""),
+            party,
+            world_activity,
+            purpose,
+        ) if x),
+        decision_prompt="พวกคุณจะทำอย่างไร?",
         used_hooks=used,
+        used_character_facts=used,
     )
 
 

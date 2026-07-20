@@ -84,13 +84,17 @@ async def test_full_onboarding_then_play(db, provider):
     import re as _re
     approve_id = _re.search(r"approve (\w+)", r.responses[0].content).group(1)
     await table.send(f"!rv campaign import approve {approve_id}", author="u-owner", name="DM")
+    # This test continues through the legacy one-player-at-a-time dice ritual.
+    # Shared planning is covered independently and remains opt-out compatible.
+    from app.models.campaign import Campaign as _Campaign
+    async with db.unit_of_work() as s:
+        campaign = (await s.execute(select(_Campaign))).scalar_one()
+        campaign.config = {**(campaign.config or {}), "planning": {"enabled": "off"}}
 
     r = await table.send("!rv session start", author="u-owner", name="DM")
     kinds = [m.kind for m in r.responses]
-    assert kinds[0] == MessageKind.SESSION_TITLE
-    assert MessageKind.SCENE_FRAME in kinds
-    assert "เซสชันที่ 1" in (r.responses[0].title or "")
-    assert "ลานเวรยามเก่า" in r.responses[0].data["footer"]  # the approved start
+    assert kinds == [MessageKind.SCENE_FRAME]
+    assert r.responses[0].data["location"] == "ลานเวรยามเก่า"  # approved start
 
     # A committed Thai action now pauses at the dice ritual (PLAYER_CLICK default):
     r = await table.send("! ผมค่อยๆ ย่องไปดูหน้าต่าง ไม่ให้ยามเห็น", author="u-p1", name="กี้")

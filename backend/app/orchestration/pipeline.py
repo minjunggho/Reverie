@@ -524,6 +524,9 @@ class CommittedActionPipeline:
                 scene_mode=scene3.mode if scene3 else None,
                 hook_connected=bool(character_context.relevant_hooks),
             )
+            # What the table saw last turn — carried into the packet so this turn
+            # CONTINUES the scene rather than restating it (kept as scene working-state).
+            previous_narration = (scene3.spotlight or {}).get("last_narration") if scene3 else None
             narration = await self.narrator.run(
                 read, action_text=action_text, outcome=outcome,
                 result_summary=result_summary, scene=scene3, target_ref=target_ref,
@@ -534,13 +537,20 @@ class CommittedActionPipeline:
                 character_context=character_context,
                 progression_context=progression_ctx,
                 stall_state=stall_state,
+                previous_narration=previous_narration,
             )
         # Anti-hallucination: never let the DM ask the player to author the world.
-        from app.ai.narration_guard import screen_decision_prompt, screen_narration
+        from app.ai.narration_guard import is_repeat_narration, screen_decision_prompt, screen_narration
 
         actor_name = directory3.actor.canonical_name if directory3.actor else None
         narration.text, _ = screen_narration(narration.text, actor_name)
         narration.decision_prompt = screen_decision_prompt(narration.decision_prompt, actor_name)
+        # Observability: if the narrator restated last turn's paragraph despite being
+        # given it, surface that in the log rather than silently shipping a repeat.
+        if is_repeat_narration(previous_narration, narration.text):
+            log.warning("narration repeats the previous beat",
+                        extra={"campaign_id": ctx.campaign_id, "session_id": ctx.session_id,
+                               "scene_id_before": scene_id_before})
 
         # Step 18-19: cache response + mark SENT — and COMMIT any entities the
         # narration introduces, in the same transaction, BEFORE delivery. A narrated
@@ -552,6 +562,12 @@ class CommittedActionPipeline:
             if narration.introduced_npcs:
                 await self._commit_introduced_npcs(
                     s, ctx=ctx, introduced=narration.introduced_npcs)
+            # Remember what the table just saw so next turn's packet can continue it
+            # rather than repeat it (scene working-state; see Scene.spotlight).
+            scene_now = await SceneService(s).get_active_scene(ctx.session_id) if ctx.session_id else None
+            if scene_now is not None:
+                scene_now.spotlight = {**(scene_now.spotlight or {}),
+                                       "last_narration": narration.text}
             pm = await s.get(ProcessedMessage, ctx.processed_message_id) if ctx.processed_message_id else None
             if pm is not None:
                 pm.stage = ProcessingStage.SENT.value
@@ -1188,26 +1204,47 @@ class CommittedActionPipeline:
                             "reason": str(exc)})
             return self._table_note(ctx, f"ร่าย {spell.name_th_hint} ไม่ได้: {exc}")
 
-        # 4. Narration from the committed result (facts fixed; prose cannot contradict).
-        body = outcome.line_th
+        # 4. Presentation. MECHANICS and NARRATION are separate objects (§28), exactly
+        # as the dice ritual splits them: the engine's committed roll line is shown
+        # verbatim, and — because the numbers are already fixed and cannot be
+        # contradicted — the narrator dramatizes the SAME committed result with the
+        # bounded character context (appearance, relevant faith, active state) and the
+        # canonical scene. A missed bolt, a mended wound, a blessing over a battered
+        # holy symbol all read as one continuing scene, never "You cast X. +1d4."
+        mech = outcome.line_th
         # A rules limit the engine applied is explained here, in the same breath as
         # the result — the player asked for something the spell cannot do and is told
         # why, rather than quietly receiving something else.
         for note in outcome.adjustments:
-            body += f"\n{note}"
+            mech += f"\n{note}"
         witnesses = [o["npc_name"] for o in outcome.observations if o.get("noticed")]
         if witnesses:
-            body += f"\nผู้ที่สังเกตเห็น: {', '.join(dict.fromkeys(witnesses))}"
+            mech += f"\nผู้ที่สังเกตเห็น: {', '.join(dict.fromkeys(witnesses))}"
+        cast_prompt = self._cast_decision_prompt(outcome, target_ec)
+        mech_outcome = ("success" if (outcome.damage or outcome.healing or outcome.effects
+                                      or not needs_target) else "resolved")
+        mech_msg = OutboundMessage(
+            ctx.channel_id, mech, kind=MessageKind.CHECK_RESOLUTION,
+            title=spell.name_th_hint,
+            data={"roll_line": outcome.line_th, "outcome": mech_outcome})
+        responses = [mech_msg]
+
+        # Best-effort cinematic narration of the committed cast. It runs AFTER the
+        # commit, so a narration/LLM failure can never re-roll or re-apply anything;
+        # the DMNarrator's own fallback keeps a failure terse rather than raising.
+        narration = await self._narrate_cast(
+            ctx, action_text=action_text, spell=spell, outcome=outcome,
+            resolved_targets=resolved_targets, target_ec=target_ec,
+            npc_targets=npc_targets)
+        if narration is not None and narration.text.strip():
+            responses.append(OutboundMessage(
+                ctx.channel_id, narration.text, kind=MessageKind.SCENE_FRAME,
+                data={"decision_prompt": narration.decision_prompt or cast_prompt}))
+        else:
+            mech_msg.data["decision_prompt"] = cast_prompt
         return BridgeResult(
             handled=True, category=MessageCategory.COMMITTED_ACTION, state_mutated=True,
-            responses=[OutboundMessage(
-                ctx.channel_id, body, kind=MessageKind.CHECK_RESOLUTION,
-                title=spell.name_th_hint,
-                data={"roll_line": outcome.line_th,
-                      "decision_prompt": self._cast_decision_prompt(outcome, target_ec),
-                      "outcome": "success" if (outcome.damage or outcome.healing
-                                               or outcome.effects
-                                               or not needs_target) else "resolved"})],
+            responses=responses,
             note=f"cast {spell.name}: dmg={outcome.damage} heal={outcome.healing} "
                  f"effects={len(outcome.effects)}")
 
@@ -1302,6 +1339,71 @@ class CommittedActionPipeline:
         if outcome.concentration:
             return "รักษาสมาธิไว้ให้ดี — จะทำอะไรต่อ?"
         return "จะทำอะไรต่อ?"
+
+    # Spells whose class list makes them a divine act — casting one is precisely when
+    # the caster's deity/oath/holy symbol becomes fictionally relevant (the flagship
+    # "Bless over a broken holy symbol" case). Arcane spells never surface faith.
+    _DIVINE_SPELL_CLASSES = frozenset({"cleric", "paladin"})
+
+    async def _narrate_cast(
+        self, ctx: ResolvedContext, *, action_text: str, spell, outcome,
+        resolved_targets: list[EntityContext], target_ec, npc_targets,
+    ):
+        """Dramatize a COMMITTED cast. Read-only: builds the canonical scene + bounded
+        character context (faith surfaced only for divine spells) and hands the fixed
+        result to the narrator. Never rolls, never commits, and returns None on failure
+        so the mechanical line still stands alone."""
+        from app.memory.scene_context import SceneContextBuilder
+
+        # Outcome word from the committed attack result (a missed bolt is a failure to
+        # be narrated as one) — never re-decided here.
+        if spell.attack != "none" and outcome.attack is not None:
+            narr_outcome = "success" if outcome.attack.get("hit") else "failure"
+        else:
+            narr_outcome = "success"
+        critical = bool(outcome.attack and outcome.attack.get("natural_roll") in (1, 20))
+        is_divine = bool(set(spell.classes or []) & self._DIVINE_SPELL_CLASSES)
+        is_save = spell.save_ability is not None
+        target_ref = npc_targets[0].entity_ref if npc_targets else None
+        target_name = npc_targets[0].canonical_name if npc_targets else ""
+        try:
+            async with self.db.session() as read:
+                scene = (await SceneService(read).get_active_scene(ctx.session_id)
+                         if ctx.session_id else None)
+                directory = await SceneEntityDirectory(read).build(
+                    scene, actor_character_id=ctx.character_id, campaign_id=ctx.campaign_id)
+                character = await read.get(Character, ctx.character_id)
+                scene_ctx = await SceneContextBuilder(read).build(
+                    campaign_id=ctx.campaign_id, scene=scene,
+                    actor_character_id=ctx.character_id)
+                character_context = await build_character_narrative_context(
+                    read, character=character, action_text=action_text,
+                    target_name=target_name, location_name=scene_ctx.location_name,
+                    threat_name=target_name, is_saving_throw=is_save,
+                    is_divine_action=is_divine, campaign_id=ctx.campaign_id)
+                pacing = select_pacing(
+                    resolution_type=(ResolutionType.ATTACK if spell.attack != "none"
+                                     else ResolutionType.SAVING_THROW if is_save
+                                     else ResolutionType.ABILITY_CHECK),
+                    is_saving_throw=is_save, critical=critical,
+                    scene_mode=scene.mode if scene else None,
+                    hook_connected=bool(character_context.relevant_hooks
+                                        or character_context.faith))
+                narration = await self.narrator.run(
+                    read, action_text=action_text, outcome=narr_outcome,
+                    result_summary=outcome.line_th, scene=scene, target_ref=target_ref,
+                    directory=directory, resolved_targets=resolved_targets,
+                    scene_context=scene_ctx, pacing=pacing,
+                    character_context=character_context)
+        except Exception as exc:  # noqa: BLE001 — narration is best-effort post-commit
+            log.warning("cast narration failed; mechanical line stands alone: %s", exc)
+            return None
+        from app.ai.narration_guard import screen_decision_prompt, screen_narration
+
+        actor_name = directory.actor.canonical_name if directory.actor else None
+        narration.text, _ = screen_narration(narration.text, actor_name)
+        narration.decision_prompt = screen_decision_prompt(narration.decision_prompt, actor_name)
+        return narration
 
     # --- resting: a real domain operation, never a generic ability check -------
     async def _handle_rest(

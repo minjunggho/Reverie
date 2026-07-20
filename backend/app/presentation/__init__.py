@@ -5,5 +5,20 @@ The engine never touches Discord. It tags every outbound message with a
 decides embeds/colors/components. Tests assert on kind + data, not on markup.
 """
 from app.presentation.kinds import KIND_STYLE, MessageKind
+from app.presentation.screen import (
+    ReverieScreen,
+    ScreenBuilder,
+    ScreenButton,
+    ScreenOption,
+    ScreenSelect,
+)
 
-__all__ = ["MessageKind", "KIND_STYLE"]
+__all__ = [
+    "MessageKind",
+    "KIND_STYLE",
+    "ReverieScreen",
+    "ScreenBuilder",
+    "ScreenButton",
+    "ScreenOption",
+    "ScreenSelect",
+]

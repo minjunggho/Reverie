@@ -133,7 +133,12 @@ async def _party_and_session(db, provider, admin):
     async with db.unit_of_work() as s:
         camp = CampaignService(s)
         campaign = await camp.resolve_campaign_by_channel("chan-1")
-        campaign.config = {**campaign.config, "dice_mode": "AUTO"}
+        campaign.config = {
+            **campaign.config,
+            "dice_mode": "AUTO",
+            # These travel tests exercise the legacy per-action deterministic pipeline.
+            "planning": {"enabled": "off"},
+        }
         mA = await camp.resolve_member(campaign.id, "owner")
         mB = await camp.add_member(campaign_id=campaign.id, discord_user_id="userB",
                                    display_name="Friend")

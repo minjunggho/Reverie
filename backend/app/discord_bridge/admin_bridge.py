@@ -180,10 +180,13 @@ class AdminBridge:
             return await self._campaign_import(ctx)
         if sub == "create":
             return await self._campaign_create(ctx)
+        if sub == "reset":
+            return await self._campaign_reset(ctx)
         if sub != "new":
             return self._notice(ctx.inbound, (
                 "ใช้ `!rv campaign new <ชื่อ>` เปิดโต๊ะ · "
                 "`!rv campaign create <ไอเดีย>` ให้ AI เสนอโลก · "
+                "`!rv campaign reset` เริ่มโลกใหม่ในห้องเดิม (เก็บตัวละครไว้) · "
                 "หรือแนบไฟล์กับ `!rv campaign import`"))
         name = " ".join(ctx.args[1:]).strip() or "แคมเปญไร้ชื่อ"
         async with self.db.unit_of_work() as s:
@@ -322,6 +325,38 @@ class AdminBridge:
             ctx.inbound.channel_id, body, kind=MessageKind.TABLE_NOTICE,
             title="✨ ข้อเสนอโลกแคมเปญ — รอเจ้าของโต๊ะรีวิว",
         )])
+
+    async def _campaign_reset(self, ctx: _Ctx) -> BridgeResult:
+        """Wipe the world/story/progress but KEEP players + characters, so a fresh world
+        can be built in the SAME channel. Owner-only, and destructive — a second
+        `confirm` step guards it."""
+        campaign, member = await self._resolve(ctx)
+        if campaign is None:
+            return self._notice(ctx.inbound, "ยังไม่มีโต๊ะในห้องนี้")
+        if member is None or member.role != MemberRole.OWNER.value:
+            return self._notice(ctx.inbound, "เฉพาะเจ้าของโต๊ะเท่านั้นที่รีเซ็ตแคมเปญได้")
+        campaign_id, name = campaign.id, campaign.name
+
+        confirmed = len(ctx.args) >= 2 and ctx.args[1].lower() == "confirm"
+        if not confirmed:
+            return self._notice(ctx.inbound, (
+                f"⚠️ นี่จะล้าง **ทั้งโลก เรื่องราว และความคืบหน้า** ของโต๊ะ **{name}** ในห้องนี้\n"
+                "ผู้เล่นและตัวละครทุกตัว **ยังอยู่ครบ ไม่ต้องสร้างใหม่** (ตัวละครจะถูกรีเซ็ตให้พร้อมเล่นเหมือนพักเต็มที่)\n"
+                "แต่ฉาก เซสชัน สถานที่ NPC เนื้อเรื่อง และความคืบหน้าจะหายทั้งหมด — **ย้อนกลับไม่ได้**\n\n"
+                "ยืนยันด้วย `!rv campaign reset confirm`"))
+
+        from app.services.campaigns.reset_service import CampaignResetService
+
+        async with self.db.unit_of_work() as s:
+            await CampaignResetService(s).reset(campaign_id)
+        return BridgeResult(handled=True, responses=[OutboundMessage(
+            ctx.inbound.channel_id,
+            f"โต๊ะ **{name}** ถูกรีเซ็ตแล้ว — ตัวละครทุกตัวยังอยู่ครบ พร้อมเริ่มโลกใหม่ในห้องเดิม\n\n"
+            "ต่อไป:\n"
+            "• `!rv campaign create <ไอเดีย>` — ให้ AI เสนอโลกใหม่\n"
+            "• `!rv campaign import` — นำเข้าโลกจากไฟล์ของเจ้า\n"
+            "แล้วค่อย `!rv session start`",
+            kind=MessageKind.TABLE_NOTICE, title="รีเซ็ตแคมเปญแล้ว")])
 
     async def _setup(self, ctx: _Ctx) -> BridgeResult:
         campaign, member = await self._resolve(ctx)

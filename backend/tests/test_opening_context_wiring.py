@@ -14,17 +14,14 @@ from app.models.campaign import Campaign
 from app.models.character import Character
 from app.models.enums import SceneMode
 from app.presentation import MessageKind
-from app.schemas.llm_io import CampaignPrologue, OpeningScene
+from app.schemas.llm_io import OpeningScene
 from app.services.sessions import SessionOpeningService
 from discord_bot.render import EMBED_DESC_LIMIT, build_embeds
 from tests.support.factories import build_world
 
 
 async def test_opening_uses_campaign_brief_and_central_question_when_stored(db, provider):
-    """On this branch, brief/central_question feed the cinematic CampaignPrologue
-    (main_goal falls back to central_question) rather than the plain OpeningScene —
-    a strictly richer mechanism than a flat text marker, but it must still receive
-    the same underlying data, plus character appearance."""
+    """Stored campaign direction and appearance reach the v2 ScenePacket."""
     world = await build_world(db)
     async with db.unit_of_work() as s:
         campaign = await s.get(Campaign, world.campaign_id)
@@ -38,13 +35,13 @@ async def test_opening_uses_campaign_brief_and_central_question_when_stored(db, 
 
     def _capture(messages, model):
         captured["blob"] = "\n".join(m.get("content", "") for m in messages)
-        return CampaignPrologue(
-            title="ทดสอบ", world="-", powers="-", crisis="-", approach="-",
-            the_party="-", main_goal="ทดสอบ", first_beat="ทดสอบ",
-            decision_prompt="จะทำอะไรก่อน?",
+        return OpeningScene(
+            title="ทดสอบ",
+            narration="นครเงียบงันอยู่ตรงหน้า พวกคุณยืนอยู่ในฉากจริง",
+            decision_prompt="พวกคุณจะทำอย่างไร?",
         )
 
-    provider.on("generate_campaign_prologue", _capture)
+    provider.on("generate_session_opening", _capture)
     opener = SessionOpeningService(db, provider)
     await opener.open_new_session(
         campaign_id=world.campaign_id,
@@ -76,8 +73,8 @@ async def test_opening_does_not_invent_a_brief_when_none_is_stored(db, provider)
         attendance_member_ids=[world.p1_member_id, world.p2_member_id],
         location_id=world.location_id, mode=SceneMode.EXPLORATION,
     )
-    assert "CAMPAIGN_BRIEF" not in captured["blob"]
-    assert "CENTRAL_QUESTION" not in captured["blob"]
+    assert "campaign_context:" not in captured["blob"]
+    assert "active_objectives:" not in captured["blob"]
 
 
 async def test_present_npcs_at_the_opening_location_are_passed(db, provider):

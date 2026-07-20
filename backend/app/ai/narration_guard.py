@@ -10,6 +10,8 @@ This is a structural guard, not a prompt plea — see docs/world-canon.md.
 from __future__ import annotations
 
 import re
+import unicodedata
+from difflib import SequenceMatcher
 
 # Phrases that ask the player to author objective world facts (bad in AUTHORITATIVE).
 _WORLD_AUTHORING = [
@@ -43,6 +45,29 @@ def screen_decision_prompt(prompt: str | None, actor_name: str | None = None) ->
         who = actor_name or "ตัวละครของเจ้า"
         return f"{who}จะทำอย่างไร?"
     return prompt
+
+
+def _normalize_for_compare(text: str) -> str:
+    """Collapse whitespace and case so a near-identical paragraph compares equal
+    regardless of trivial reformatting."""
+    norm = unicodedata.normalize("NFC", text or "").casefold()
+    return re.sub(r"\s+", " ", norm).strip()
+
+
+def is_repeat_narration(previous: str | None, current: str, *, threshold: float = 0.92) -> bool:
+    """True when `current` narration is (near-)identical to the immediately previous
+    one delivered in this scene — the "the DM just re-said the last paragraph" failure.
+
+    Deterministic: an exact match after normalization, or a similarity ratio at/above
+    `threshold`. The threshold is deliberately high so genuinely new prose that merely
+    reuses a name or place is never suppressed; only a substantive repeat is."""
+    cur = _normalize_for_compare(current)
+    prev = _normalize_for_compare(previous or "")
+    if not cur or not prev:
+        return False
+    if cur == prev:
+        return True
+    return SequenceMatcher(None, prev, cur).ratio() >= threshold
 
 
 def screen_narration(text: str, actor_name: str | None = None) -> tuple[str, bool]:

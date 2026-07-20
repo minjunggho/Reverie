@@ -41,10 +41,13 @@ from app.models.progression import (
 from app.models.scene import Scene
 from app.models.session import Session
 from app.models.user import User
+from app.models.decision_window import ActionSubmission, DecisionWindow
 from app.models.world import ScheduledWorldEvent, Threat
 from app.models.world_graph import CampaignCanonRecord, LocationConnection
 
 __all__ = [
+    "DecisionWindow",
+    "ActionSubmission",
     "User",
     "Campaign",
     "CampaignMember",

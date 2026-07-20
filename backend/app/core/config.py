@@ -41,6 +41,11 @@ class Settings(BaseSettings):
 
     # --- Discord ---
     discord_bot_token: str | None = Field(default=None, alias="DISCORD_BOT_TOKEN")
+    # Render migrated interactive screens (deity, spell preparation) as native
+    # Discord Components V2 LayoutViews. When false, the SAME declarative screens
+    # flatten to plain text + a ChoiceView — no legacy embeds either way. This is a
+    # rollout valve, not a second permanent UI. Default on.
+    discord_components_v2_enabled: bool = Field(default=True)
 
     # --- Discord Activity (E6) ---
     # Public application/client id — the ONLY Discord credential the frontend may see.

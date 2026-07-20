@@ -16,15 +16,19 @@ from math import ceil
 
 from app.core.errors import NotFoundError, ReverieError, RulesViolation
 from app.core.logging import get_logger
-from app.discord_bridge.dto import (
-    ActionButton,
-    BridgeResult,
-    OutboundMessage,
-    SelectMenu,
-    SelectOption,
-)
+from app.discord_bridge.dto import BridgeResult, OutboundMessage
 from app.models.character_draft import CharacterDraft
-from app.presentation import MessageKind
+from app.presentation import MessageKind, ReverieScreen, ScreenButton
+from app.presentation.i18n import normalize_locale, tr
+from app.presentation.screens import (
+    ACCENT_CREATION,
+    ACCENT_FAITH,
+    DeityChoice,
+    SpellChoice,
+    deity_selection_screen,
+    simple_screen,
+    spell_selection_screen,
+)
 from app.rules_content import STANDARD_ARRAY, get_registry
 from app.tabletop.rules.core import ABILITIES, ability_modifier
 
@@ -40,8 +44,12 @@ CONTINUE_TO_SPELLS = "กลับไปเลือกคาถาต่อ"
 # Keep well below Discord's 25-option menu ceiling and leave embed room for
 # summaries, selected state, and recovery guidance.
 SPELL_PAGE_SIZE = 15
+# Pagination labels — kept identical to the i18n prev/next chrome so on-screen
+# controls read the same as before the V2 migration.
 SPELL_PREVIOUS = "◀ ก่อนหน้า"
 SPELL_NEXT = "ถัดไป ▶"
+# Retained so a player can still TYPE these legacy confirm/back/cancel shortcuts;
+# the on-screen controls now carry structured component values instead of labels.
 SPELL_CONFIRM = "✅ ยืนยันตัวเลือก"
 SPELL_BACK = "↩ ย้อนกลับ"
 SPELL_CANCEL = "✖ ยกเลิกการสร้าง"
@@ -63,6 +71,11 @@ BELIEF_EDIT = "✏️ แก้ความเชื่อ"
 # character believes without naming a canon deity (a valid BELIEVER profile). This is
 # an explicit player choice, never a silent assignment or a skip.
 BELIEF_NO_NAMED_DEITY = "🙏 ศรัทธาโดยยังไม่ระบุเทพองค์ใด"
+# Deity list pagination (38+ deities exceed a single 25-option select; never truncate).
+# Distinct button VALUES (not labels) so they can never collide with a deity name.
+BELIEF_DEITY_PREV = "belief:deity:prev"
+BELIEF_DEITY_NEXT = "belief:deity:next"
+DEITY_PAGE_SIZE = 24
 # Reverie Integration Rule #2 (deity catalog): Forgotten Realms – Core is the default
 # setting module, enabled automatically so belief/cleric selection never dead-ends on
 # an empty pantheon. The owner may still deactivate/switch it later.
@@ -71,12 +84,13 @@ _DEFAULT_PANTHEON_KEY = "forgotten_realms"
 # Which belief CONTROL buttons belong to which sub-stage. A control that arrives for a
 # DIFFERENT stage is a stale button from an earlier card and must not be reinterpreted
 # (a leftover stance button must never become a free-form "reason" on the details card).
+_DEITY_NAV = frozenset({BELIEF_DEITY_PREV, BELIEF_DEITY_NEXT})
 _BELIEF_STAGE_CONTROLS: dict[str, frozenset] = {
     "broad": frozenset({BELIEF_CHOOSE, BELIEF_AGNOSTIC, BELIEF_ATHEIST, BELIEF_FORMER,
                         BELIEF_SECRET, BELIEF_MULTI, BELIEF_SKIP}),
-    "deity": frozenset({BELIEF_NO_NAMED_DEITY}),
-    "cleric_deity": frozenset(),
-    "secondary": frozenset({BELIEF_SECONDARY_DONE}),
+    "deity": frozenset({BELIEF_NO_NAMED_DEITY}) | _DEITY_NAV,
+    "cleric_deity": frozenset() | _DEITY_NAV,
+    "secondary": frozenset({BELIEF_SECONDARY_DONE}) | _DEITY_NAV,
     "details": frozenset({BELIEF_FINISH, BELIEF_ADD_SECONDARY, BELIEF_MAKE_SECRET}),
     "cleric_domain": frozenset(),
 }
@@ -691,97 +705,56 @@ class BuildFlow:
             notice = notice or "จำนวนหน้าของตัวเลือกเปลี่ยนไป จึงเลื่อนไปหน้าที่ใกล้ที่สุด"
         page_pool = pool[page * SPELL_PAGE_SIZE:(page + 1) * SPELL_PAGE_SIZE]
 
-        selected_text = ", ".join(
-            self.reg.get_spell(spell_key).name_th_hint for spell_key in chosen
-        ) or "ยังไม่ได้เลือก"
-        lines: list[str] = []
-        options: list[SelectOption] = []
-        for spell_key in page_pool:
+        locale = self._locale(data)
+        klass = (build.get("class") or "").title()
+
+        def _choice(spell_key: str, selected: bool) -> SpellChoice:
             spell = self.reg.get_spell(spell_key)
-            selected = spell_key in chosen
-            mark = "✅" if selected else "▫️"
-            conc = " · ต้องเพ่งสมาธิ" if spell.concentration else ""
-            lines.append(
-                f"{mark} **{spell.name_th_hint}** ({spell.display_name_en}) — "
-                f"{spell.mech_summary_th[:140]}{conc}"
+            return SpellChoice(
+                value=spell_key,
+                name_th=spell.name_th_hint,
+                name_en=spell.display_name_en,
+                summary=spell.mech_summary_th,
+                concentration=spell.concentration,
+                selected=selected,
             )
-            options.append(SelectOption(
-                label=f"{'✅ ' if selected else ''}{spell.name_th_hint} ({spell.display_name_en})",
-                value=self._spell_component(data, key, "pick", spell_key),
-                description=spell.mech_summary_th,
-            ))
 
-        prefix = f"⚠️ {notice}\n\n" if notice else ""
-        body = (
-            f"{prefix}{intro}\n"
-            f"**เลือกแล้ว {len(chosen)} / {required}**\n"
-            f"ที่เลือก: {selected_text}\n"
-            f"หน้า **{page + 1} / {page_count}**\n\n"
-            + "\n".join(lines)
-            + "\n\nพิมพ์ชื่ออังกฤษหรือชื่อไทยได้เช่นกัน"
+        # One multi-select submits the whole page's selection as a single re-entry;
+        # ``{values}`` is filled by the adapter with the chosen option (spell) keys.
+        submit_template = self._spell_component(data, key, "setpage", str(page)) + ":{values}"
+        prev_button = ScreenButton(
+            tr("spell_prev", locale), self._spell_component(data, key, "previous"),
+            disabled=page == 0)
+        next_button = ScreenButton(
+            tr("spell_next", locale), self._spell_component(data, key, "next"),
+            disabled=page >= page_count - 1)
+        screen = spell_selection_screen(
+            pool_kind=key,
+            klass=klass,
+            required=required,
+            chosen=[_choice(spell_key, True) for spell_key in chosen],
+            page_options=[_choice(spell_key, spell_key in chosen) for spell_key in page_pool],
+            select_custom_id=f"rv-spell-pick-{key}",
+            submit_value_template=submit_template,
+            page=page,
+            page_count=page_count,
+            max_pick=required,
+            notice=notice,
+            confirm=ScreenButton(
+                tr("spell_confirm", locale), self._spell_component(data, key, "confirm"),
+                style="success", disabled=len(chosen) != required),
+            reset=ScreenButton(
+                tr("spell_reset", locale), self._spell_component(data, key, "reset"),
+                disabled=not chosen),
+            back=ScreenButton(tr("spell_back", locale), self._spell_component(data, key, "back")),
+            cancel=ScreenButton(
+                tr("spell_cancel", locale), self._spell_component(data, key, "cancel"),
+                style="danger"),
+            prev_button=prev_button if page_count > 1 else None,
+            next_button=next_button if page_count > 1 else None,
+            locale=locale,
         )
-
-        menus = [SelectMenu(
-            custom_id=f"rv-spell-pick-{key}",
-            placeholder=f"เลือกจากหน้า {page + 1}…",
-            options=options,
-        )]
-        if chosen:
-            menus.append(SelectMenu(
-                custom_id=f"rv-spell-remove-{key}",
-                placeholder="เอาคาถาที่เลือกไว้ออก…",
-                options=[SelectOption(
-                    label=f"เอา {self.reg.get_spell(spell_key).name_th_hint} ออก",
-                    value=self._spell_component(data, key, "remove", spell_key),
-                ) for spell_key in chosen[:25]],
-            ))
-
-        buttons = [
-            ActionButton(
-                label=SPELL_PREVIOUS,
-                value=self._spell_component(data, key, "previous"),
-                disabled=page == 0,
-            ),
-            ActionButton(
-                label=f"หน้า {page + 1}/{page_count}",
-                value=self._spell_component(data, key, "page"),
-                disabled=True,
-            ),
-            ActionButton(
-                label=SPELL_NEXT,
-                value=self._spell_component(data, key, "next"),
-                disabled=page >= page_count - 1,
-            ),
-            ActionButton(
-                label=f"เลือก {len(chosen)}/{required}",
-                value=self._spell_component(data, key, "count"),
-                disabled=True,
-            ),
-            ActionButton(
-                label=SPELL_CONFIRM,
-                value=self._spell_component(data, key, "confirm"),
-                style="success",
-                disabled=len(chosen) != required,
-            ),
-            ActionButton(
-                label=SPELL_BACK,
-                value=self._spell_component(data, key, "back"),
-            ),
-            ActionButton(
-                label=SPELL_CANCEL,
-                value=self._spell_component(data, key, "cancel"),
-                style="danger",
-            ),
-        ]
-        return BridgeResult(handled=True, responses=[OutboundMessage(
-            channel_id,
-            body,
-            kind=MessageKind.CHARACTER_CREATION,
-            title=title,
-            data={"footer": "ปุ่มหมดอายุเมื่อไร ใช้ !rv resume ได้เสมอ"},
-            select_menus=menus,
-            action_buttons=buttons,
-        )])
+        return _screen_card(channel_id, screen)
 
     async def _on_cantrips(self, draft, data, text, channel_id) -> BridgeResult:
         return await self._on_spell_selection(
@@ -849,6 +822,44 @@ class BuildFlow:
             build["spell_pages"] = pages
             await self._save(draft, data)
             return self._spell_selection_step(data, channel_id, key=key)
+
+        if action == "setpage":
+            # One multi-select submit replaces THIS page's contribution to the whole
+            # selection, preserving picks made on other pages. Everything is
+            # revalidated here — the client's option set and count are never trusted.
+            page_str, _, csv = payload.partition(":")
+            try:
+                sel_page = int(page_str)
+            except (TypeError, ValueError):
+                return self._spell_selection_step(
+                    data, channel_id, key=key, notice="หน้าไม่ถูกต้อง")
+            page_count = max(1, ceil(len(pool) / SPELL_PAGE_SIZE))
+            sel_page = min(max(sel_page, 0), page_count - 1)
+            page_keys = pool[sel_page * SPELL_PAGE_SIZE:(sel_page + 1) * SPELL_PAGE_SIZE]
+            picked = [k for k in csv.split(",") if k and k in page_keys]
+            off_page = [k for k in chosen if k not in page_keys]
+            seen: set[str] = set()
+            new_chosen = [k for k in (*off_page, *picked)
+                          if not (k in seen or seen.add(k))]
+            if len(new_chosen) > required:
+                return self._spell_selection_step(
+                    data, channel_id, key=key,
+                    notice=tr("spell_too_many", self._locale(data), required=required))
+            build[key] = new_chosen
+            pages = dict(build.get("spell_pages") or {})
+            pages[key] = sel_page
+            build["spell_pages"] = pages
+            await self._save(draft, data)
+            return self._spell_selection_step(data, channel_id, key=key)
+
+        if action == "reset":
+            if not chosen:
+                return self._spell_selection_step(data, channel_id, key=key)
+            build[key] = []
+            await self._save(draft, data)
+            return self._spell_selection_step(
+                data, channel_id, key=key,
+                notice=tr("spell_reset_done", self._locale(data)))
 
         if action == "confirm":
             if len(chosen) != required:
@@ -1152,18 +1163,22 @@ class BuildFlow:
             except (FaithContentError, NotFoundError, TypeError, ValueError) as exc:
                 return self._diagnostic(channel_id, str(exc))
 
-        prefix = f"⚠️ {notice}\n\n" if notice else ""
+        locale = self._locale(data)
+        klass = (build.get("class") or "").title()
         if stage == "broad":
             body = (
-                prefix
-                + "ตัวละครของเจ้าเชื่อในเทพหรือศาสนาไหม? ความเชื่อนั้นสำคัญ "
-                  "เป็นเรื่องตามวัฒนธรรม ยังไม่แน่ใจ เป็นความลับ หรือปฏิเสธศาสนา?\n\n"
-                  "ส่วนนี้เป็นตัวตน ไม่ใช่ Class และข้ามได้"
+                "ตัวละครของเจ้าเชื่อในเทพหรือศาสนาไหม? ความเชื่อนั้นสำคัญ "
+                "เป็นเรื่องตามวัฒนธรรม ยังไม่แน่ใจ เป็นความลับ หรือปฏิเสธศาสนา?\n\n"
+                "ส่วนนี้เป็นตัวตน ไม่ใช่ Class และข้ามได้"
             )
-            return _card(channel_id, "ความเชื่อ (ไม่บังคับ)", body, [
-                BELIEF_CHOOSE, BELIEF_AGNOSTIC, BELIEF_ATHEIST,
-                BELIEF_FORMER, BELIEF_SECRET, BELIEF_MULTI, BELIEF_SKIP,
-            ])
+            return _screen_card(channel_id, simple_screen(
+                title="ความเชื่อ (ไม่บังคับ)", body=body, notice=notice,
+                accent=ACCENT_FAITH, locale=locale,
+                buttons=[ScreenButton(c, c) for c in (
+                    BELIEF_CHOOSE, BELIEF_AGNOSTIC, BELIEF_ATHEIST,
+                    BELIEF_FORMER, BELIEF_SECRET, BELIEF_MULTI, BELIEF_SKIP,
+                )],
+            ))
 
         if stage in {"deity", "secondary", "cleric_deity"}:
             pool = cleric_deities if stage == "cleric_deity" else selectable
@@ -1188,45 +1203,50 @@ class BuildFlow:
                 # honest, explicit resolution: believe without naming a canon deity (a
                 # valid BELIEVER profile the player confirms). The owner can activate a
                 # pantheon later; the belief can be edited then.
-                body = prefix + (
-                    "แคมเปญนี้ยังไม่ได้เปิดชุดเทพ (pantheon) จึงยังไม่มีรายชื่อเทพให้เลือก\n"
-                    "ตัวละครยังเป็นผู้ศรัทธาได้ — ยืนยันว่าศรัทธาโดยยังไม่ระบุองค์ "
-                    "แล้วเจ้าของโต๊ะค่อยเปิดชุดเทพภายหลังได้"
-                )
-                return _card(channel_id, "เลือกเทพที่เกี่ยวข้องกับความเชื่อ", body,
-                             [BELIEF_NO_NAMED_DEITY])
-            title = {
-                "deity": "เลือกเทพที่เกี่ยวข้องกับความเชื่อ",
-                "secondary": "เลือกเทพรอง / เทพตามวัฒนธรรม",
-                "cleric_deity": "เลือกแหล่งพลังของ Cleric",
-            }[stage]
-            body = prefix + (
-                "เลือกจากเทพที่แคมเปญนี้เปิดใช้เท่านั้น หรือพิมพ์ชื่อไทย/อังกฤษ/นามแฝง\n"
-            )
-            if stage == "cleric_deity":
-                body += "รายการนี้มีเฉพาะเทพที่ให้พลัง Cleric ได้ — Ao จะไม่ผ่านขั้นนี้\n"
+                return _screen_card(channel_id, simple_screen(
+                    title=tr("deity_title", locale),
+                    step=tr("deity_step", locale, klass=klass),
+                    body=tr("deity_none_available", locale),
+                    notice=notice, accent=ACCENT_FAITH, locale=locale,
+                    buttons=[ScreenButton(BELIEF_NO_NAMED_DEITY, BELIEF_NO_NAMED_DEITY,
+                                          style="primary")],
+                ))
+            # Float a typed-name suggestion to the very front of the FULL pool so it
+            # lands on page 1; the player still selects to confirm (never assigned).
             if stage == "deity" and hint_key:
-                # Float the deity the player typed to the front and flag it — a
-                # suggestion, not an assignment; they still tap to confirm.
                 pool = ([d for d in pool if d.key == hint_key]
                         + [d for d in pool if d.key != hint_key])
-                body += "-# จากที่เจ้าพิมพ์ไว้ ข้าเดาว่าน่าจะเป็นองค์แรกด้านล่าง — กดยืนยันได้เลย\n"
-            listed = pool[:23]
-            description_lines = []
-            for deity in listed:
-                desc = deity.summary
-                if deity.domains:
-                    desc += f" · {', '.join(deity.domains)}"
-                description_lines.append(
-                    f"🔹 **{deity.name_th}** ({deity.canonical_name_en}) — {desc}"
-                )
-            body += "\n" + "\n".join(description_lines)
+            page_count = max(1, ceil(len(pool) / DEITY_PAGE_SIZE))
+            try:
+                raw_page = int(build.get("belief_deity_page", 0) or 0)
+            except (TypeError, ValueError):
+                raw_page = 0
+            page = min(max(raw_page, 0), page_count - 1)
+            page_pool = pool[page * DEITY_PAGE_SIZE:(page + 1) * DEITY_PAGE_SIZE]
             choices = [
-                f"{deity.name_th} ({deity.canonical_name_en})" for deity in listed
+                DeityChoice(
+                    value=f"{deity.name_th} ({deity.canonical_name_en})",
+                    name_th=deity.name_th, name_en=deity.canonical_name_en,
+                    summary=deity.summary, domains=tuple(deity.domains),
+                )
+                for deity in page_pool
             ]
+            extra_buttons: list[ScreenButton] = []
+            if page_count > 1:
+                extra_buttons.append(ScreenButton(
+                    tr("spell_prev", locale), BELIEF_DEITY_PREV, disabled=page == 0))
+                extra_buttons.append(ScreenButton(
+                    tr("spell_next", locale), BELIEF_DEITY_NEXT, disabled=page >= page_count - 1))
             if stage == "secondary":
-                choices.append(BELIEF_SECONDARY_DONE)
-            return _card(channel_id, title, body, choices)
+                extra_buttons.append(ScreenButton(
+                    BELIEF_SECONDARY_DONE, BELIEF_SECONDARY_DONE, style="success"))
+            page_note = (f" ({page + 1}/{page_count})" if page_count > 1 else "")
+            return _screen_card(channel_id, deity_selection_screen(
+                stage=stage, klass=klass + page_note, choices=choices,
+                select_custom_id=f"rv-deity-{stage}",
+                show_hint=(stage == "deity" and bool(hint_key) and page == 0),
+                notice=notice, extra_buttons=extra_buttons, locale=locale,
+            ))
 
         if stage == "details":
             return await self._belief_details_step(
@@ -1240,12 +1260,12 @@ class BuildFlow:
                 return self._diagnostic(
                     channel_id, f"class=cleric; missing deity={deity_key!r}"
                 )
-            return _card(
-                channel_id,
-                "เลือก Domain ของ Cleric",
-                prefix + f"{deity.name_th} ({deity.canonical_name_en}) รองรับ Domain ต่อไปนี้",
-                list(deity.domains),
-            )
+            return _screen_card(channel_id, simple_screen(
+                title="เลือก Domain ของ Cleric",
+                body=f"{deity.name_th} ({deity.canonical_name_en}) รองรับ Domain ต่อไปนี้",
+                notice=notice, accent=ACCENT_FAITH, locale=locale,
+                buttons=[ScreenButton(d, d) for d in deity.domains],
+            ))
         return self._diagnostic(channel_id, f"unknown belief stage: {stage!r}")
 
     async def _belief_details_step(
@@ -1272,18 +1292,20 @@ class BuildFlow:
             names.append(deity.name_th if deity else key)
         deity_line = ", ".join(names) or "ไม่มีเทพหลัก"
         body = (
-            (f"⚠️ {notice}\n\n" if notice else "")
-            + f"สถานะ: **{profile.stance.value}** · เทพ: **{deity_line}**\n"
-              f"การเปิดเผย: **{profile.visibility.value}**\n\n"
-              "จะพิมพ์เหตุผล ความสงสัย เครื่องหมายศักดิ์สิทธิ์ หรือสิ่งที่ยึดถือเพิ่มก็ได้ "
-              "ทุกคำถามเป็นทางเลือก"
+            f"สถานะ: **{profile.stance.value}** · เทพ: **{deity_line}**\n"
+            f"การเปิดเผย: **{profile.visibility.value}**\n\n"
+            "จะพิมพ์เหตุผล ความสงสัย เครื่องหมายศักดิ์สิทธิ์ หรือสิ่งที่ยึดถือเพิ่มก็ได้ "
+            "ทุกคำถามเป็นทางเลือก"
         )
-        choices = [BELIEF_FINISH]
+        buttons = [ScreenButton(BELIEF_FINISH, BELIEF_FINISH, style="success")]
         if profile.primary_deity_key:
-            choices.append(BELIEF_ADD_SECONDARY)
+            buttons.append(ScreenButton(BELIEF_ADD_SECONDARY, BELIEF_ADD_SECONDARY))
         if profile.visibility.value != "SECRET":
-            choices.append(BELIEF_MAKE_SECRET)
-        return _card(channel_id, "รายละเอียดความเชื่อ", body, choices)
+            buttons.append(ScreenButton(BELIEF_MAKE_SECRET, BELIEF_MAKE_SECRET))
+        return _screen_card(channel_id, simple_screen(
+            title="รายละเอียดความเชื่อ", body=body, notice=notice,
+            accent=ACCENT_FAITH, locale=self._locale(data), buttons=buttons,
+        ))
 
     async def _on_belief(
         self, draft, data: dict, text: str, channel_id: str
@@ -1313,6 +1335,16 @@ class BuildFlow:
             return await self._belief_step(
                 data, channel_id, campaign_id=draft.campaign_id,
                 notice="ปุ่มนี้มาจากการ์ดก่อนหน้า ใช้กับขั้นตอนนี้ไม่ได้ — เลือกจากการ์ดปัจจุบัน",
+            )
+
+        # Deity-list pagination: adjust the page cursor and re-render. The render
+        # clamps to the valid range, so nudging past a boundary is harmless.
+        if stage in {"deity", "secondary", "cleric_deity"} and text in _DEITY_NAV:
+            cur = int(build.get("belief_deity_page", 0) or 0)
+            build["belief_deity_page"] = max(0, cur + (1 if text == BELIEF_DEITY_NEXT else -1))
+            await self._save(draft, data)
+            return await self._belief_step(
+                data, channel_id, campaign_id=draft.campaign_id
             )
 
         def profile_for(
@@ -1417,6 +1449,7 @@ class BuildFlow:
                     build["belief_profile"] = belief.encode(profile_for(
                         stance, primary=None, visibility=visibility))
                     build["belief_stage"] = "details"
+                    build.pop("belief_deity_page", None)
                     await self._save(draft, data)
                     return await self._belief_step(
                         data, channel_id, campaign_id=draft.campaign_id)
@@ -1459,6 +1492,8 @@ class BuildFlow:
                         stance, primary=deity.key, visibility=visibility
                     ))
                     build["belief_stage"] = "secondary" if intent == "multi" else "details"
+                # New pool at the next deity-list stage (or none) — restart paging.
+                build.pop("belief_deity_page", None)
                 await self._save(draft, data)
                 return await self._belief_step(
                     data, channel_id, campaign_id=draft.campaign_id
@@ -1467,6 +1502,7 @@ class BuildFlow:
             if stage == "secondary":
                 if text == BELIEF_SECONDARY_DONE:
                     build["belief_stage"] = "details"
+                    build.pop("belief_deity_page", None)
                 else:
                     resolution = await faith.resolve_deity_reference(draft.campaign_id, text)
                     keys = (
@@ -1505,6 +1541,7 @@ class BuildFlow:
                     return await self._finish_belief(draft, data, channel_id)
                 if text == BELIEF_ADD_SECONDARY:
                     build["belief_stage"] = "secondary"
+                    build.pop("belief_deity_page", None)
                 elif text == BELIEF_MAKE_SECRET:
                     current = current.model_copy(update={
                         "visibility": BeliefVisibility.SECRET,
@@ -1740,6 +1777,11 @@ class BuildFlow:
                 uniq.append(s)
         return uniq
 
+    @staticmethod
+    def _locale(data: dict) -> str:
+        """The draft's UI locale (default Thai). A single seam for bilingual chrome."""
+        return normalize_locale((data or {}).get("locale"))
+
     async def _save(self, draft: CharacterDraft, data: dict) -> None:
         from app.services.campaigns.draft_store import save_draft
 
@@ -1754,6 +1796,14 @@ def _card(channel_id: str, title: str, body: str, choices: list[str]) -> BridgeR
         channel_id, body, kind=MessageKind.CHARACTER_CREATION, title=title,
         choices=choices[:25],
         data={"footer": "พิมพ์ 'ยกเลิก' ได้ทุกเมื่อ"},
+    )])
+
+
+def _screen_card(channel_id: str, screen: ReverieScreen) -> BridgeResult:
+    """Wrap a declarative Components-V2 screen. ``content`` is the plain-text
+    flattening so the message still reads without components."""
+    return BridgeResult(handled=True, responses=[OutboundMessage(
+        channel_id, screen.to_text(), kind=MessageKind.CHARACTER_CREATION, screen=screen,
     )])
 
 

@@ -149,7 +149,7 @@ async def test_late_joiner_is_placed_at_party_anchor_not_campaign_start(db, prov
     assert (await _char(db, world.kael_id)).location_id == harbor_id
 
 
-# --- cinematic opening: exactly once, governed by state not session number ---------
+# --- cinematic scene: every session, never the legacy multi-card prologue -----------
 
 _GOAL = "ทำลายตราสัญญากลวงก่อนวันที่เก้า"
 
@@ -159,8 +159,8 @@ def _prologues(result):
 
 
 async def test_cinematic_plays_on_later_session_when_never_played(db, provider):
-    """A campaign whose first session was consumed by a broken start still gets its
-    opening cinematic on the NEXT session — and never again after that."""
+    """A later session always gets a fresh scene from current state; adding a goal
+    never revives the removed world-scale prologue cards."""
     world = await build_world(db)
     # Session 1 happens with no main goal (the real playtest's broken start).
     first = await _open_session(db, provider, world, location_id=world.location_id)
@@ -173,14 +173,19 @@ async def test_cinematic_plays_on_later_session_when_never_played(db, provider):
 
     second = await _open_session(db, provider, world)
     assert second.number == 2
-    assert _prologues(second)                                 # cinematic finally plays
+    assert _prologues(second) == []
+    assert len(second.messages) == 1
+    assert second.messages[0].kind == MessageKind.SCENE_FRAME
+    assert second.messages[0].data["connected_scene"] is True
+    assert _GOAL in second.opening_text
     async with db.session() as s:
         campaign = await s.get(Campaign, world.campaign_id)
         assert campaign.config.get("opening_cinematic_played") is True
     await _complete(db, second.session_id)
 
     third = await _open_session(db, provider, world)
-    assert _prologues(third) == []                            # never replays
+    assert _prologues(third) == []
+    assert len(third.messages) == 1                           # fresh scene, no synopsis
 
 
 # --- session command semantics (F15): resume restores, never repairs-by-reset -----
@@ -232,7 +237,7 @@ async def test_unknown_session_subcommand_explains_distinct_semantics(db, provid
 
 
 async def test_start_at_still_plays_the_cinematic_exactly_once(db, provider):
-    """An owner-supplied location must not bypass the opening cinematic."""
+    """An owner-supplied location uses the same connected-scene pipeline."""
     world = await build_world(db)
     async with db.unit_of_work() as s:
         (await s.get(Campaign, world.campaign_id)).central_question = _GOAL
@@ -243,7 +248,9 @@ async def test_start_at_still_plays_the_cinematic_exactly_once(db, provider):
                         session_zero=game.session_zero)
     result = await admin.handle(_admin_msg(f"!rv session start at {location_name}"))
     kinds = [m.kind for m in result.responses]
-    assert MessageKind.CAMPAIGN_PROLOGUE in kinds             # cinematic ran
+    assert kinds == [MessageKind.SCENE_FRAME]
+    assert result.responses[0].data["location"] == location_name
+    assert result.responses[0].data["connected_scene"] is True
     async with db.session() as s:
         assert (await s.get(Campaign, world.campaign_id)).config.get(
             "opening_cinematic_played") is True

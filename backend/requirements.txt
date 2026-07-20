@@ -15,8 +15,8 @@ asyncpg>=0.29          # PostgreSQL (production)
 aiosqlite>=0.20        # SQLite (tests / local dev)
 greenlet>=3.0
 
-# Discord adapter
-discord.py>=2.4
+# Discord adapter — 2.6+ is required for native Components V2 (LayoutView/Container).
+discord.py>=2.6
 
 # LLM providers (optional at runtime; only the active one is used)
 anthropic>=0.40

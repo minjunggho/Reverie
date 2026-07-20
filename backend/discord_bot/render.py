@@ -9,11 +9,38 @@ from typing import Awaitable, Callable
 
 import discord
 
-from app.discord_bridge.dto import ActionButton, OutboundMessage, SelectMenu
+from app.discord_bridge.dto import ActionButton, OutboundMessage, SelectMenu, SelectOption
 from app.presentation import KIND_STYLE, MessageKind
+from app.presentation.screen import ReverieScreen
 
 DISCORD_LIMIT = 2000
 EMBED_DESC_LIMIT = 4000
+
+
+def flatten_screen(screen: ReverieScreen) -> tuple[str, list[ActionButton], list[SelectMenu]]:
+    """Fallback path: a declarative screen → plain text + legacy `ChoiceView` inputs.
+
+    Used when Components V2 is disabled. It is the SAME screen definition — only the
+    presentation degrades to text plus quick-reply controls, never a legacy embed.
+    """
+    buttons: list[ActionButton] = []
+    menus: list[SelectMenu] = []
+    for select in screen.selects():
+        menus.append(SelectMenu(
+            custom_id=select.custom_id,
+            placeholder=select.placeholder,
+            options=[SelectOption(o.label, o.value, o.description, o.default)
+                     for o in select.options],
+            min_values=select.min_values,
+            max_values=select.max_values,
+            submit_value_template=select.submit_value_template,
+        ))
+    for button in screen.buttons():
+        buttons.append(ActionButton(
+            label=button.label, value=button.value,
+            style=button.style, disabled=button.disabled,
+        ))
+    return screen.to_text(), buttons, menus
 
 
 def _chunks(text: str, size: int = 1900) -> list[str]:
@@ -93,16 +120,22 @@ class ChoiceView(discord.ui.View):
             )
             for option in spec.options[:25]
         ]
+        max_values = max(1, min(spec.max_values, len(options)))
         select = discord.ui.Select(
             custom_id=spec.custom_id,
             placeholder=spec.placeholder[:150],
             options=options,
-            min_values=max(0, min(spec.min_values, len(options))),
-            max_values=max(1, min(spec.max_values, len(options))),
+            min_values=max(0, min(spec.min_values, max_values)),
+            max_values=max_values,
         )
+        template = spec.submit_value_template
 
         async def _cb(interaction: discord.Interaction) -> None:
-            await on_choice(interaction, select.values[0])
+            values = list(select.values)
+            if template is not None:
+                await on_choice(interaction, template.replace("{values}", ",".join(values)))
+            else:
+                await on_choice(interaction, values[0] if values else "")
 
         select.callback = _cb
         return select

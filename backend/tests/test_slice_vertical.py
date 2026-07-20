@@ -44,6 +44,15 @@ async def test_full_vertical_slice(db, provider):
     # Steps 1-6: initialize app + create campaign, two members, one character each,
     # a location, and a guard NPC.
     world = await build_world(db)
+    # This foundational slice pins the one-action deterministic dice pipeline.
+    # Shared-round collection has a separate vertical slice.
+    from app.models.campaign import Campaign
+    async with db.unit_of_work() as s:
+        campaign = await s.get(Campaign, world.campaign_id)
+        campaign.config = {
+            **(campaign.config or {}),
+            "planning": {"enabled": "off"},
+        }
 
     # Step 7-8: start Session 1 and generate an opening scene in Thai.
     opener = SessionOpeningService(db, provider)

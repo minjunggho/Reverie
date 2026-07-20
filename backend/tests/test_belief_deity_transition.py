@@ -30,6 +30,7 @@ from app.services.campaigns.build_flow import (
     BELIEF_SECRET,
 )
 from app.services.faith import FaithService
+from tests.support import screens as S
 from tests.support.factories import build_world
 
 _c = {"v": 0}
@@ -104,8 +105,8 @@ async def test_believer_button_reaches_primary_deity(db, provider):
     assert d.version == before + 1                   # exactly one persisted mutation
     card = r.responses[0]
     assert card.kind == MessageKind.CHARACTER_CREATION
-    assert "เลือกเทพ" in (card.title or "")          # the deity-selection card, not an error
-    assert card.choices                              # a real, choosable legal list
+    assert "เลือกเทพ" in S.screen_text(card)          # the deity-selection card, not an error
+    assert S.option_values(card)                     # a real, choosable legal list (String Select)
 
 
 # 2 — believer with no pantheon activated yet: the default (Forgotten Realms — Core)
@@ -121,8 +122,8 @@ async def test_believer_with_no_active_pantheon_auto_activates_the_default(db, p
     assert _stage(d) == "deity"
     card = r.responses[0]
     assert card.kind == MessageKind.CHARACTER_CREATION       # NOT TECHNICAL_ERROR
-    assert card.choices                                      # real deities offered
-    assert BELIEF_NO_NAMED_DEITY not in card.choices          # the empty-pantheon fallback did not fire
+    assert S.option_values(card)                             # real deities offered
+    assert BELIEF_NO_NAMED_DEITY not in [b.value for b in S.buttons(card)]  # empty-pantheon fallback did not fire
 
     async with db.session() as s:
         active = await FaithService(s).list_active_pantheons(world.campaign_id)
@@ -209,8 +210,8 @@ async def test_resume_repairs_believer_without_deity_to_primary_deity(db, provid
     r = await Table(db, provider).send("!rv resume")
     d = await _draft(db, world.p1_member_id)
     assert _stage(d) == "deity"                              # repaired to PRIMARY_DEITY
+    assert "เลือกเทพ" in S.screen_text(r.responses[0])
     assert d.data.get("name") == "เทสเตอร์"                   # prior writing intact
-    assert "เลือกเทพ" in (r.responses[0].title or "")
 
 
 # 8 — a stale stance button clicked at the details card does not corrupt state ----------
@@ -302,7 +303,7 @@ async def test_typed_deity_at_stance_still_requires_explicit_selection(db, provi
     d = await _draft(db, world.p1_member_id)
     assert _stage(d) == "deity"                             # NOT details — no skip
     assert _profile(d) is None                              # nothing chosen yet
-    assert "เลือกเทพ" in (r.responses[0].title or "")       # PRIMARY_DEITY card shown
+    assert "เลือกเทพ" in S.screen_text(r.responses[0])       # PRIMARY_DEITY card shown
 
 
 # 14/15/16 — atheist / agnostic bypass deity selection (only these may) ------------------
@@ -356,10 +357,10 @@ async def test_cleric_on_fresh_campaign_reaches_power_source_selection(db, provi
     r = await table.send("hello")   # any input re-renders the current belief step
     card = r.responses[0]
     assert card.kind == MessageKind.CHARACTER_CREATION
-    assert "สร้างตัวละครต่อไม่ได้" not in card.content       # NOT the dead-end diagnostic
-    assert "legal_count=0" not in card.content
-    assert card.choices                                       # real cleric-capable deities
-    assert any("Tyr" in c or "ทีร์" in c for c in card.choices)
+    assert "สร้างตัวละครต่อไม่ได้" not in S.screen_text(card)  # NOT the dead-end diagnostic
+    assert "legal_count=0" not in S.screen_text(card)
+    assert S.option_values(card)                              # real cleric-capable deities
+    assert any("Tyr" in c or "ทีร์" in c for c in S.option_values(card))
 
     r2 = await table.send("Tyr")
     d = await _draft(db, world.p1_member_id)

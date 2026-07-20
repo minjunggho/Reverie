@@ -314,13 +314,20 @@ class LocationDraft(BaseModel):
 
 # --- Session opening (session 1 / hook-aware) ----------------------------------
 class OpeningScene(BaseModel):
-    """A generated opening. Situation lines follow progressive disclosure; the
-    engine renders them — the AI cannot mutate state or invent mechanics here."""
+    """One cinematic, grounded session opening.
+
+    ``narration`` is the current contract: connected Thai prose rather than a campaign
+    briefing split into cards.  ``situation_lines`` remains accepted for providers and
+    stored fixtures created before the cinematic-scene migration; the opening service
+    joins those lines into one scene and never renders them as separate cards.
+    """
     title: str                               # Thai scene/session title
+    narration: str = ""                      # connected multi-paragraph Thai scene
     situation_lines: list[str] = Field(default_factory=list)   # 3-6 short Thai lines
     pressure: str = ""                       # the disturbance/pressure line
     decision_prompt: str = ""                # one open question
     used_hooks: list[str] = Field(default_factory=list)        # which hooks it drew on
+    used_character_facts: list[str] = Field(default_factory=list)
 
 
 # --- Cinematic campaign prologue (session 1, world-scale) ----------------------

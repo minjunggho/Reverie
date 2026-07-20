@@ -15,6 +15,7 @@ from sqlalchemy import func, select
 from app.core.randomness import SequenceRandomness
 from app.discord_bridge import AdminBridge, InboundMessage, is_admin_command
 from app.engine import build_bridge
+from app.models.campaign import Campaign
 from app.models.character import Character
 from app.models.enums import ConsequenceClass, EventType, MessageCategory, SessionStatus
 from app.models.event import Event
@@ -109,15 +110,22 @@ async def test_two_player_full_journey(db, provider):
         s.add(secret)
         await s.flush()
         secret_id = secret.id
+        # This legacy journey exercises the one-by-one dice pipeline. Shared planning
+        # has its own end-to-end v2 journey; the compatibility switch remains supported.
+        campaign = await s.get(Campaign, campaign_id)
+        campaign.config = {
+            **(campaign.config or {}),
+            "planning": {"enabled": "off"},
+        }
 
     # ---- 4. Session 1 opening tied to an established character hook, at the
     #          APPROVED world's starting location (never an invented tavern) ------
     r = await table.send("!rv session start", OWNER, "นิค")
     kinds = [m.kind for m in r.responses]
-    assert kinds[0] == MessageKind.SESSION_TITLE
-    assert "ลานเวรยามเก่า" in r.responses[0].data["footer"]  # canonical start
-    assert "วันที่ 1" in r.responses[0].data["footer"]       # authoritative time
-    frame = next(m for m in r.responses if m.kind == MessageKind.SCENE_FRAME)
+    assert kinds == [MessageKind.SCENE_FRAME]
+    frame = r.responses[0]
+    assert frame.data["location"] == "ลานเวรยามเก่า"  # canonical start
+    assert "วันที่ 1" in frame.data["scene_metadata"]  # authoritative time
     assert frame.data.get("decision_prompt")                # one open decision point
     async with db.session() as s:
         scene_started = (await s.execute(select(Event).where(
@@ -213,9 +221,6 @@ async def test_two_player_full_journey(db, provider):
     table2 = Table(db, provider)  # fresh bridges = process restart; same DB
     r = await table2.send("!rv session start", OWNER, "นิค")
     kinds = [m.kind for m in r.responses]
-    assert kinds[0] == MessageKind.SESSION_TITLE
-    assert MessageKind.PLAYER_SAFE_RECAP in kinds            # ความเดิมตอนที่แล้ว
-    recap = next(m for m in r.responses if m.kind == MessageKind.PLAYER_SAFE_RECAP)
-    assert "SECRET_" not in recap.text if hasattr(recap, "text") else True
-    assert "SECRET_" not in recap.content
-    assert "เซสชันที่ 2" in (r.responses[0].title or "")
+    assert kinds == [MessageKind.SCENE_FRAME]
+    assert r.responses[0].data["storytelling_pipeline_version"] == 2
+    assert "SECRET_" not in r.responses[0].content

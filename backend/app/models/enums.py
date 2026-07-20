@@ -61,6 +61,48 @@ class SceneStatus(StrEnum):
     CLOSED = "CLOSED"
 
 
+class WindowPhase(StrEnum):
+    """Explicit state machine for a shared decision window (one round). Behaviour is
+    driven by this phase, never by chat-message arrival order."""
+    AWAITING_ACTIONS = "AWAITING_ACTIONS"      # players submit/edit/ready
+    VALIDATING = "VALIDATING"                  # deterministic checks before locking
+    AWAITING_ROLLS = "AWAITING_ROLLS"          # manual-dice: required rolls outstanding
+    READY_TO_RESOLVE = "READY_TO_RESOLVE"      # frozen snapshot; rolls in hand
+    RESOLVING = "RESOLVING"                    # engine applying the frozen set
+    PRESENTING_RESULTS = "PRESENTING_RESULTS"  # one combined narration produced
+    ROUND_COMPLETE = "ROUND_COMPLETE"          # terminal; next window may open
+    CANCELLED = "CANCELLED"                    # host cancelled the round
+
+
+class WindowMode(StrEnum):
+    COMBAT = "COMBAT"          # initiative-ordered resolution
+    NONCOMBAT = "NONCOMBAT"    # relationship-classified resolution
+
+
+class SubmissionValidation(StrEnum):
+    PENDING = "PENDING"                  # not yet validated this revision
+    VALID = "VALID"
+    NEEDS_CORRECTION = "NEEDS_CORRECTION"
+
+
+class SubmissionVisibility(StrEnum):
+    OPEN = "OPEN"        # other players see it in the planning panel
+    SECRET = "SECRET"    # hidden from other players until resolution
+
+
+class ActionRelationship(StrEnum):
+    """How one submitted action relates to another in the same window. Decided by the
+    resolver BEFORE narration, so the combined scene reflects real interaction."""
+    COOPERATIVE = "COOPERATIVE"          # lift the door / crawl under
+    INDEPENDENT = "INDEPENDENT"          # search desk / question prisoner
+    CONFLICTING = "CONFLICTING"          # free the prisoner / execute them
+    SEQUENTIAL = "SEQUENTIAL"            # distract guard so ally steals key
+    MUTUALLY_EXCLUSIVE = "MUTUALLY_EXCLUSIVE"  # both claim the same restricted space
+    SECRET = "SECRET"                    # hidden from the others
+    INTERRUPTING = "INTERRUPTING"        # a reaction/interrupt of another action
+    SOCIAL_OVERLAP = "SOCIAL_OVERLAP"    # talking over each other to the same NPC
+
+
 class MessageCategory(StrEnum):
     COMMITTED_ACTION = "COMMITTED_ACTION"
     DM_QUESTION = "DM_QUESTION"

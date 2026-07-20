@@ -110,8 +110,9 @@ async def test_campaign_create_approve_commits_ai_canon_and_starting_location(db
 
     # Session 1 opens at the approved starting location, characters placed there.
     r = await table.send("!rv session start")
-    assert r.responses[0].kind == MessageKind.SESSION_TITLE
-    assert "ลานเวรยามเก่า" in r.responses[0].data["footer"]
+    assert r.responses[0].kind == MessageKind.SCENE_FRAME
+    assert r.responses[0].data["location"] == "ลานเวรยามเก่า"
+    assert r.responses[0].data["connected_scene"] is True
     async with db.session() as s:
         campaign = (await s.execute(select(Campaign))).scalar_one()
         kael = (await s.execute(select(Character))).scalars().first()
@@ -148,19 +149,18 @@ async def test_second_session_opens_at_party_anchor_not_the_start(db, provider):
         kael.location_id = hall.id
 
     r = await table.send("!rv session start")
-    assert r.responses[0].kind == MessageKind.SESSION_TITLE
-    assert "เซสชันที่ 2" in (r.responses[0].title or "")
+    assert r.responses[0].kind == MessageKind.SCENE_FRAME
     # Continuity: session 2 opens at the hall — session_prep must NOT teleport the
     # party back to the starting square.
-    assert "หอผู้ดูแลเขต" in r.responses[0].data["footer"]
+    assert r.responses[0].data["location"] == "หอผู้ดูแลเขต"
 
 
 async def test_owner_can_pick_opening_location_by_name(db, provider):
     table = await _fresh_table_with_character(db, provider)
     await _create_and_approve_world(table)
     r = await table.send("!rv session start at แนวเขตเก่า")
-    assert r.responses[0].kind == MessageKind.SESSION_TITLE
-    assert "แนวเขตเก่า" in r.responses[0].data["footer"]
+    assert r.responses[0].kind == MessageKind.SCENE_FRAME
+    assert r.responses[0].data["location"] == "แนวเขตเก่า"
     r = await table.send("!rv session end")
 
 
@@ -170,8 +170,8 @@ async def test_single_location_campaign_opens_there_without_config(db, provider)
     world = await build_world(db)
     table = Table(db, provider)
     r = await table.send("!rv session start", author="owner-1", name="DM")
-    assert r.responses[0].kind == MessageKind.SESSION_TITLE
-    assert "โถงหน้าคฤหาสน์" in r.responses[0].data["footer"]
+    assert r.responses[0].kind == MessageKind.SCENE_FRAME
+    assert r.responses[0].data["location"] == "โถงหน้าคฤหาสน์"
 
 
 # --- wallet -----------------------------------------------------------------------------

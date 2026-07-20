@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from app.models.enums import MessageCategory
-from app.presentation import MessageKind
+from app.presentation import MessageKind, ReverieScreen
 
 
 @dataclass(frozen=True)
@@ -59,6 +59,10 @@ class SelectMenu:
     options: list[SelectOption]
     min_values: int = 1
     max_values: int = 1
+    # Multi-select submit: when set, ONE re-entry is built by substituting the chosen
+    # option values (comma-joined) for ``{values}``. When None, the single chosen
+    # value re-enters directly (legacy single-select behaviour).
+    submit_value_template: str | None = None
 
 
 @dataclass(frozen=True)
@@ -88,6 +92,10 @@ class OutboundMessage:
     # the compact legacy quick-reply contract used elsewhere.
     select_menus: list[SelectMenu] = field(default_factory=list)
     action_buttons: list[ActionButton] = field(default_factory=list)
+    # A declarative Components-V2 screen. When present, the adapter renders it as a
+    # native V2 LayoutView (or flattens it to text + a ChoiceView when V2 is off).
+    # Its controls re-enter the normal inbound route exactly like ``choices``.
+    screen: ReverieScreen | None = None
 
 
 @dataclass

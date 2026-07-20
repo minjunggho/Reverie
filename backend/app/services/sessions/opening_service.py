@@ -1,42 +1,46 @@
-"""Session opening — two distinct experiences (§23 + experience overhaul).
+"""Create a session and deliver one grounded, cinematic scene.
 
-SESSION 1: an AI-generated opening built from a BOUNDED context — table profile,
-the party's characters WITH their hooks, and the location. It must tie at least
-one established character hook into the situation, set a live pressure, and end
-on one open decision point. The generator invents fiction from these inputs; it
-receives no DM-only records, so it cannot leak any.
-
-SESSION ≥2: deterministic continuity — player-safe recap (retrieval-enforced),
-current place & in-world time, mechanically-relevant reminders, and a fresh
-decision point. No hardcoded tavern, ever.
-
-Returns kinded OutboundMessages; the adapter renders them.
+This service is the only live ``!rv session start`` narrator.  It does not produce a
+campaign prologue, synopsis cards, or a world-to-party briefing.  It first persists the
+authoritative session/scene/positions/shared DecisionWindow, then projects that state
+into a bounded :class:`ScenePacket`, and finally asks the model to render one connected
+Thai scene.  Model failure uses the same packet to produce a deterministic real scene.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from app.ai.jobs import SafeRecapGenerator
 from app.ai.llm.base import LLMMessage, LLMProvider
-from app.ai.prompts.system_prompts import OPENING_SYSTEM, PROLOGUE_SYSTEM
+from app.ai.prompts.system_prompts import CAMPAIGN_OPENING_SYSTEM, OPENING_SYSTEM
+from app.ai.prompts.thai_narration_templates import narration_template
 from app.ai.prompts.thai_dm_style import THAI_DM_STYLE
-from app.core.clock import format_game_time_th
 from app.core.errors import LLMError
 from app.core.ids import SYSTEM_ACTOR
 from app.core.logging import get_logger
 from app.discord_bridge.dto import OutboundMessage
 from app.models.campaign import Campaign, CampaignMember
 from app.models.character import Character
+from app.models.decision_window import DecisionWindow
 from app.models.enums import ActivePlayState, EventType, SceneMode, Visibility
 from app.models.location import Location
+from app.models.scene import Scene
 from app.models.session import Session
+from app.memory.scene_packet import ScenePacket, ScenePacketBuilder
 from app.presentation import MessageKind
-from app.schemas.llm_io import CampaignPrologue, OpeningScene
+from app.presentation.screens import cinematic_scene_screen
+from app.rounds import DecisionWindowService, WindowPolicies
+from app.models.enums import WindowMode
+from app.schemas.llm_io import OpeningScene
 from app.services.events import EventService
 from app.services.scenes import SceneService
 from app.services.sessions.session_service import SessionService
 
 log = get_logger(__name__)
+
+# Placeholder purpose used only when a campaign gives the opening no explicit intent.
+# It is a scaffolding value, never player-facing prose, so the deterministic fallback
+# scene filters it out instead of narrating "พวกคุณมาที่นี่เพราะเปิดฉาก...".
+_DEFAULT_SCENE_PURPOSE = "เปิดฉากและส่งการตัดสินใจให้ปาร์ตี้"
 
 
 @dataclass
@@ -56,7 +60,6 @@ class SessionOpeningService:
     def __init__(self, db, provider: LLMProvider) -> None:
         self.db = db
         self.provider = provider
-        self.recap = SafeRecapGenerator(provider)
 
     async def resolve_opening_location(
         self, *, campaign_id: str, attendance_member_ids: list[str]
@@ -159,21 +162,17 @@ class SessionOpeningService:
                     "campaign has no starting location — import a world, create one "
                     "with AI, or pick a location explicitly")
 
-        # 1. create + open the session. Imported Session Prep, when present,
-        #    constrains WHAT is happening at the opening (activity, cast, clues) —
-        #    the DM's obligation not to discard the campaign.
+        # Imported Session Prep constrains WHAT is happening; location resolution
+        # above owns WHERE.  Existing campaigns need no data rewrite: absent v2 keys
+        # simply project as empty fields in ScenePacket.
         async with self.db.session() as read:
-            from app.models.campaign import Campaign
-
             campaign = await read.get(Campaign, campaign_id)
             prep = dict((campaign.session_prep if campaign else None) or {})
-            # The cinematic opening is governed by persisted state, never by session
-            # numbering — a campaign whose first session was consumed by a broken
-            # start still gets its opening on the next session.
-            cinematic_played = bool(
-                ((campaign.config if campaign else None) or {}).get(
-                    "opening_cinematic_played"))
+            campaign_config = dict((campaign.config if campaign else None) or {})
+            profile = dict(campaign_config.get("profile") or {})
 
+        # 1. Create and open the session.  A second ``session start`` sees this active
+        # session in AdminBridge and cannot duplicate the scene/opening.
         async with self.db.unit_of_work() as s:
             session_row = await SessionService(s).create_session(
                 campaign_id=campaign_id, attendance=attendance_member_ids
@@ -181,54 +180,25 @@ class SessionOpeningService:
             await SessionService(s).open_session(session_row.id)
             session_id, number = session_row.id, session_row.number
 
-        # WHERE to open is the CALLER's canonical resolution (anchor → positions →
-        # starting location → legacy prep → owner's explicit choice). Prep supplies
-        # the WHAT of Session 1 — activity, cast, clues — never a teleport.
         prep_clues = list(prep.get("allowed_clues") or [])
-        prep_activity = prep.get("current_activity") or ""
         prep_npc_names = list(prep.get("present_npcs") or [])
         prep_npc_refs = await self._resolve_npc_refs(campaign_id, prep_npc_names)
 
-        # 2. gather the bounded opening context (no DM-only records).
+        # 2. Resolve attendees and reminders from canonical character rows.
         ctx = await self._gather(campaign_id, attendance_member_ids, location_id)
         reminders = ctx["reminders"]
 
-        # 3. build the opening. The grand cinematic prologue plays EXACTLY ONCE per
-        #    campaign — whenever the played-once flag is unset and canon provides a
-        #    main goal — regardless of session number or how the location was chosen
-        #    (inferred or `start at`). Resuming later sessions never replays it.
-        prologue: CampaignPrologue | None = None
-        if not cinematic_played:
-            world = await self._gather_world_canon(campaign_id, location_id)
-            if world["main_goal"]:
-                prologue = await self._generate_cinematic_prologue(ctx, world, prep=prep)
-        if prologue is not None:
-            # The prologue's first beat + first choice ARE the opening scene; the
-            # world-scale movements are rendered ahead of it in step 5.
-            opening = OpeningScene(
-                title=prologue.title,
-                situation_lines=[prologue.first_beat],
-                pressure="",
-                decision_prompt=prologue.decision_prompt,
-                used_hooks=prologue.used_hooks,
-            )
-            recap_text = ""
-        elif number == 1:
-            opening = await self._generate_first_opening(
-                ctx, prep.get("purpose") or scene_purpose, prep=prep)
-            recap_text = ""
-        else:
-            async with self.db.session() as read:
-                recap = await self.recap.run(read, campaign_id=campaign_id, session_id=None)
-            recap_text = recap.text
-            opening = self._continuity_opening(ctx, number)
-
-        # 4. persist scene + lifecycle + events atomically.
+        # 3. Persist the canonical scene, positions, lifecycle, and DecisionWindow
+        # BEFORE narration.  The model describes state; it never creates state.
+        decision_window_id: str | None = None
         async with self.db.unit_of_work() as s:
             scene = await SceneService(s).create_scene(
                 session_id=session_id, location_id=location_id, mode=mode,
-                purpose=scene_purpose or opening.title,
-                dramatic_question=dramatic_question or opening.decision_prompt,
+                purpose=(
+                    scene_purpose or prep.get("purpose") or ctx["central_question"]
+                    or _DEFAULT_SCENE_PURPOSE
+                ),
+                dramatic_question=dramatic_question or ctx["central_question"],
                 participants=participants or ctx["participant_refs"],
                 visible_entity_ids=visible_entity_ids or prep_npc_refs,
                 immediate_threat_ids=immediate_threat_ids or [],
@@ -264,98 +234,178 @@ class SessionOpeningService:
                 campaign_row = await s.get(Campaign, campaign_id)
                 if campaign_row is not None:
                     campaign_row.current_party_anchor_id = location_id
-            # The cinematic played — persist the played-once flag in the SAME
-            # transaction as the scene/lifecycle so it can never fire twice.
-            if prologue is not None:
-                camp_row = await s.get(Campaign, campaign_id)
-                if camp_row is not None:
-                    camp_row.config = {
-                        **(camp_row.config or {}), "opening_cinematic_played": True,
-                    }
+            # Shared planning is automatic for 2+ eligible human-controlled PCs and
+            # policy-driven for solo.  This is the opening's actual action gate, not
+            # a decorative Ready row.
+            policies = WindowPolicies.from_config(campaign_config)
+            required_actor_ids = [
+                ref.split(":", 1)[1]
+                for ref in (participants or ctx["participant_refs"])
+                if ref.startswith("character:")
+            ]
+            decision_window = None
+            if policies.should_open_window(len(required_actor_ids)):
+                window_mode = (
+                    WindowMode.COMBAT
+                    if mode == SceneMode.COMBAT
+                    else WindowMode.NONCOMBAT
+                )
+                decision_window = await DecisionWindowService(s).open_window(
+                    campaign_id=campaign_id,
+                    session_id=session_id,
+                    scene_id=scene.id,
+                    round_id=1,
+                    mode=window_mode,
+                    required_actor_ids=required_actor_ids,
+                    policies=policies,
+                )
+                decision_window_id = decision_window.id
+
+            # Compatibility marker: old ``opening_cinematic_played`` installations
+            # migrate in place.  v2 ignores the old prologue path but records which
+            # player-facing pipeline produced future openings.
+            camp_row = await s.get(Campaign, campaign_id)
+            if camp_row is not None:
+                camp_row.config = {
+                    **(camp_row.config or {}),
+                    "opening_cinematic_played": True,
+                    "storytelling_pipeline_version": 2,
+                }
             await SessionService(s).begin_active_play(session_id)
             row = await s.get(Session, session_id)
             row.active_play_state = ActivePlayState.TABLE_OPEN.value
             row.version += 1
 
+            scene_id = scene.id
+
+        # 4. Project the persisted state into a bounded packet, including the live
+        # DecisionWindow.  Later-session injuries/effects/events naturally enter here;
+        # no separate recap card or all-memory dump is needed.
+        async with self.db.session() as read:
+            scene = await read.get(Scene, scene_id)
+            decision_window = (
+                await read.get(DecisionWindow, decision_window_id)
+                if decision_window_id else None
+            )
+            # The campaign's FIRST session opens with the grand, world-establishing
+            # cinematic intro; later sessions open with the tighter in-scene opener.
+            opening_mode = "campaign_opening" if number == 1 else "session_opening"
+            packet = await ScenePacketBuilder(read).build(
+                campaign_id=campaign_id,
+                session_id=session_id,
+                scene=scene,
+                narration_mode=opening_mode,
+                prep=prep,
+                decision_window=decision_window,
+            )
+
+        # 5. Render one connected Thai scene.  The fallback receives the exact same
+        # packet and therefore remains a scene rather than reverting to generic cards.
+        opening = await self._generate_scene_opening(packet, profile=profile)
+        frame_body = self._opening_body(opening)
+        if not frame_body:
+            opening = self._fallback_opening(packet)
+            frame_body = self._opening_body(opening)
+        decision_prompt = opening.decision_prompt.strip() or "พวกคุณจะทำอย่างไร?"
+
+        actor_names = {c.id: c.name for c in packet.player_characters}
+        planning_status = [
+            f"○ **{actor_names.get(actor_id, actor_id)}** — รอการกระทำ"
+            for actor_id in packet.shared_action_window.get("required_actor_ids", [])
+        ]
+        screen = cinematic_scene_screen(
+            metadata=packet.metadata_line(),
+            narration=frame_body,
+            decision_prompt=decision_prompt,
+            planning_window_id=decision_window_id,
+            planning_status=planning_status,
+        )
+        frame_data = {
+            "scene_metadata": packet.metadata_line(),
+            "decision_prompt": decision_prompt,
+            "session_id": session_id,
+            "scene_id": scene_id,
+            "location": packet.location,
+            "storytelling_pipeline_version": 2,
+            "decision_window_id": decision_window_id,
+            "connected_scene": True,
+        }
+        messages = [OutboundMessage(
+            channel_id,
+            screen.to_text(),
+            kind=MessageKind.SCENE_FRAME,
+            title=None,
+            data=frame_data,
+            screen=screen,
+        )]
+
+        # Store the delivered prose and event evidence after generation.  No model
+        # field is allowed to mutate mechanics or positions.
+        used_hooks = list(dict.fromkeys(
+            list(opening.used_hooks) + list(opening.used_character_facts)
+        ))
+        async with self.db.unit_of_work() as s:
+            scene = await s.get(Scene, scene_id)
+            if scene is not None:
+                scene.spotlight = {
+                    **(scene.spotlight or {}),
+                    "last_narration": frame_body,
+                    "opening_pipeline": "cinematic_scene_v2",
+                }
+                if not dramatic_question:
+                    scene.dramatic_question = decision_prompt
+                if not scene_purpose and opening.title:
+                    scene.purpose = opening.title
             events = EventService(s)
             await events.record(
-                campaign_id=campaign_id, session_id=session_id,
-                event_type=EventType.SESSION_STARTED, actor_entity=SYSTEM_ACTOR,
+                campaign_id=campaign_id,
+                session_id=session_id,
+                event_type=EventType.SESSION_STARTED,
+                actor_entity=SYSTEM_ACTOR,
                 visibility=Visibility.PUBLIC,
-                payload={"number": number, "summary": f"เริ่มเซสชันที่ {number}: {opening.title}"},
+                payload={
+                    "number": number,
+                    "summary": f"เริ่มเซสชันที่ {number} ณ {packet.location}",
+                    "pipeline": "cinematic_scene_v2",
+                },
                 narrative_significance=20,
             )
             await events.record(
-                campaign_id=campaign_id, session_id=session_id, scene_id=scene.id,
-                event_type=EventType.SCENE_STARTED, actor_entity=SYSTEM_ACTOR,
-                location_id=location_id, visibility=Visibility.PUBLIC,
-                payload={"summary": opening.title,
-                         "used_hooks": opening.used_hooks},
+                campaign_id=campaign_id,
+                session_id=session_id,
+                scene_id=scene_id,
+                event_type=EventType.SCENE_STARTED,
+                actor_entity=SYSTEM_ACTOR,
+                location_id=location_id,
+                visibility=Visibility.PUBLIC,
+                payload={
+                    "summary": opening.title or f"เปิดฉาก ณ {packet.location}",
+                    "used_hooks": used_hooks,
+                    "pipeline": "cinematic_scene_v2",
+                },
                 narrative_significance=15,
             )
-            scene_id = scene.id
 
-        # An opening is the ONE moment a scene is created from nothing rather than
-        # continued. If the party ever reports being thrown back to the start, this
-        # record answers "did an opening run, which one, and why" without guesswork —
-        # `initialization_reason` distinguishes the cinematic (once per campaign) from
-        # session 1 from an ordinary continuation.
         log.info(
             "session opening delivered",
-            extra={"campaign_id": campaign_id, "session_id": session_id,
-                   "channel_id": channel_id, "scene_id": scene_id,
-                   "location_id": location_id, "session_number": number,
-                   "state_version": row.version,
-                   "initialization_reason": (
-                       "cinematic_prologue" if prologue is not None
-                       else "first_session" if number == 1
-                       else "continuation"),
-                   "cinematic_played_before": cinematic_played,
-                   "attendance": list(attendance_member_ids or [])})
-
-        # 5. assemble the kinded message sequence.
-        messages: list[OutboundMessage] = [OutboundMessage(
-            channel_id, "", kind=MessageKind.SESSION_TITLE,
-            title=f"เซสชันที่ {number} — {opening.title}",
-            data={"footer": f"{ctx['location_name']} · {format_game_time_th(ctx['game_time'])}"},
-        )]
-        if recap_text:
-            messages.append(OutboundMessage(
-                channel_id, recap_text, kind=MessageKind.PLAYER_SAFE_RECAP,
-                title="ความเดิมตอนที่แล้ว",
-            ))
-        # The cinematic prologue's world-scale movements are their own messages so
-        # the grand moments can breathe before the scene zooms in on the party.
-        if prologue is not None:
-            messages.extend(self._prologue_messages(channel_id, prologue))
-        frame_body = "\n".join(opening.situation_lines)
-        if opening.pressure:
-            frame_body += f"\n\n{opening.pressure}"
-        frame_data: dict = {"decision_prompt": opening.decision_prompt or None}
-        fields: list[dict] = []
-        # The main goal is the campaign's through-line — surfaced unmistakably so the
-        # players leave the opening knowing what they are ultimately trying to do.
-        if prologue is not None and prologue.main_goal:
-            fields.append({
-                "name": "🎯 เป้าหมายหลักของการเดินทาง", "value": prologue.main_goal,
-                "inline": False,
-            })
-        if reminders:
-            fields.append({
-                "name": "เตือนความจำ", "value": "\n".join(f"• {r}" for r in reminders),
-                "inline": False,
-            })
-        if fields:
-            frame_data["fields"] = fields
-        messages.append(OutboundMessage(
-            channel_id, frame_body, kind=MessageKind.SCENE_FRAME,
-            title=None, data=frame_data,
-        ))
+            extra={
+                "campaign_id": campaign_id,
+                "session_id": session_id,
+                "channel_id": channel_id,
+                "scene_id": scene_id,
+                "location_id": location_id,
+                "session_number": number,
+                "state_version": row.version,
+                "initialization_reason": "cinematic_scene_v2",
+                "attendance": list(attendance_member_ids or []),
+                "decision_window_id": decision_window_id,
+            },
+        )
 
         return OpeningResult(
             session_id=session_id, scene_id=scene_id, number=number,
-            messages=messages, used_hooks=list(opening.used_hooks),
-            recap_text=recap_text,
+            messages=messages, used_hooks=used_hooks,
+            recap_text="",
             opening_text=frame_body, reminders=reminders,
         )
 
@@ -422,215 +472,151 @@ class SessionOpeningService:
                     refs.append(f"npc:{npc.id}")
         return refs
 
-    async def _generate_first_opening(self, ctx: dict, scene_purpose: str,
-                                      *, prep: dict | None = None) -> OpeningScene:
-        char_lines = []
-        for c in ctx["characters"]:
-            hooks = c.hooks or {}
-            hook_str = "; ".join(f"{k}={v}" for k, v in hooks.items() if v) or "-"
-            appearance = f"; appearance={c.appearance}" if c.appearance else ""
-            char_lines.append(f"- {c.name} ({c.char_class}): {hook_str}{appearance}")
-        profile = ctx["profile"]
-        prep = prep or {}
-        # Imported prep constrains the story facts the opening MUST honour.
-        prep_block = ""
-        if prep:
-            prep_block = (
-                f"\nSESSION_PREP (ต้องใช้ ห้ามทิ้ง):\n"
-                f"- current_activity: {prep.get('current_activity', '-')}\n"
-                f"- present_npcs: {', '.join(prep.get('present_npcs') or []) or '-'}\n"
-                f"- allowed_clues: {', '.join(prep.get('allowed_clues') or []) or '-'}\n"
-                f"- do_not_reveal: {', '.join(prep.get('do_not_reveal') or []) or '-'}"
+    async def _generate_scene_opening(
+        self, packet: ScenePacket, *, profile: dict
+    ) -> OpeningScene:
+        # The first session gets the grand, world-establishing opener; later sessions
+        # the tighter in-scene one.  Both return the same OpeningScene shape.
+        if packet.narration_mode == "campaign_opening":
+            system_prompt = (
+                THAI_DM_STYLE + "\n" + CAMPAIGN_OPENING_SYSTEM + "\n"
+                + narration_template("campaign_opening")
             )
-        brief_block = f"\nCAMPAIGN_BRIEF: {ctx['brief']}" if ctx.get("brief") else ""
-        question_block = (
-            f"\nCENTRAL_QUESTION: {ctx['central_question']}"
-            if ctx.get("central_question") else ""
-        )
-        present_npcs = ctx.get("present_npc_names") or []
-        npc_block = f"\nPRESENT_NPCS: {', '.join(present_npcs)}" if present_npcs else ""
+        else:
+            system_prompt = (
+                THAI_DM_STYLE + "\n" + OPENING_SYSTEM + "\n"
+                + narration_template("session_opening")
+            )
         messages: list[LLMMessage] = [
-            {"role": "system", "content": THAI_DM_STYLE + "\n" + OPENING_SYSTEM},
-            {"role": "user", "content": (
-                f"NARRATIVE_PACING: CINEMATIC\n"
-                f"PROFILE: โทน={profile.get('tone', 'ผจญภัยคลาสสิก')}; "
-                f"สไตล์={profile.get('balance', 'สมดุล')}\n"
-                f"CHARACTERS:\n" + "\n".join(char_lines) + "\n"
-                f"LOCATION: {ctx['location_name']} — {ctx['location_desc']}\n"
-                f"PURPOSE: {scene_purpose or '-'}"
-                + brief_block + question_block + npc_block + prep_block
-            )},
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": (
+                    "NARRATIVE_PACING: CINEMATIC\n"
+                    f"CAMPAIGN_STYLE: โทน={profile.get('tone', 'ตามข้อมูลแคมเปญ')}; "
+                    f"สมดุล={profile.get('balance', 'ตามข้อมูลแคมเปญ')}\n"
+                    + packet.to_prompt()
+                ),
+            },
         ]
         try:
             return await self.provider.generate_session_opening(messages)
         except LLMError as exc:
-            log.warning("opening generator fell back to plain frame: %s", exc)
-            names = " และ ".join(c.name for c in ctx["characters"]) or "พวกเจ้า"
-            return OpeningScene(
-                title="จุดเริ่มต้น",
-                situation_lines=[f"{names} อยู่ที่{ctx['location_name']}",
-                                 ctx["location_desc"] or "รอบตัวยังเงียบ"],
-                pressure="", decision_prompt="จะเริ่มจากตรงไหนดี?",
+            log.warning(
+                "cinematic scene generation failed; using grounded scene fallback: %s",
+                exc,
             )
+            return self._fallback_opening(packet)
 
-    # --- cinematic prologue (session 1, world-scale) ---------------------------
-    async def _gather_world_canon(self, campaign_id: str, location_id: str) -> dict:
-        """Priority-ordered, PLAYER-SAFE world context for the cinematic prologue,
-        following the campaign data priority: brief → main quest → plotline/Act-I →
-        world facts → rules/tone → starting location + geography → NPCs.
+    @staticmethod
+    def _opening_body(opening: OpeningScene) -> str:
+        paragraphs: list[str] = []
+        if opening.narration.strip():
+            paragraphs.append(opening.narration.strip())
+        elif opening.situation_lines:
+            paragraphs.append("\n\n".join(
+                line.strip() for line in opening.situation_lines if line.strip()
+            ))
+        if opening.pressure.strip():
+            paragraphs.append(opening.pressure.strip())
+        return "\n\n".join(paragraphs).strip()
 
-        Nothing DM-only ever enters: brief/central-question are player-facing by
-        construction; lore is PUBLIC canon only; powers are NAMES only (never their
-        hidden goals/next moves); the geography ladder and present NPCs are physical
-        facts a newcomer would perceive. Anything tagged SECRET is defensively dropped
-        as a second line of defence behind the visibility filter."""
-        from sqlalchemy import select
+    @staticmethod
+    def _fallback_opening(packet: ScenePacket) -> OpeningScene:
+        """A deterministic, connected scene built ONLY from packet facts.
 
-        from app.models.location import Location
-        from app.models.npc import NPC
-        from app.models.world import Threat
-        from app.models.world_graph import CampaignCanonRecord
-        from app.services.campaigns.main_story import MainStoryService
+        It fires when the model is unreachable.  It invents no sensory detail, but it
+        also never degrades into a "name — stat; stat; stat" status list: each fact is
+        woven into a sentence that places the party inside a scene already in motion,
+        honouring the cinematic contract instead of a campaign-summary card.  A sparse
+        campaign still gets a real (if spare) scene, never generic sections.
+        """
+        place = packet.location
+        used: list[str] = []
+        paragraphs: list[str] = []
 
-        _LORE = {"world_fact", "history", "religion", "magic", "politics", "culture"}
+        # 0) The campaign's FIRST opening establishes the world first (from the brief +
+        #    PUBLIC canon) so even the offline scene reads as an epic introduction, not
+        #    a bare room.  Bracketed category tags are stripped for prose.
+        if packet.narration_mode == "campaign_opening":
+            world_bits: list[str] = []
+            if packet.campaign_context:
+                world_bits.append(packet.campaign_context)
+            for fact in packet.world_canon[:3]:
+                clean = fact.split("] ", 1)[1] if fact.startswith("[") and "] " in fact else fact
+                world_bits.append(clean)
+            if world_bits:
+                paragraphs.append(" ".join(world_bits))
 
-        def _safe(text: str | None) -> bool:
-            return bool(text) and "SECRET_" not in text
+        # 1) Where / when / what it feels like — one grounded establishing beat.
+        opening = packet.location_description or f"พวกคุณมาหยุดอยู่ที่{place}"
+        ambience = [x for x in (packet.weather, packet.lighting) if x]
+        ambience += [c for c in packet.environmental_conditions[:2] if c]
+        if ambience:
+            opening = f"{opening}\nรอบตัวพวกคุณ {' '.join(ambience)}"
+        paragraphs.append(opening.strip())
 
-        async with self.db.session() as read:
-            campaign = await read.get(Campaign, campaign_id)
-            brief = campaign.brief if campaign else ""
-            central_q = campaign.central_question if campaign else ""
-            profile = (campaign.config or {}).get("profile", {}) if campaign else {}
-            story = await MainStoryService(read).get(campaign_id)
-            main_goal = next(
-                (g.get("text", "") for g in story.get("goals", [])
-                 if g.get("key") == "main" and g.get("text")),
-                "",
-            ) or central_q
-            lore_rows = (await read.execute(select(CampaignCanonRecord).where(
-                CampaignCanonRecord.campaign_id == campaign_id,
-                CampaignCanonRecord.visibility == Visibility.PUBLIC.value,
-            ))).scalars().all()
-            lore = [r.fact for r in sorted(lore_rows, key=lambda r: r.importance, reverse=True)
-                    if r.category in _LORE and _safe(r.fact)][:12]
-            powers = [t.name for t in (await read.execute(select(Threat).where(
-                Threat.campaign_id == campaign_id, Threat.status == "active",
-            ))).scalars().all() if _safe(t.name)][:8]
-            # Geography ladder for the cinematic descent: walk parent_id from the
-            # opening place up to the world (bounded), then reverse so it reads
-            # largest → the exact place — the path the camera follows.
-            ladder: list[tuple[str, str]] = []
-            cur = await read.get(Location, location_id) if location_id else None
-            guard = 0
-            while cur is not None and guard < 6:
-                ladder.append(((cur.location_type or "LOCATION"), cur.name))
-                cur = await read.get(Location, cur.parent_id) if cur.parent_id else None
-                guard += 1
-            ladder.reverse()
-            # NPCs a newcomer would see standing here — names + a player-safe
-            # descriptor (voice/manner) only; never their goals or beliefs.
-            npc_rows = (await read.execute(select(NPC).where(
-                NPC.campaign_id == campaign_id,
-                NPC.current_location_id == location_id,
-            ))).scalars().all()
-            npcs_present = [(n.name, (n.voice_register or "").strip())
-                            for n in npc_rows if _safe(n.name)][:6]
-        return {
-            "brief": brief, "main_goal": main_goal, "state": story.get("state", ""),
-            "lore": lore, "powers": powers,
-            "tone": profile.get("tone", ""), "balance": profile.get("balance", ""),
-            "boundaries": [b for b in (profile.get("boundaries") or []) if _safe(b)],
-            "geography": ladder, "npcs_present": npcs_present,
-        }
+        # 2) Rest the camera on each character in turn, weaving ONE grounded detail
+        #    into an active placement — never a bulleted dump of everything stored.
+        char_lines: list[str] = []
+        for index, char in enumerate(packet.player_characters):
+            detail = ""
+            if char.appearance:
+                detail = char.appearance
+                used.append(f"{char.name}.appearance")
+            elif char.active_effects:
+                detail = "แสงของ " + ", ".join(char.active_effects[:1]) + " ยังพราวอยู่รอบตัว"
+                used.append(f"{char.name}.active_effects")
+            elif char.equipment:
+                detail = "มือแนบอยู่กับ" + char.equipment[0]
+                used.append(f"{char.name}.equipment")
+            elif char.injuries:
+                detail = char.injuries
+                used.append(f"{char.name}.injuries")
+            elif char.conditions:
+                detail = "ยังตกอยู่ใต้สภาวะ " + ", ".join(char.conditions[:1])
+                used.append(f"{char.name}.conditions")
+            stem = "ยืนอยู่ตรงนี้" if index == 0 else "ยืนอยู่ข้าง ๆ กัน"
+            line = f"{char.name} {stem}" + (f" {detail}" if detail else "")
+            facts = list(char.relevant_facts.items())
+            if facts:
+                key, fact = facts[0]
+                line += f" สิ่งที่พาเขามาถึงที่นี่คือ{fact}"
+                used.append(f"{char.name}.{key}")
+            char_lines.append(line)
+        if char_lines:
+            paragraphs.append("\n".join(char_lines))
 
-    async def _generate_cinematic_prologue(
-        self, ctx: dict, world: dict, *, prep: dict | None = None
-    ) -> CampaignPrologue | None:
-        """Grow the grand opening from player-safe canon. Returns None (caller falls
-        back to the standard opening) if the model cannot produce a valid prologue."""
-        char_lines = []
-        for c in ctx["characters"]:
-            hooks = c.hooks or {}
-            hook_str = "; ".join(f"{k}={v}" for k, v in hooks.items() if v) or "-"
-            appearance = f"; appearance={c.appearance}" if c.appearance else ""
-            char_lines.append(f"- {c.name} ({c.char_class}): {hook_str}{appearance}")
-        prep = prep or {}
-        lore_block = "\n".join(f"- {f}" for f in world["lore"]) or "-"
-        powers_block = ", ".join(world["powers"]) or "-"
-        # The descent path, largest → the exact place, e.g. "WORLD:… → REGION:… → LOCATION:…".
-        geo_block = " → ".join(f"{kind}:{name}" for kind, name in world["geography"]) \
-            or ctx["location_name"]
-        npc_block = "; ".join(f"{name} ({desc})" if desc else name
-                              for name, desc in world["npcs_present"]) or "-"
-        present = ", ".join(prep.get("present_npcs") or []) or npc_block
-        clues = ", ".join(prep.get("allowed_clues") or []) or "-"
-        do_not = ", ".join(prep.get("do_not_reveal") or []) or "-"
-        tone = world["tone"] or ctx["profile"].get("tone", "-")
-        boundaries = ", ".join(world["boundaries"]) or "-"
-        messages: list[LLMMessage] = [
-            {"role": "system", "content": THAI_DM_STYLE + "\n" + PROLOGUE_SYSTEM},
-            {"role": "user", "content": (
-                f"WORLD_BRIEF: {world['brief'] or '-'}\n"
-                f"MAIN_GOAL (เป้าหมายหลักหนึ่งข้อที่ผู้เล่นต้องรู้ชัด): {world['main_goal']}\n"
-                f"PLOTLINE_ACT_I (สิ่งที่กำลังเกิดตอนเปิดฉาก — ห้ามทิ้ง):\n"
-                f"- current_activity: {prep.get('current_activity') or '-'}\n"
-                f"- purpose: {prep.get('purpose') or '-'}\n"
-                f"- present_npcs: {present}\n"
-                f"- clues_allowed: {clues}\n"
-                f"- story_state: {world['state'] or '-'}\n"
-                f"WORLD_FACTS (canon ที่ผู้เล่นรู้ได้ เรียงตามสำคัญ):\n{lore_block}\n"
-                f"KNOWN_POWERS_AND_DANGERS (ใช้ชื่อเหล่านี้เท่านั้น): {powers_block}\n"
-                f"TONE: {tone}; ขอบเขตห้ามข้าม: {boundaries}\n"
-                f"GEOGRAPHY_LADDER (ซูมจากใหญ่ไปเล็กตามนี้ ให้จบที่ OPENING_PLACE): {geo_block}\n"
-                f"OPENING_PLACE: {ctx['location_name']} — {ctx['location_desc']}\n"
-                f"OPENING_PLACE_CLOSER (เมื่อมองใกล้ขึ้น): {ctx.get('location_focused') or '-'}\n"
-                f"NPCS_PRESENT (อยู่ตรงนั้นตอนนี้): {npc_block}\n"
-                f"DO_NOT_REVEAL (ห้ามเปิดเผยเด็ดขาด): {do_not}\n"
-                f"CHARACTERS:\n" + "\n".join(char_lines)
-            )},
-        ]
-        try:
-            prologue = await self.provider.generate_campaign_prologue(messages)
-        except LLMError as exc:
-            log.warning("cinematic prologue failed; using standard opening: %s", exc)
-            return None
-        # The engine, not the model, guarantees the players are told the main goal:
-        # if the model dropped it, restore the campaign's canonical objective.
-        if not prologue.main_goal.strip():
-            prologue = prologue.model_copy(update={"main_goal": world["main_goal"]})
-        return prologue
+        # 3) The world is already doing something — verbatim, not paraphrased.
+        activity: list[str] = []
+        if packet.current_activity:
+            activity.append(packet.current_activity)
+        for npc in packet.npcs_present:
+            if npc.current_activity:
+                activity.append(f"{npc.name}{npc.current_activity}")
+            elif npc.name not in packet.current_activity:
+                activity.append(f"{npc.name}ยังอยู่ในบริเวณเดียวกัน")
+        if activity:
+            paragraphs.append(" ขณะเดียวกัน ".join(activity))
 
-    def _prologue_messages(
-        self, channel_id: str, prologue: CampaignPrologue
-    ) -> list[OutboundMessage]:
-        """Render the world-scale movements as their own frames, large to small, so
-        each grand beat LANDS before the next one arrives — the world & its powers,
-        then the conflict that changed everything, then the camera's descent to the
-        party. Splitting them (rather than one wall of text) is what lets the opening
-        breathe like a film's cold open."""
-        world_powers = "\n\n".join(part for part in (prologue.world, prologue.powers)
-                                   if part.strip())
-        descent = "\n\n".join(part for part in (prologue.approach, prologue.the_party)
-                              if part.strip())
-        beats: list[tuple[str, str | None]] = [
-            (world_powers, prologue.title),           # the world & its powers
-            (prologue.crisis, "เหตุการณ์ที่เปลี่ยนทุกอย่าง"),  # the great conflict
-            (descent, "เส้นทางสู่พวกเจ้า"),            # zoom in to the party
-        ]
-        return [
-            OutboundMessage(channel_id, body, kind=MessageKind.CAMPAIGN_PROLOGUE,
-                            title=title)
-            for body, title in beats if body.strip()
-        ]
+        # 4) Why the party is here and what the clock is doing — woven, not carded.
+        direction: list[str] = []
+        reason = packet.reason_party_is_here
+        if reason and reason != _DEFAULT_SCENE_PURPOSE:
+            direction.append(f"พวกคุณมาถึง{place}นี้เพราะ{reason}")
+        for objective in packet.active_objectives[:1]:
+            if not reason or objective not in reason:
+                direction.append(objective)
+        if packet.immediate_threats:
+            direction.append(packet.immediate_threats[0])
+        if packet.delay_stakes:
+            direction.append(f"และหากรีรอ {packet.delay_stakes}")
+        if direction:
+            paragraphs.append(" ".join(direction))
 
-    def _continuity_opening(self, ctx: dict, number: int) -> OpeningScene:
         return OpeningScene(
-            title="เดินทางต่อ",
-            situation_lines=[
-                f"พวกเจ้ายังอยู่ที่{ctx['location_name']}",
-                ctx["location_desc"] or "",
-            ],
-            pressure="",
-            decision_prompt="พร้อมเมื่อไหร่ก็ลุยต่อ — ตอนนี้จะทำอะไร?",
+            title=f"เปิดฉาก ณ {place}",
+            narration="\n\n".join(p for p in paragraphs if p.strip()),
+            decision_prompt="พวกคุณจะทำอย่างไร?",
+            used_character_facts=used,
         )
